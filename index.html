@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>nexo</title>
+</head>
+<body>
+  <div class="app">
+    <div class="backdrop" aria-hidden="true"></div>
+    <canvas class="graph-canvas" id="graph-canvas" aria-label="Grafo de la wiki: arrastra para mover, rueda para acercar, doble clic abre la nota"></canvas>
+
+    <header class="topbar">
+      <nav class="island" aria-label="Principal">
+        <a href="#" class="brand">
+          <svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="11" cy="11" r="3" fill="currentColor" stroke="none"/><ellipse cx="11" cy="11" rx="9.5" ry="4" transform="rotate(-24 11 11)"/></svg>
+          <span>nexo</span>
+        </a>
+        <span class="divider" aria-hidden="true"></span>
+        <div class="vault-anchor">
+          <button type="button" class="ghost-btn" id="vault-button" aria-haspopup="true" aria-expanded="false" aria-controls="vault-menu">
+            <span id="vault-name">Sin vault</span>
+            <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg>
+          </button>
+          <ul class="vault-menu" id="vault-menu" hidden></ul>
+        </div>
+        <div class="vault-anchor">
+          <button type="button" class="ghost-btn" id="conn-button" aria-haspopup="true" aria-expanded="false" aria-controls="conn-menu">
+            <span class="conn-dot" id="conn-dot" data-state="checking" aria-hidden="true"></span>
+            Conexiones
+          </button>
+          <div class="vault-menu conn-menu" id="conn-menu" role="dialog" aria-label="Conexiones" hidden>
+            <div class="vault-menu-title">Conexiones</div>
+            <ul class="conn-list" id="conn-list"></ul>
+            <div class="vault-sep" aria-hidden="true"></div>
+            <button type="button" class="vault-option" id="conn-refresh">Comprobar de nuevo</button>
+          </div>
+        </div>
+        <div class="segmented" role="group" aria-label="Vista" data-segmented>
+          <button type="button" aria-pressed="true">Grafo</button>
+          <button type="button" aria-pressed="false">Notas</button>
+          <button type="button" aria-pressed="false">Audio</button>
+        </div>
+        <button type="button" class="ghost-btn muted">
+          <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 3.8 3.8"/></svg>
+          Buscar <kbd>⌘K</kbd>
+        </button>
+        <button type="button" class="icon-btn filled" aria-label="Cuenta">M</button>
+      </nav>
+    </header>
+
+    <main class="layout">
+      <!-- Fuentes -->
+      <aside class="panel" aria-label="Fuentes" id="sources-panel">
+        <div class="panel-core sources">
+          <div class="panel-head">
+            <div class="panel-title">
+              <span class="eyebrow">Cuaderno</span>
+              <h2>Fuentes <span class="dim" id="source-count">0</span></h2>
+            </div>
+            <button type="button" class="icon-btn outline" aria-label="Ordenar fuentes">
+              <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 6h12M6 10h8M8 14h4"/></svg>
+            </button>
+          </div>
+
+          <button type="button" class="cta" id="add-source">
+            Añadir fuente
+            <span class="cta-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></span>
+          </button>
+
+          <div class="chips" role="group" aria-label="Filtrar por tipo" data-segmented>
+            <button type="button" class="chip" aria-pressed="true" data-kind="all">Todas <span class="dim" data-count="all">0</span></button>
+            <button type="button" class="chip" aria-pressed="false" data-kind="pdf">PDF <span class="dim" data-count="pdf">0</span></button>
+            <button type="button" class="chip" aria-pressed="false" data-kind="web">Web <span class="dim" data-count="web">0</span></button>
+            <button type="button" class="chip" aria-pressed="false" data-kind="nota">Notas <span class="dim" data-count="nota">0</span></button>
+            <button type="button" class="chip" aria-pressed="false" data-kind="media">Media <span class="dim" data-count="media">0</span></button>
+          </div>
+
+          <ul class="source-list" id="source-list" hidden></ul>
+
+          <div class="empty" id="sources-empty">
+            <span class="empty-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"><path d="M5 2.5h6.5l3.5 3.5v11.5H5z"/><path d="M11.5 2.5V6H15"/></svg></span>
+            <p class="empty-title" id="empty-title">Elige tu vault</p>
+            <p class="empty-text" id="empty-text">Selecciona la carpeta de Obsidian donde nexo guardará tus fuentes.</p>
+            <div class="detected" id="detected-vaults" hidden></div>
+            <button type="button" class="pill-btn" id="vault-pick">Elegir carpeta</button>
+          </div>
+
+          <div class="drop-overlay" aria-hidden="true">
+            <p>Suelta para añadir</p>
+            <p class="dim">Se copiarán a raw/</p>
+          </div>
+
+          <div class="context">
+            <div class="context-row"><span class="dim">En contexto</span><span id="context-count">0 de 0</span></div>
+            <div class="meter" aria-hidden="true"><div class="meter-fill" id="context-meter" style="width: 0%"></div></div>
+          </div>
+        </div>
+      </aside>
+
+      <!-- Grafo -->
+      <section class="stage" aria-label="Grafo de conocimiento" id="stage">
+        <div class="focus-pill" id="focus-pill" hidden>
+          <span class="focus-dot" aria-hidden="true"></span>
+          <span class="dim">Enfoque</span>
+          <span class="focus-name" id="focus-name"></span>
+          <span class="dim" id="focus-degree"></span>
+          <button type="button" class="icon-btn filled" id="focus-open" aria-label="Abrir nota"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 4H4v12h12v-4M11 4h5v5M16 4l-7 7"/></svg></button>
+          <button type="button" class="icon-btn filled" id="focus-close" aria-label="Salir del enfoque"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m5 5 10 10M15 5 5 15"/></svg></button>
+        </div>
+
+        <div class="stage-empty" id="stage-empty">
+          <svg width="56" height="56" viewBox="0 0 22 22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="0.6"><circle cx="11" cy="11" r="2" fill="currentColor" stroke="none"/><ellipse cx="11" cy="11" rx="9.5" ry="4" transform="rotate(-24 11 11)"/></svg>
+          <p id="stage-empty-text">Elige un vault para ver su grafo</p>
+        </div>
+
+        <div class="toolbar" id="graph-toolbar" role="toolbar" aria-label="Controles del grafo">
+          <div class="segmented" role="group" aria-label="Alcance" data-segmented>
+            <button type="button" aria-pressed="true" data-scope="global">Global</button>
+            <button type="button" aria-pressed="false" data-scope="local">Local</button>
+          </div>
+          <span class="divider" aria-hidden="true"></span>
+          <div class="stepper" role="group" aria-label="Profundidad">
+            <button type="button" class="icon-btn" aria-label="Menos profundidad" id="depth-down"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 10h12"/></svg></button>
+            <span>Profundidad <span class="mono" id="depth-value">2</span></span>
+            <button type="button" class="icon-btn" aria-label="Más profundidad" id="depth-up"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></button>
+          </div>
+          <span class="divider" aria-hidden="true"></span>
+          <button type="button" class="switch-btn" role="switch" aria-checked="true" data-switch id="labels-switch">
+            Etiquetas <span class="switch" aria-hidden="true"><span></span></span>
+          </button>
+          <span class="divider" aria-hidden="true"></span>
+          <button type="button" class="icon-btn filled" aria-label="Centrar el grafo" id="graph-fit"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="10" cy="10" r="5.5"/><path d="M10 1.5v4M10 14.5v4M1.5 10h4M14.5 10h4"/></svg></button>
+        </div>
+      </section>
+
+      <!-- Terminal -->
+      <aside class="panel" aria-label="Terminal">
+        <div class="panel-core terminal">
+          <div class="terminal-head">
+            <div class="panel-title">
+              <h2 class="small" id="terminal-title">Nexo</h2>
+              <span class="path" id="vault-path">sin vault</span>
+            </div>
+            <div class="segmented" role="group" aria-label="Modo" data-segmented>
+              <button type="button" aria-pressed="true" data-mode="api">API</button>
+              <button type="button" aria-pressed="false" data-mode="claude-code">Claude Code</button>
+            </div>
+          </div>
+
+          <div class="terminal-output" id="output" aria-live="polite"></div>
+
+          <div class="cc-view" id="cc-view" hidden>
+            <div class="cc-term" id="cc-term"></div>
+            <div class="cc-exit" id="cc-exit" hidden>
+              <p id="cc-exit-text">Claude Code terminó.</p>
+              <button type="button" class="pill-btn" id="cc-restart">Abrir de nuevo</button>
+            </div>
+          </div>
+
+          <form class="prompt" id="prompt">
+            <label>
+              <span class="prompt-caret" aria-hidden="true">❯</span>
+              <span class="visually-hidden">Pregunta o comando</span>
+              <input type="text" id="prompt-input" placeholder="Escribe ayuda para ver los comandos" autocomplete="off" spellcheck="false">
+            </label>
+            <button type="submit" class="icon-btn light" aria-label="Enviar"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 16V4M5 9l5-5 5 5"/></svg></button>
+          </form>
+        </div>
+      </aside>
+    </main>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
