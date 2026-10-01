@@ -5,11 +5,13 @@
 use std::process::Command;
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
+use crate::agy;
 use crate::claude::{self, Claude};
-use crate::claude_code::{SESSION_NAME, find_claude, find_named_session};
+use crate::claude_code::{current_session_name, find_claude};
 use crate::markitdown::{find_server, probe};
+use crate::playwright;
 
 #[derive(Serialize)]
 pub struct Connection {
@@ -80,6 +82,67 @@ async fn api(app: &AppHandle) -> Connection {
     }
 }
 
+async fn playwright(app: &AppHandle) -> Connection {
+    let base = |state, detail| Connection {
+        id: "playwright",
+        name: "Playwright",
+        kind: "MCP",
+        state,
+        detail,
+    };
+    let Some(server) = playwright::find_server(app) else {
+        return base(
+            "missing",
+            "No instalado · npm install -g --prefix ~/.local @playwright/mcp".into(),
+        );
+    };
+    let workdir = match app.path().app_cache_dir() {
+        Ok(dir) => dir.join("playwright-probe"),
+        Err(error) => return base("error", error.to_string()),
+    };
+    let probed =
+        tauri::async_runtime::spawn_blocking(move || playwright::probe(&server, &workdir)).await;
+    let browser = if playwright::browser().is_some() {
+        "Chrome"
+    } else {
+        "navegador de Playwright"
+    };
+    match probed {
+        Ok(Ok(tools)) if tools.iter().any(|t| t == "browser_navigate") => base(
+            "ok",
+            format!(
+                "Activo · abre páginas con JavaScript en {browser} sin ventana y las pasa a Markdown"
+            ),
+        ),
+        Ok(Ok(_)) => base("error", "Responde, pero no ofrece browser_navigate".into()),
+        Ok(Err(error)) => base("error", error),
+        Err(error) => base("error", error.to_string()),
+    }
+}
+
+fn antigravity(app: &AppHandle) -> Connection {
+    let base = |state, detail| Connection {
+        id: "antigravity",
+        name: "Antigravity",
+        kind: "CLI",
+        state,
+        detail,
+    };
+    match agy::find_agy(app) {
+        None => base(
+            "missing",
+            "agy no instalado · sin él no se pueden añadir páginas web".into(),
+        ),
+        Some(path) => {
+            let version = agy::version(&path).unwrap_or_else(|| "versión desconocida".into());
+            base(
+                "ok",
+                format!("agy {version} · lee páginas web y las guarda en raw/web/"),
+            )
+        }
+    }
+}
+
 fn claude_code(app: &AppHandle) -> Connection {
     let base = |state, detail| Connection {
         id: "claude-code",
@@ -101,16 +164,16 @@ fn claude_code(app: &AppHandle) -> Connection {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "versión desconocida".into());
-    let session = match find_named_session(app, SESSION_NAME) {
-        Some(s) => format!("sesión {SESSION_NAME} en {}", s.cwd.display()),
-        None => format!("sin sesión {SESSION_NAME}: se creará al abrirlo"),
+    let session = match current_session_name(app) {
+        Some(name) => format!("sesión de esta apertura: {name}"),
+        None => "una sesión nueva por cada apertura de nexo".into(),
     };
     base("ok", format!("{version} · {session}"))
 }
 
 #[tauri::command]
 pub async fn connections_status(app: AppHandle) -> Vec<Connection> {
-    let (markitdown, api) = tokio::join!(markitdown(&app), api(&app));
+    let (markitdown, playwright, api) = tokio::join!(markitdown(&app), playwright(&app), api(&app));
     let cli = claude_code(&app);
-    vec![markitdown, api, cli]
+    vec![markitdown, playwright, api, antigravity(&app), cli]
 }

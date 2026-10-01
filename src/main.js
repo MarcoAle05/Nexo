@@ -1,15 +1,17 @@
 import '@fontsource-variable/geist';
 import '@fontsource/geist-mono/400.css';
 import '@fontsource/geist-mono/500.css';
+import '@fontsource/geist-mono/700.css';
 import '@fontsource-variable/unbounded';
 import './styles.css';
 
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
 
 import { createClaudeCode } from './claude-code.js';
-import { createGraph } from './graph.js';
+import { colorFor, createGraph } from './graph.js';
 
 const $ = (id) => document.getElementById(id);
 const desktop = isTauri();
@@ -59,11 +61,13 @@ const HELP = `Escribe cualquier cosa para hablar con Nexo sobre tu wiki, o usa u
   compile             integra en wiki/ las fuentes marcadas que sean nuevas
   ask <pregunta>      responde con tu wiki y lo guarda en output/query-results.md
   convertir           pasa a Markdown los PDF pendientes (MarkItDown, sin IA)
+  web <enlace>        lee la página (con Antigravity o Playwright, según el selector) y la guarda en raw/web/
+  resumir             Antigravity resume las fuentes que aún no tienen resumen
   nueva               empieza una conversación nueva con Nexo
   clave <sk-ant-…>    guarda tu clave de la API de Anthropic
   limpiar             vacía la terminal
 La pestaña Claude Code abre Claude Code dentro de tu vault.`;
-const COMMANDS = new Set(['ayuda', 'help', 'limpiar', 'clear', 'nueva', 'clave', 'key', 'compile', 'compilar', 'ask', 'pregunta', 'convertir', 'convert']);
+const COMMANDS = new Set(['ayuda', 'help', 'limpiar', 'clear', 'nueva', 'clave', 'key', 'compile', 'compilar', 'ask', 'pregunta', 'convertir', 'convert', 'web', 'url', 'resumir']);
 
 function setBusy(value) {
   busy = value;
@@ -156,6 +160,19 @@ async function runCommand(text) {
       }
       return;
     }
+    case 'resumir': {
+      if (!vault) return printLine('Primero elige un vault.', 'error');
+      const pending = sources.filter((s) => !s.summarized && hasText(s));
+      if (!pending.length) return printLine('Todas las fuentes con texto ya tienen resumen.', 'info');
+      printLine(`${pending.length} fuentes en la cola de Antigravity`, 'info');
+      pending.forEach((s) => summarizeSource(s.path));
+      return;
+    }
+    case 'web':
+    case 'url':
+      if (!arg) return printLine('Uso: web https://…', 'error');
+      await addWebSource(arg);
+      return;
     case 'convertir':
     case 'convert':
       if (!vault) return printLine('Primero elige un vault.', 'error');
@@ -198,11 +215,13 @@ $('cc-restart').addEventListener('click', () => claudeCode.restart());
 
 function setMode(next) {
   mode = next;
+  showActivity(false);
   const cc = mode === 'claude-code';
   $('output').hidden = cc;
   $('prompt').hidden = cc;
   $('cc-view').hidden = !cc;
   $('terminal-title').textContent = cc ? 'Claude Code' : 'Nexo';
+  $('cc-save').hidden = !cc;
   if (!cc) return $('prompt-input').focus();
   if (!desktop) return printLine('Claude Code solo funciona en la app de escritorio.', 'error');
   if (!vault) {
@@ -212,6 +231,28 @@ function setMode(next) {
   }
   claudeCode.show();
 }
+
+// Guardar la conversación: Claude Code escribe sus conclusiones en wiki/conversaciones/ y la
+// nota aparece como nodo del grafo. Se revisa el grafo hasta que llegue (o pasen 3 minutos).
+$('cc-save').addEventListener('click', () => {
+  if (activityOpen) showActivity(false);
+  if (!claudeCode.say('Guarda la conversación en el grafo.')) {
+    return printLine('Abre primero la sesión de Claude Code.', 'error');
+  }
+  const before = new Set(graphData.nodes.filter((n) => n.kind === 'conversation').map((n) => n.id));
+  const started = Date.now();
+  $('cc-save').classList.add('working');
+  const timer = setInterval(async () => {
+    await loadGraph();
+    const fresh = graphData.nodes.find((n) => n.kind === 'conversation' && !before.has(n.id));
+    const updated = Date.now() - started > 180_000;
+    if (fresh || updated) {
+      clearInterval(timer);
+      $('cc-save').classList.remove('working');
+      if (fresh) graph.focus(fresh.id);
+    }
+  }, 4000);
+});
 
 document.querySelectorAll('[data-mode]').forEach((button) => {
   button.addEventListener('click', () => setMode(button.dataset.mode));
@@ -376,15 +417,15 @@ function sourceRow(source, index) {
   const openButton = document.createElement('button');
   openButton.type = 'button';
   openButton.className = 'source-open';
-  openButton.title = `Abrir raw/${source.path}`;
+  openButton.title = 'Ver resumen de la fuente';
   const name = document.createElement('span');
   name.className = 'source-name';
   name.textContent = source.name;
   const meta = document.createElement('span');
   meta.className = 'source-meta';
-  meta.textContent = `${KIND_LABEL[source.kind]} · ${formatSize(source.size)}`;
+  meta.textContent = `${KIND_LABEL[source.kind]} · ${formatSize(source.size)}${source.summarized ? ' · ✦ resumen' : ''}`;
   openButton.append(name, meta);
-  openButton.addEventListener('click', () => invoke('open_source', { path: source.path }).catch(fail));
+  openButton.addEventListener('click', () => openDetail(source.path));
 
   // Estado de la conversión a Markdown (MarkItDown, sin IA).
   const text = document.createElement('span');
@@ -441,8 +482,11 @@ function renderSources() {
 
   const visible = filter === 'all' ? sources : sources.filter((s) => s.kind === filter);
   $('source-list').replaceChildren(...visible.map(sourceRow));
-  $('source-list').hidden = visible.length === 0;
-  $('sources-empty').hidden = visible.length > 0;
+  const inDetail = Boolean(detailPath);
+  $('source-list').hidden = inDetail || visible.length === 0;
+  $('sources-empty').hidden = inDetail || visible.length > 0;
+  document.querySelector('.chips').hidden = inDetail;
+  $('source-detail').hidden = !inDetail;
 
   const [title, text] = !vault
     ? ['Elige tu vault', detected.length
@@ -459,6 +503,10 @@ function renderSources() {
 async function loadSources() {
   sources = vault ? await invoke('list_sources').catch((e) => (fail(e), [])) : [];
   for (const path of excluded) if (!sources.some((s) => s.path === path)) excluded.delete(path);
+  if (detailPath && !sources.some((s) => s.path === detailPath)) {
+    detailPath = null;
+    detailView = null;
+  }
   renderSources();
   // Los PDF (y Office/EPUB) sin convertir se pasan a Markdown en segundo plano: es local y gratis.
   // Cada archivo se intenta una vez por sesión, para no repetir los que no tienen texto (PDF escaneados).
@@ -516,14 +564,109 @@ async function addSources(paths) {
     toConvert.forEach((p) => autoTried.add(p));
     sources = await invoke('list_sources').catch(() => sources);
     renderSources();
+    loadGraph(); // cada fuente nueva ya es un nodo (su ficha)
     if (toConvert.length) await convertSources(toConvert);
+    // Antigravity resume lo que tiene texto; las tareas esperan en su cola.
+    const addedPaths = new Set(added.map((s) => s.path));
+    sources.filter((s) => addedPaths.has(s.path) && hasText(s)).forEach((s) => summarizeSource(s.path));
   } catch (error) {
     fail(error);
   }
 }
 
+const hasText = (s) => s.converted || s.kind === 'web' || s.kind === 'nota' || /\.(md|markdown|txt|html?)$/i.test(s.path);
+
+// Resumen con Antigravity: escribe la ficha de la fuente (resumen, ideas clave y conceptos).
+const summarizing = new Set();
+async function summarizeSource(path) {
+  if (!desktop || !vault) return;
+  if (!agyReady) return printLine('Antigravity (agy) no está disponible para resumir. Revisa Conexiones.', 'error');
+  if (summarizing.has(path)) return;
+  summarizing.add(path);
+  if (detailPath === path) renderDetail();
+  try {
+    const message = await invoke('summarize_source', { path });
+    printLine(`✦ ${message}`, 'info');
+  } catch (error) {
+    fail(`resumen de ${path}: ${error}`);
+  } finally {
+    summarizing.delete(path);
+    await Promise.all([loadSources(), loadGraph()]);
+    if (detailPath === path) await refreshDetail();
+  }
+}
+
 // ---------------------------------------------------------------- conexiones (MCP, API, CLI)
 let markitdownReady = false;
+let agyReady = false;
+let playwrightReady = false;
+
+// Cómo se leen los enlaces: Antigravity directamente, o Playwright (Chrome) + MarkItDown y
+// Antigravity solo para resumir. La elección se recuerda en este equipo.
+let readMode = (() => {
+  try {
+    return localStorage.getItem('nexo.readMode') === 'playwright' ? 'playwright' : 'agy';
+  } catch {
+    return 'agy';
+  }
+})();
+function renderReadMode() {
+  document.querySelectorAll('[data-read]').forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.dataset.read === readMode));
+    if (b.dataset.read === 'playwright') b.disabled = !playwrightReady;
+  });
+}
+document.querySelectorAll('[data-read]').forEach((b) =>
+  b.addEventListener('click', () => {
+    readMode = b.dataset.read;
+    try {
+      localStorage.setItem('nexo.readMode', readMode);
+    } catch {}
+    renderReadMode();
+  }),
+);
+renderReadMode();
+let fetchingWeb = 0;
+
+// Páginas web como fuente: Antigravity (agy) abre la URL y devuelve su contenido en Markdown.
+async function addWebSource(url) {
+  if (!desktop) return printLine('Añadir páginas web solo funciona en la app de escritorio.', 'error');
+  if (!vault) return printLine('Primero elige un vault.', 'error');
+  if (!agyReady) return printLine('Antigravity (agy) no está disponible. Revisa Conexiones.', 'error');
+  const playwright = readMode === 'playwright' && playwrightReady;
+  if (readMode === 'playwright' && !playwrightReady) {
+    printLine('Playwright no está disponible (revisa Conexiones): se usará Antigravity.', 'info');
+  }
+  fetchingWeb += 1;
+  $('link-form').classList.add('busy');
+  printLine(
+    playwright
+      ? `Playwright abre ${url}; luego Antigravity lo resume (míralo en Actividad Antigravity)`
+      : `Antigravity en cola: ${url} (míralo en Actividad Antigravity)`,
+    'info',
+  );
+  try {
+    const path = await invoke('add_web_source', { url, playwright });
+    printLine(`+ raw/${path} · con ficha y resumen`, 'system');
+    await Promise.all([loadSources(), loadGraph()]);
+    return path;
+  } catch (error) {
+    fail(error);
+  } finally {
+    fetchingWeb -= 1;
+    $('link-form').classList.toggle('busy', fetchingWeb > 0);
+  }
+}
+
+$('link-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const input = $('link-input');
+  const url = input.value.trim();
+  if (!url) return input.focus();
+  if (!/^https?:\/\/\S+\.\S+/i.test(url)) return printLine('Pega un enlace completo (https://…).', 'error');
+  input.value = '';
+  if (!(await addWebSource(url))) input.value = input.value || url;
+});
 const STATE_LABEL = { ok: 'Activo', missing: 'No disponible', error: 'Error' };
 const connMenu = $('conn-menu');
 const connButton = $('conn-button');
@@ -572,6 +715,11 @@ async function refreshConnections() {
   try {
     const list = await invoke('connections_status');
     markitdownReady = list.some((c) => c.id === 'markitdown' && c.state === 'ok');
+    agyReady = list.some((c) => c.id === 'antigravity' && c.state === 'ok');
+    playwrightReady = list.some((c) => c.id === 'playwright' && c.state === 'ok');
+    renderReadMode();
+    $('link-form').classList.toggle('unavailable', !agyReady);
+    $('link-input').title = agyReady ? '' : 'Antigravity (agy) no está disponible: revisa Conexiones';
     renderConnections(list);
     renderSources();
   } catch (error) {
@@ -619,6 +767,257 @@ $('add-source').addEventListener('click', async () => {
   if (picked) addSources(Array.isArray(picked) ? picked : [picked]);
 });
 
+// ---------------------------------------------------------------- pestaña de resumen de una fuente
+let detailPath = null;
+let detailView = null; // ficha: resumen, ideas clave, conceptos
+
+async function openDetail(path, { fromGraph = false } = {}) {
+  detailPath = path;
+  detailView = null;
+  closeRename();
+  renderSources();
+  renderDetail();
+  try {
+    detailView = await invoke('source_detail', { path });
+  } catch (error) {
+    fail(error);
+  }
+  if (detailPath !== path) return;
+  renderDetail();
+  if (!fromGraph && detailView) graph.focus(detailView.id);
+}
+
+// Vuelve a leer la ficha de la fuente abierta (p. ej. cuando Antigravity termina su resumen).
+async function refreshDetail() {
+  if (!detailPath) return;
+  const path = detailPath;
+  try {
+    const view = await invoke('source_detail', { path });
+    if (detailPath === path) detailView = view;
+  } catch (error) {
+    fail(error);
+  }
+  if (detailPath === path) renderDetail();
+}
+
+function closeDetail() {
+  detailPath = null;
+  detailView = null;
+  closeRename();
+  renderSources();
+}
+
+function renderDetail() {
+  const source = sources.find((s) => s.path === detailPath);
+  if (!source) return closeDetail();
+  $('detail-icon').innerHTML = svg(ICONS[source.kind]);
+  $('detail-name').textContent = detailView?.name ?? source.name;
+  $('detail-meta').textContent = `${KIND_LABEL[source.kind]} · ${formatSize(source.size)} · raw/${source.path}`;
+  const working = summarizing.has(source.path);
+  const summary = $('detail-summary');
+  summary.classList.toggle('pending', !detailView?.summarized);
+  summary.textContent = working
+    ? 'Antigravity está leyendo la fuente…'
+    : detailView?.summarized
+      ? detailView.summary
+      : hasText(source)
+        ? 'Aún sin resumen. Pídeselo a Antigravity.'
+        : 'Esta fuente no tiene texto que resumir (convierte el PDF a Markdown o añade una fuente de texto).';
+  const points = detailView?.key_points ?? [];
+  $('detail-points').replaceChildren(...points.map((p) => Object.assign(document.createElement('li'), { textContent: p })));
+  $('detail-points').hidden = $('detail-points-title').hidden = !points.length;
+  const concepts = detailView?.concepts ?? [];
+  $('detail-concepts').replaceChildren(
+    ...concepts.map((c) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'concept-chip';
+      chip.textContent = c;
+      chip.title = 'Ver en el grafo';
+      chip.addEventListener('click', () => focusConcept(c));
+      return chip;
+    }),
+  );
+  $('detail-concepts').hidden = $('detail-concepts-title').hidden = !concepts.length;
+  const button = $('detail-summarize');
+  $('detail-eyebrow').textContent = `Fuente · ${KIND_LABEL[source.kind]}`;
+  $('detail-summarize-label').textContent = working
+    ? 'Antigravity trabajando…'
+    : detailView?.summarized
+      ? 'Actualizar resumen'
+      : 'Resumir con Antigravity';
+  button.disabled = working || !hasText(source) || !agyReady;
+  button.classList.toggle('working', working);
+  button.title = agyReady ? '' : 'Antigravity (agy) no está disponible: revisa Conexiones';
+  $('detail-open-md').hidden = !source.converted;
+  $('detail-graph').disabled = !detailView;
+}
+
+// Un concepto de la ficha → su nodo (nota existente o pendiente) en el grafo.
+function focusConcept(name) {
+  const key = name.toLowerCase();
+  const node = graphData.nodes.find(
+    (n) =>
+      n.id.toLowerCase() === `?${key}` ||
+      n.id.toLowerCase() === `${key}.md` ||
+      n.id.toLowerCase().endsWith(`/${key}.md`) ||
+      n.label.toLowerCase() === key,
+  );
+  if (!node || !graph.focus(node.id)) printLine(`«${name}» aún no está en el grafo`, 'info');
+}
+
+function closeRename() {
+  $('rename-form').hidden = true;
+  $('detail-name').hidden = false;
+  $('detail-rename').hidden = false;
+}
+
+$('detail-back').addEventListener('click', closeDetail);
+$('detail-rename').addEventListener('click', () => {
+  const source = sources.find((s) => s.path === detailPath);
+  if (!source) return;
+  $('rename-input').value = source.name.replace(/\.[^.]+$/, '');
+  $('rename-form').hidden = false;
+  $('detail-name').hidden = true;
+  $('detail-rename').hidden = true;
+  $('rename-input').select();
+});
+$('rename-cancel').addEventListener('click', closeRename);
+$('rename-form').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const name = $('rename-input').value.trim();
+  if (!name || !detailPath) return;
+  const old = detailPath;
+  try {
+    const renamed = await invoke('rename_source', { path: old, name });
+    printLine(`raw/${old} → raw/${renamed.path}`, 'system');
+    if (excluded.delete(old)) excluded.add(renamed.path);
+    closeRename();
+    await Promise.all([loadSources(), loadGraph()]);
+    openDetail(renamed.path);
+  } catch (error) {
+    fail(error);
+  }
+});
+$('rename-input').addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') {
+    event.stopPropagation();
+    closeRename();
+  }
+});
+$('detail-summarize').addEventListener('click', () => detailPath && summarizeSource(detailPath));
+$('detail-open').addEventListener('click', () => detailPath && invoke('open_source', { path: detailPath }).catch(fail));
+$('detail-open-md').addEventListener('click', () =>
+  detailPath && invoke('open_source', { path: `markdown/${detailPath.replace(/\.[^./]+$/, '')}.md` }).catch(fail),
+);
+$('detail-graph').addEventListener('click', () => detailView && graph.focus(detailView.id));
+
+// ---------------------------------------------------------------- actividad de Antigravity
+// Cada tarea de agy (leer una web, resumir una fuente) llega como evento `agy-activity`.
+const jobs = new Map();
+let activityOpen = false;
+const JOB_KIND = { web: 'Página web', resumen: 'Resumen de fuente' };
+
+function jobStatus(job) {
+  const seconds = Math.round(((job.finished ?? Date.now()) - job.started) / 1000);
+  const tokens = job.tokens ? ` · ${(job.tokens / 1000).toFixed(1)}k tokens` : '';
+  return {
+    queued: 'En cola',
+    running: `En curso · ${seconds} s`,
+    done: `Hecho · ${seconds} s${tokens}`,
+    error: 'Error',
+  }[job.status];
+}
+
+function renderActivity() {
+  const list = [...jobs.values()].sort((a, b) => b.id - a.id);
+  const active = list.filter((j) => j.status === 'running' || j.status === 'queued').length;
+  $('activity-count').hidden = !active;
+  $('activity-count').textContent = `${active} en curso`;
+  $('activity-dot').classList.toggle('busy', active > 0);
+  if (!activityOpen) return;
+  $('activity-empty').hidden = list.length > 0;
+  $('activity-list').replaceChildren(
+    ...list.map((job) => {
+      const li = document.createElement('li');
+      li.className = `job ${job.status}`;
+      const core = document.createElement('div');
+      core.className = 'job-core';
+      li.append(core);
+      const head = document.createElement('div');
+      head.className = 'job-head';
+      const kind = Object.assign(document.createElement('span'), { className: 'job-kind', textContent: JOB_KIND[job.kind] ?? job.kind });
+      const status = Object.assign(document.createElement('span'), { className: 'job-status', textContent: jobStatus(job) });
+      const title = Object.assign(document.createElement('span'), { className: 'job-title', textContent: job.title, title: job.title });
+      head.append(kind, status, title);
+      core.append(head);
+      if (job.steps.length) {
+        const steps = document.createElement('ol');
+        steps.className = 'job-steps';
+        for (const step of job.steps) {
+          const row = document.createElement('li');
+          const dot = Object.assign(document.createElement('span'), { className: `step-dot ${step.state}` });
+          const label = Object.assign(document.createElement('span'), { textContent: step.label, title: step.label });
+          const time = Object.assign(document.createElement('span'), {
+            className: 'step-time',
+            textContent: step.seconds != null ? `${step.seconds.toFixed(1)} s` : step.state === 'active' ? '…' : '',
+          });
+          row.append(dot, label, time);
+          steps.append(row);
+        }
+        core.append(steps);
+      }
+      if (job.result || job.error) {
+        core.append(Object.assign(document.createElement('p'), { className: 'job-foot', textContent: job.error ?? `→ ${job.result}` }));
+      }
+      return li;
+    }),
+  );
+}
+
+function showActivity(open) {
+  activityOpen = open;
+  $('activity-button').setAttribute('aria-pressed', String(open));
+  $('activity-view').hidden = !open;
+  const cc = mode === 'claude-code';
+  $('output').hidden = open || cc;
+  $('prompt').hidden = open || cc;
+  $('cc-view').hidden = open || !cc;
+  renderActivity();
+  // Al cerrar la actividad se vuelve a la vista anterior con el foco donde corresponde.
+  if (!open && cc && vault && desktop) claudeCode.show();
+  else if (!open && !cc) $('prompt-input').focus();
+}
+
+$('activity-button').addEventListener('click', () => showActivity(!activityOpen));
+$('activity-clear').addEventListener('click', async () => {
+  await invoke('agy_clear_finished').catch(fail);
+  for (const [id, job] of jobs) if (job.finished) jobs.delete(id);
+  renderActivity();
+});
+// Los segundos de las tareas en curso avanzan aunque no llegue ningún evento.
+setInterval(() => {
+  if (activityOpen && [...jobs.values()].some((j) => j.status === 'running')) renderActivity();
+}, 1000);
+
+if (desktop) {
+  listen('agy-activity', ({ payload }) => {
+    const before = jobs.get(payload.id);
+    jobs.set(payload.id, payload);
+    renderActivity();
+    // Al terminar una tarea de Antigravity las cartas se actualizan solas.
+    if (payload.finished && !before?.finished) {
+      Promise.all([loadSources(), loadGraph()]).then(refreshDetail);
+    }
+  });
+  invoke('agy_jobs')
+    .then((list) => {
+      list.forEach((job) => jobs.set(job.id, job));
+      renderActivity();
+    })
+    .catch(() => {});
+}
+
 // ---------------------------------------------------------------- grafo (wiki/)
 const stage = $('stage');
 const graph = createGraph($('graph-canvas'), {
@@ -634,6 +1033,7 @@ const graph = createGraph($('graph-canvas'), {
     $('focus-degree').textContent = `· ${node.degree} ${node.degree === 1 ? 'conexión' : 'conexiones'}`;
     $('focus-open').hidden = node.kind === 'missing';
     focused = node;
+    if (node.kind === 'source' && node.source && node.source !== detailPath) openDetail(node.source, { fromGraph: true });
   },
   onOpen: (node) => openNote(node),
 });
@@ -652,8 +1052,16 @@ async function loadGraph() {
     ? 'Elige un vault para ver su grafo'
     : 'Tu wiki está vacía: aquí aparecerán las notas de wiki/ y sus [[enlaces]]';
   $('graph-toolbar').querySelectorAll('button').forEach((b) => (b.disabled = empty));
-  graph.setData(data ?? { nodes: [], edges: [] });
+  graphData = data ?? { nodes: [], edges: [] };
+  graph.setData(graphData);
+  if (!searchMenu.hidden && searchInput.value.trim()) {
+    const current = searchHits[searchAt]?.id;
+    searchHits = findNodes(searchInput.value);
+    searchAt = Math.max(0, searchHits.findIndex((n) => n.id === current));
+    renderSearch();
+  }
 }
+let graphData = { nodes: [], edges: [] };
 
 document.querySelectorAll('[data-scope]').forEach((b) =>
   b.addEventListener('click', () => graph.setScope(b.dataset.scope)),
@@ -671,6 +1079,151 @@ $('labels-switch').addEventListener('click', () =>
 $('graph-fit').addEventListener('click', () => graph.fit());
 $('focus-close').addEventListener('click', () => graph.clearSelection());
 $('focus-open').addEventListener('click', () => focused && openNote(focused));
+
+// ---------------------------------------------------------------- búsqueda en el grafo
+// Busca solo en los nombres de los nodos (fuentes, notas, temas, palabras clave), nunca en el
+// contenido de las notas. Las flechas recorren las coincidencias y centran cada una.
+const SEARCH_TYPE = {
+  source: 'Fuente',
+  note: 'Nodo',
+  index: 'Tema',
+  conversation: 'Conversación',
+  missing: 'Palabra clave',
+};
+const SEARCH_ORDER = ['source', 'note', 'index', 'conversation', 'missing'];
+const searchMenu = $('search-menu');
+const searchButton = $('search-button');
+const searchInput = $('search-input');
+let searchHits = [];
+let searchAt = -1;
+
+const fold = (text) => text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+function findNodes(query) {
+  const q = fold(query.trim());
+  if (!q) return [];
+  return graphData.nodes
+    .map((node) => {
+      // Nombre visible y, para notas, el nombre de archivo (p. ej. «busqueda-hibrida»).
+      const names = [node.label, node.id.replace(/^\?/, '').split('/').pop().replace(/\.md$/, '')];
+      const found = names.map(fold).find((n) => n.includes(q));
+      return found ? { node, starts: found.startsWith(q) } : null;
+    })
+    .filter(Boolean)
+    .sort(
+      (a, b) =>
+        Number(b.starts) - Number(a.starts) ||
+        SEARCH_ORDER.indexOf(a.node.kind) - SEARCH_ORDER.indexOf(b.node.kind) ||
+        a.node.label.localeCompare(b.node.label),
+    )
+    .map((hit) => hit.node);
+}
+
+// Resalta lo buscado dentro del nombre sin usar innerHTML con texto del usuario.
+function highlighted(label, query) {
+  const span = document.createElement('span');
+  span.className = 'search-result-label';
+  const at = fold(label).indexOf(fold(query.trim()));
+  if (at < 0) {
+    span.textContent = label;
+    return span;
+  }
+  const end = at + query.trim().length;
+  const mark = document.createElement('mark');
+  mark.textContent = label.slice(at, end);
+  span.append(label.slice(0, at), mark, label.slice(end));
+  return span;
+}
+
+function renderSearch() {
+  const query = searchInput.value;
+  const has = searchHits.length > 0;
+  $('search-count').textContent = !query.trim() ? '' : has ? `${searchAt + 1} de ${searchHits.length}` : '0';
+  $('search-prev').disabled = $('search-next').disabled = searchHits.length < 2;
+  $('search-hint').hidden = Boolean(query.trim()) && has;
+  $('search-hint').textContent = !query.trim()
+    ? 'Busca por nombre en el grafo, no dentro del contenido de las notas.'
+    : !graphData.nodes.length
+      ? 'El grafo está vacío.'
+      : `Nada en el grafo se llama «${query.trim()}».`;
+  $('search-results').replaceChildren(
+    ...searchHits.map((node, i) => {
+      const li = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'search-result';
+      if (i === searchAt) button.setAttribute('aria-current', 'true');
+      const dot = document.createElement('span');
+      dot.className = `search-result-dot${node.kind === 'missing' ? ' missing' : ''}`;
+      dot.style.color = colorFor(node);
+      const type = Object.assign(document.createElement('span'), {
+        className: 'search-type',
+        textContent: SEARCH_TYPE[node.kind] ?? 'Nodo',
+      });
+      button.append(dot, highlighted(node.label, query), type);
+      button.addEventListener('click', () => goToHit(i));
+      li.append(button);
+      return li;
+    }),
+  );
+  $('search-results').querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
+}
+
+function goToHit(index) {
+  if (!searchHits.length) return;
+  searchAt = (index + searchHits.length) % searchHits.length;
+  graph.focus(searchHits[searchAt].id);
+  renderSearch();
+}
+
+function openSearch() {
+  searchMenu.hidden = false;
+  searchButton.setAttribute('aria-expanded', 'true');
+  searchInput.focus();
+  searchInput.select();
+  renderSearch();
+}
+function closeSearch() {
+  searchMenu.hidden = true;
+  searchButton.setAttribute('aria-expanded', 'false');
+}
+
+searchInput.addEventListener('input', () => {
+  searchHits = findNodes(searchInput.value);
+  searchAt = searchHits.length ? 0 : -1;
+  if (searchHits.length) graph.focus(searchHits[0].id);
+  renderSearch();
+});
+searchInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' || event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    const back = event.key === 'ArrowUp' || (event.key === 'Enter' && event.shiftKey);
+    goToHit(searchAt + (back ? -1 : 1));
+  } else if (event.key === 'Escape') {
+    event.stopPropagation();
+    closeSearch();
+    searchButton.focus();
+  }
+});
+$('search-prev').addEventListener('click', () => goToHit(searchAt - 1));
+$('search-next').addEventListener('click', () => goToHit(searchAt + 1));
+searchButton.addEventListener('click', (event) => {
+  event.stopPropagation();
+  if (searchMenu.hidden) openSearch();
+  else closeSearch();
+});
+document.addEventListener('click', (event) => {
+  if (!searchMenu.hidden && !searchMenu.contains(event.target) && !searchButton.contains(event.target)) closeSearch();
+});
+// ⌘K / Ctrl+K abre la búsqueda (salvo dentro de la terminal de Claude Code, donde Ctrl+K es suyo).
+const isMac = /Mac/i.test(navigator.platform);
+$('search-kbd').textContent = isMac ? '⌘K' : 'Ctrl K';
+document.addEventListener('keydown', (event) => {
+  if ((isMac ? event.metaKey : event.ctrlKey) && event.key.toLowerCase() === 'k' && !event.target.closest?.('.xterm')) {
+    event.preventDefault();
+    openSearch();
+  }
+});
 
 // ---------------------------------------------------------------- arranque
 async function refresh() {

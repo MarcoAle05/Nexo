@@ -5,17 +5,34 @@ import { Channel, invoke } from '@tauri-apps/api/core';
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 
+const FONT_FAMILY = "'Geist Mono', ui-monospace, Menlo, monospace";
+
 export function createClaudeCode({ container, exitBox, exitText, onError }) {
   let term = null;
   let fit = null;
   let running = false;
+
+  // Las pulsaciones se envían en orden y agrupadas: nunca hay dos escrituras a la vez.
+  let pending = '';
+  let flushing = false;
+  async function send(data) {
+    pending += data;
+    if (flushing) return;
+    flushing = true;
+    while (pending) {
+      const chunk = pending;
+      pending = '';
+      await invoke('claude_code_write', { data: chunk }).catch(onError);
+    }
+    flushing = false;
+  }
 
   function ensureTerminal() {
     if (term) return;
     term = new Terminal({
       allowTransparency: true,
       cursorBlink: true,
-      fontFamily: "'Geist Mono', ui-monospace, Menlo, monospace",
+      fontFamily: FONT_FAMILY,
       fontSize: 12.5,
       lineHeight: 1.25,
       scrollback: 5000,
@@ -30,14 +47,28 @@ export function createClaudeCode({ container, exitBox, exitText, onError }) {
     fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
-    term.onData((data) => running && invoke('claude_code_write', { data }).catch(onError));
+    // Si la fuente llega después de abrir, se reasigna para que xterm vuelva a medir.
+    document.fonts.addEventListener('loadingdone', () => {
+      term.options.fontFamily = FONT_FAMILY;
+      if (container.offsetParent) fit.fit();
+    });
+    // Un clic en cualquier parte del panel devuelve el foco a la terminal.
+    container.parentElement.addEventListener('mousedown', () => requestAnimationFrame(() => term.focus()));
+    term.onData((data) => running && send(data));
     term.onResize(({ cols, rows }) => running && invoke('claude_code_resize', { cols, rows }).catch(() => {}));
     new ResizeObserver(() => {
       if (container.offsetParent) fit.fit();
     }).observe(container);
   }
 
+  // xterm mide las celdas al abrirse: primero se asegura Geist Mono (normal y negrita).
+  const fontsReady = Promise.all([
+    document.fonts.load("400 12.5px 'Geist Mono'"),
+    document.fonts.load("700 12.5px 'Geist Mono'"),
+  ]).catch(() => {});
+
   async function start() {
+    await fontsReady;
     ensureTerminal();
     fit.fit();
     exitBox.hidden = true;
@@ -66,13 +97,29 @@ export function createClaudeCode({ container, exitBox, exitText, onError }) {
 
   return {
     // Abre la pestaña: arranca Claude Code la primera vez, después solo recupera el foco.
+    // Al volver a mostrarse (desde otra pestaña o desde Actividad), xterm puede haber
+    // pausado el dibujo mientras estaba oculto: se reajusta, se repinta y recupera el foco.
     show() {
       if (running) {
-        fit.fit();
-        term.focus();
+        requestAnimationFrame(() => {
+          fit.fit();
+          term.refresh(0, term.rows - 1);
+          term.focus();
+        });
       } else if (!term || exitBox.hidden) start();
     },
     restart: start,
+    get running() {
+      return running;
+    },
+    // Escribe un mensaje en Claude Code y lo envía (como si el usuario lo tecleara).
+    say(text) {
+      if (!running) return false;
+      send(text);
+      setTimeout(() => send('\r'), 150);
+      term.focus();
+      return true;
+    },
     stop() {
       running = false;
       return invoke('claude_code_stop').catch(() => {});

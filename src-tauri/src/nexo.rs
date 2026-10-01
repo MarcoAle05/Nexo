@@ -29,6 +29,8 @@ Trabajas sobre la wiki personal del usuario: un vault de Obsidian donde `raw/` g
 `wiki/` las notas organizadas y `output/` las respuestas. \
 Responde en el idioma del usuario (español por defecto), de forma directa y sin relleno. \
 Basa tus respuestas en la wiki y cita las notas que uses como [[nombre-de-la-nota]]. \
+Cada fuente tiene una ficha en `wiki/fuentes/` con su nombre, resumen, ideas clave y conceptos: cuando el usuario \
+mencione una fuente por su nombre, localízala por esa ficha. \
 Si la wiki no cubre algo, dilo con claridad y separa lo que viene de la wiki de lo que aportas de tu conocimiento general. \
 Tus respuestas se muestran como texto plano en una terminal: usa párrafos y listas simples con guiones, sin tablas ni encabezados.";
 
@@ -46,7 +48,8 @@ Cómo trabajar:\n\
 3. Crea temas nuevos solo cuando la fuente no encaje en ninguno.\n\
 4. Actualiza el `_index.md` de cada tema tocado y `_master-index.md` si hay temas nuevos.\n\
 5. Escribe en español, salvo nombres propios y términos técnicos habituales en inglés.\n\
-6. Al terminar, responde con un resumen de una o dos líneas de lo que cambiaste.";
+6. `fuentes/` contiene las fichas de cada fuente (las mantiene nexo): léelas si te sirven, pero no las escribas.\n\
+7. Al terminar, responde con un resumen de una o dos líneas de lo que cambiaste.";
 
 #[derive(Clone, Serialize)]
 pub struct Event {
@@ -389,6 +392,11 @@ fn run_tool(
         }
         "write_note" => {
             let file = wiki_path(wiki, path, true)?;
+            if file.starts_with(wiki.join(crate::fichas::FICHAS_DIR)) {
+                return Err(
+                    "Las fichas de fuentes/ las mantiene nexo: no se pueden escribir.".into(),
+                );
+            }
             let content = input["content"].as_str().ok_or("Falta content")?;
             if let Some(dir) = file.parent() {
                 fs::create_dir_all(dir).map_err(|e| e.to_string())?;

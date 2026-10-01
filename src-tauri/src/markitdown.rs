@@ -5,14 +5,13 @@
 //! herramienta `convert_to_markdown`. El resultado se guarda en `raw/markdown/`.
 
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
-use serde_json::{Value, json};
+use serde_json::json;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
 
+use crate::mcp::McpClient;
 use crate::vault::vault_dir;
 
 /// Carpeta dentro de `raw/` donde se guardan las conversiones.
@@ -77,111 +76,18 @@ pub fn find_server(app: &AppHandle) -> Option<PathBuf> {
     from_path.into_iter().chain(local).find(|p| p.is_file())
 }
 
-/// Cliente MCP mínimo sobre stdio.
-struct Mcp {
-    child: Child,
-    stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
-    next_id: u64,
+fn start(server: &Path) -> Result<McpClient, String> {
+    McpClient::start(server, &[], None, "markitdown-mcp")
 }
 
-impl Mcp {
-    fn start(server: &Path) -> Result<Self, String> {
-        let mut child = Command::new(server)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|e| format!("No se pudo iniciar markitdown-mcp: {e}"))?;
-        let stdin = child.stdin.take().ok_or("sin stdin")?;
-        let stdout = BufReader::new(child.stdout.take().ok_or("sin stdout")?);
-        let mut mcp = Self {
-            child,
-            stdin,
-            stdout,
-            next_id: 1,
-        };
-        mcp.request(
-            "initialize",
-            json!({
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "nexo", "version": env!("CARGO_PKG_VERSION")}
-            }),
-        )?;
-        mcp.send(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))?;
-        Ok(mcp)
-    }
-
-    fn send(&mut self, message: &Value) -> Result<(), String> {
-        writeln!(self.stdin, "{message}").map_err(|e| e.to_string())?;
-        self.stdin.flush().map_err(|e| e.to_string())
-    }
-
-    fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
-        let mut line = String::new();
-        loop {
-            line.clear();
-            if self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|e| e.to_string())?
-                == 0
-            {
-                return Err("markitdown-mcp se cerró inesperadamente".into());
-            }
-            // Se ignoran notificaciones y cualquier línea que no sea la respuesta a esta petición.
-            let Ok(message) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            if message["id"] != json!(id) {
-                continue;
-            }
-            if let Some(error) = message.get("error") {
-                return Err(error["message"].as_str().unwrap_or("error MCP").to_string());
-            }
-            return Ok(message["result"].clone());
-        }
-    }
-
-    fn convert(&mut self, file: &Path) -> Result<String, String> {
-        let result = self.request(
-            "tools/call",
-            json!({"name": "convert_to_markdown", "arguments": {"uri": file_uri(file)}}),
-        )?;
-        let text: String = result["content"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|c| c["text"].as_str())
-            .collect();
-        if result["isError"] == true {
-            return Err(text);
-        }
-        Ok(text)
-    }
-}
-
-impl Drop for Mcp {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
+/// Convierte un archivo local a Markdown con la herramienta `convert_to_markdown`.
+pub fn convert_file(mcp: &mut McpClient, file: &Path) -> Result<String, String> {
+    mcp.call_tool("convert_to_markdown", json!({"uri": file_uri(file)}))
 }
 
 /// Arranca el servidor, hace el saludo MCP y lista sus herramientas. Bloqueante.
 pub fn probe(server: &Path) -> Result<Vec<String>, String> {
-    let mut mcp = Mcp::start(server)?;
-    let tools = mcp.request("tools/list", json!({}))?;
-    Ok(tools["tools"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|t| t["name"].as_str().map(str::to_string))
-        .collect())
+    start(server)?.list_tools()
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -210,11 +116,11 @@ pub fn convert_blocking(
     let server = find_server(app).ok_or(
         "No encontré markitdown-mcp. Instálalo con: uv tool install --python 3.12 markitdown-mcp",
     )?;
-    let mut mcp = Mcp::start(&server)?;
+    let mut mcp = start(&server)?;
     let mut done = 0;
     for rel in pending {
         let source = raw.join(&rel);
-        match mcp.convert(&source) {
+        match convert_file(&mut mcp, &source) {
             Ok(markdown) if !markdown.trim().is_empty() => {
                 let target = converted_path(raw, &rel);
                 if let Some(dir) = target.parent() {
@@ -299,8 +205,8 @@ mod integracion {
         let home = std::env::var("HOME").unwrap();
         let server = Path::new(&home).join(".local/bin/markitdown-mcp");
         let pdf = Path::new("/usr/share/doc/speexdsp/manual.pdf");
-        let mut mcp = Mcp::start(&server).expect("arranca el servidor");
-        let md = mcp.convert(pdf).expect("convierte");
+        let mut mcp = start(&server).expect("arranca el servidor");
+        let md = convert_file(&mut mcp, pdf).expect("convierte");
         assert!(md.contains("Speex"));
     }
 }

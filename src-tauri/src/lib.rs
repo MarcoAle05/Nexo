@@ -1,9 +1,13 @@
+mod agy;
 mod claude;
 mod claude_code;
 mod connections;
+mod fichas;
 mod graph;
 mod markitdown;
+mod mcp;
 mod nexo;
+mod playwright;
 mod sources;
 mod vault;
 
@@ -14,6 +18,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(nexo::ChatState::default())
         .manage(claude_code::ClaudeCodeState::default())
+        .manage(agy::AgyState::default())
         .invoke_handler(tauri::generate_handler![
             vault::get_vault,
             vault::detect_vaults,
@@ -32,6 +37,12 @@ pub fn run() {
             nexo::compile,
             markitdown::convert_sources,
             connections::connections_status,
+            agy::add_web_source,
+            agy::summarize_source,
+            agy::agy_jobs,
+            agy::agy_clear_finished,
+            sources::rename_source,
+            sources::source_detail,
             claude_code::claude_code_start,
             claude_code::claude_code_write,
             claude_code::claude_code_resize,

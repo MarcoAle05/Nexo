@@ -18,7 +18,11 @@ pub struct Node {
     label: String,
     /// Carpeta de primer nivel dentro de `wiki/` (el tema); vacío en la raíz.
     group: String,
+    /// `note`, `index`, `source` (ficha de una fuente), `conversation` (conclusiones guardadas) o `missing`.
     kind: &'static str,
+    /// Para las fichas: la fuente, relativa a `raw/`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -134,12 +138,26 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
         by_path.insert(no_ext, i);
     }
 
+    // Fichas de fuente: ruta de la fuente → índice del nodo.
+    let root = wiki.parent().map(Path::to_path_buf).unwrap_or_default();
+    let fichas: HashMap<String, usize> = crate::fichas::all(&root)
+        .into_iter()
+        .filter_map(|(rel, path)| files.iter().position(|f| *f == path).map(|i| (rel, i)))
+        .collect();
+
     let mut edges = BTreeSet::new();
     let mut missing = BTreeSet::new();
     for (i, file) in files.iter().enumerate() {
         let Ok(text) = fs::read_to_string(file) else {
             continue;
         };
+        // Toda nota que cita `raw/<fuente>` queda unida a la ficha de esa fuente.
+        for (rel, &j) in &fichas {
+            if j != i && text.contains(&format!("raw/{rel}")) {
+                let (a, b) = (ids[i].clone(), ids[j].clone());
+                edges.insert(if a < b { (a, b) } else { (b, a) });
+            }
+        }
         let dir = ids[i]
             .rsplit_once('/')
             .map(|(d, _)| d.to_lowercase())
@@ -178,20 +196,33 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
         }
     }
 
+    let source_of: HashMap<usize, &String> = fichas.iter().map(|(rel, &i)| (i, rel)).collect();
     let mut nodes: Vec<Node> = ids
         .iter()
-        .map(|id| Node {
-            id: id.clone(),
-            label: label_for(id),
-            group: id
-                .split_once('/')
-                .map(|(g, _)| g.to_string())
-                .unwrap_or_default(),
-            kind: if id.ends_with("_index.md") || id.ends_with("_master-index.md") {
-                "index"
-            } else {
-                "note"
-            },
+        .enumerate()
+        .map(|(i, id)| {
+            let source = source_of.get(&i).map(|rel| rel.to_string());
+            Node {
+                id: id.clone(),
+                label: source
+                    .as_deref()
+                    .map(crate::fichas::display_name)
+                    .unwrap_or_else(|| label_for(id)),
+                group: id
+                    .split_once('/')
+                    .map(|(g, _)| g.to_string())
+                    .unwrap_or_default(),
+                kind: if source.is_some() {
+                    "source"
+                } else if id.starts_with("conversaciones/") && !id.ends_with("_index.md") {
+                    "conversation"
+                } else if id.ends_with("_index.md") || id.ends_with("_master-index.md") {
+                    "index"
+                } else {
+                    "note"
+                },
+                source,
+            }
         })
         .collect();
     nodes.extend(missing.into_iter().map(|id| Node {
@@ -199,6 +230,7 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
         id,
         group: String::new(),
         kind: "missing",
+        source: None,
     }));
 
     Ok(Graph {

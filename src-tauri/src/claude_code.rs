@@ -25,8 +25,18 @@ struct Session {
     child: Box<dyn Child + Send + Sync>,
 }
 
+/// Sesión de Claude Code de esta apertura de nexo: se crea la primera vez que se abre la
+/// pestaña y se retoma mientras la app siga abierta. Al cerrar nexo, la siguiente empieza limpia.
+struct RunSession {
+    id: String,
+    name: String,
+}
+
 #[derive(Default)]
-pub struct ClaudeCodeState(Mutex<Option<Session>>);
+pub struct ClaudeCodeState {
+    session: Mutex<Option<Session>>,
+    run: Mutex<Option<RunSession>>,
+}
 
 static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -54,75 +64,62 @@ pub fn find_claude(app: &AppHandle) -> Option<PathBuf> {
     from_path.into_iter().chain(extra).find(|p| p.is_file())
 }
 
-/// Nombre de la sesión de Claude Code a la que entra nexo.
-pub const SESSION_NAME: &str = "Nexo";
-
-pub struct NamedSession {
-    pub id: String,
-    /// Carpeta donde se creó: `claude --resume` solo la encuentra desde ahí.
-    pub cwd: PathBuf,
+/// Papel de Claude Code dentro de nexo: orquestador y quien responde sobre las fuentes.
+/// Se añade al prompt de sistema en cada arranque (también al retomar la sesión).
+fn orchestrator_prompt(root: &std::path::Path, session: &str) -> String {
+    format!(
+        "Estás dentro de nexo, un NotebookLM personal. Eres el orquestador: respondes al usuario sobre sus \
+fuentes y su wiki, y coordinas el trabajo.\n\n\
+Vault de Obsidian: {vault}\n\
+- raw/: fuentes originales. raw/markdown/ tiene los PDF y documentos convertidos a Markdown con MarkItDown; \
+raw/web/ tiene páginas web guardadas por Antigravity. Lee siempre la versión .md en lugar del PDF.\n\
+- wiki/fuentes/: una ficha por fuente (nombre de la fuente, resumen, ideas clave, conceptos y la ruta raw/ original). \
+Cuando el usuario mencione una fuente por su nombre, búscala primero aquí (por nombre de archivo o título) y \
+después abre su Markdown.\n\
+- wiki/: notas organizadas por temas, con _master-index.md y un _index.md por tema, enlazadas con [[...]].\n\
+- output/: respuestas guardadas.\n\
+- wiki/conversaciones/: conclusiones guardadas de conversaciones anteriores, una nota por conversación. Cada \
+apertura de nexo empieza una sesión nueva contigo, así que consulta estas notas para recuperar decisiones previas.\n\n\
+Guardar la conversación: cuando el usuario lo pida (por ejemplo «guarda la conversación en el grafo»), escribe \
+wiki/conversaciones/AAAA-MM-DD-<tema-en-kebab-case>.md con frontmatter (type: conversacion, date: AAAA-MM-DD, \
+session: {session}), un título, y las secciones ## Conclusiones, ## Decisiones, ## Preguntas abiertas y \
+## Relacionado (enlaces [[...]] a las fichas de wiki/fuentes/ y a las notas de la wiki que se trataron: esos \
+enlaces la conectan en el grafo). Si ya guardaste esta conversación hoy, actualiza esa misma nota. Añade un \
+enlace a la nota en wiki/conversaciones/_index.md (créalo si no existe) y asegúrate de que \
+wiki/_master-index.md enlaza [[conversaciones/_index|Conversaciones]]. No modifiques otras notas.\n\n\
+Reparto de trabajo: Antigravity (el CLI `agy`) es el encargado de las fuentes: leer páginas web, añadirlas \
+y resumirlas. Para añadir una página, pide al usuario que pegue el enlace en el campo de fuentes de nexo \
+(así queda registrada con su ficha); no descargues páginas tú mismo. Tú no reescribas las fichas de \
+wiki/fuentes/: las mantiene nexo. Cita las fuentes por su nombre y ruta, y las notas como [[nombre]].\n\n\
+Si alguna vez debes ejecutar agy tú mismo: pasa el prompt como argumento (`agy \"-p=<prompt>\" --output-format json \
+--json-schema '<esquema>'`; con -p=- no le llega), en modo no interactivo cualquier herramienta sin permiso aborta \
+la tarea, así que solo se añade `read_url(<dominio>)` en ~/.gemini/antigravity-cli/settings.json (nunca read_url(*), \
+command(...) ni --dangerously-skip-permissions), y para textos largos copia el contenido a fuente.md en una carpeta \
+vacía y pídele que lo lea con view_file.",
+        vault = root.display(),
+        session = session
+    )
 }
 
-/// Busca la sesión de Claude Code cuyo nombre (`/rename` o `--name`) es `name`.
-/// Las sesiones son archivos JSONL en `~/.claude/projects/<carpeta>/<id>.jsonl`; el nombre
-/// vigente es la última entrada `custom-title`. Si hay varias, gana la usada más recientemente.
-pub fn find_named_session(app: &AppHandle, name: &str) -> Option<NamedSession> {
-    let projects = app.path().home_dir().ok()?.join(".claude/projects");
-    find_named_session_in(&projects, name)
+/// Nombre de la sesión de esta apertura, si ya se creó (para Conexiones).
+pub fn current_session_name(app: &AppHandle) -> Option<String> {
+    let state = app.state::<ClaudeCodeState>();
+    let run = state.run.lock().ok()?;
+    run.as_ref().map(|r| r.name.clone())
 }
 
-fn find_named_session_in(projects: &std::path::Path, name: &str) -> Option<NamedSession> {
-    use std::io::BufRead;
-    let mut best: Option<(std::time::SystemTime, NamedSession)> = None;
-    for project in std::fs::read_dir(projects).ok()?.flatten() {
-        let Ok(files) = std::fs::read_dir(project.path()) else {
-            continue;
-        };
-        for file in files.flatten() {
-            let path = file.path();
-            if path.extension().is_none_or(|e| e != "jsonl") {
-                continue;
-            }
-            let Ok(handle) = std::fs::File::open(&path) else {
-                continue;
-            };
-            let mut title: Option<String> = None;
-            let mut cwd: Option<PathBuf> = None;
-            for line in std::io::BufReader::new(handle)
-                .lines()
-                .map_while(Result::ok)
-            {
-                let is_title = line.contains("\"custom-title\"");
-                if !is_title && cwd.is_some() {
-                    continue;
-                }
-                let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
-                    continue;
-                };
-                if is_title {
-                    title = entry["customTitle"].as_str().map(str::to_string);
-                }
-                if cwd.is_none() {
-                    cwd = entry["cwd"].as_str().map(PathBuf::from);
-                }
-            }
-            let (Some(title), Some(cwd)) = (title, cwd) else {
-                continue;
-            };
-            if !title.eq_ignore_ascii_case(name) || !cwd.is_dir() {
-                continue;
-            }
-            let modified = file
-                .metadata()
-                .and_then(|m| m.modified())
-                .unwrap_or(std::time::UNIX_EPOCH);
-            if best.as_ref().is_none_or(|(t, _)| modified > *t) {
-                let id = path.file_stem()?.to_string_lossy().into_owned();
-                best = Some((modified, NamedSession { id, cwd }));
-            }
-        }
-    }
-    best.map(|(_, s)| s)
+/// Claude Code guarda cada sesión en `~/.claude/projects/<carpeta>/<id>.jsonl`; solo existe
+/// cuando ya hubo al menos un mensaje. Sin ese archivo `--resume` fallaría.
+fn session_saved(app: &AppHandle, id: &str) -> bool {
+    let Ok(home) = app.path().home_dir() else {
+        return false;
+    };
+    let Ok(projects) = std::fs::read_dir(home.join(".claude/projects")) else {
+        return false;
+    };
+    projects
+        .flatten()
+        .any(|p| p.path().join(format!("{id}.jsonl")).is_file())
 }
 
 fn stop(session: Option<Session>) {
@@ -145,7 +142,7 @@ pub fn claude_code_start(
     let claude = find_claude(&app)
         .ok_or("No encontré Claude Code. Instálalo desde https://claude.com/claude-code y vuelve a intentarlo.")?;
 
-    stop(state.0.lock().map_err(|e| e.to_string())?.take());
+    stop(state.session.lock().map_err(|e| e.to_string())?.take());
 
     let pty = native_pty_system()
         .openpty(PtySize {
@@ -155,22 +152,27 @@ pub fn claude_code_start(
             pixel_height: 0,
         })
         .map_err(|e| e.to_string())?;
-    // Entra en la sesión "Nexo" si existe; si no, crea una nueva con ese nombre en el vault.
+    // Una sesión por apertura de nexo: nueva la primera vez, retomada después.
     let mut cmd = CommandBuilder::new(&claude);
-    let (cwd, description) = match find_named_session(&app, SESSION_NAME) {
-        Some(session) => {
-            cmd.args(["--resume", &session.id]);
-            let label = format!("sesión {SESSION_NAME} · {}", session.cwd.display());
-            (session.cwd, label)
-        }
-        None => {
-            cmd.args(["--name", SESSION_NAME]);
-            (
-                root.clone(),
-                format!("nueva sesión {SESSION_NAME} · {}", root.display()),
-            )
+    let (session_name, description) = {
+        let mut run = state.run.lock().map_err(|e| e.to_string())?;
+        let run = run.get_or_insert_with(|| RunSession {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: format!("Nexo · {}", chrono::Local::now().format("%Y-%m-%d %H:%M")),
+        });
+        if session_saved(&app, &run.id) {
+            cmd.args(["--resume", &run.id]);
+            (run.name.clone(), format!("{} · retomada", run.name))
+        } else {
+            cmd.args(["--session-id", &run.id, "--name", &run.name]);
+            (run.name.clone(), format!("{} · sesión nueva", run.name))
         }
     };
+    let cwd = root.clone();
+    cmd.args([
+        "--append-system-prompt",
+        &orchestrator_prompt(&root, &session_name),
+    ]);
     cmd.cwd(&cwd);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
@@ -200,8 +202,10 @@ pub fn claude_code_start(
                     };
                     let text = String::from_utf8_lossy(&pending[..valid]).into_owned();
                     pending.drain(..valid);
-                    if !text.is_empty() && events.send(PtyEvent::Data { text }).is_err() {
-                        break;
+                    // Si la interfaz ya no escucha (p. ej. se recargó), se sigue vaciando la salida:
+                    // dejar de leer llenaría el PTY y bloquearía a Claude Code.
+                    if !text.is_empty() {
+                        let _ = events.send(PtyEvent::Data { text });
                     }
                 }
             }
@@ -215,7 +219,7 @@ pub fn claude_code_start(
         writer,
         child,
     };
-    *state.0.lock().map_err(|e| e.to_string())? = Some(session);
+    *state.session.lock().map_err(|e| e.to_string())? = Some(session);
 
     // Aviso de salida: se comprueba el proceso en segundo plano.
     let app_handle = app.clone();
@@ -223,7 +227,9 @@ pub fn claude_code_start(
         loop {
             std::thread::sleep(std::time::Duration::from_millis(400));
             let state = app_handle.state::<ClaudeCodeState>();
-            let Ok(mut guard) = state.0.lock() else { break };
+            let Ok(mut guard) = state.session.lock() else {
+                break;
+            };
             // Si se reinició o se detuvo, esta vigilancia ya no corresponde a la sesión actual.
             let Some(session) = guard.as_mut().filter(|s| s.id == id) else {
                 break;
@@ -242,8 +248,11 @@ pub fn claude_code_start(
 }
 
 #[tauri::command]
-pub fn claude_code_write(state: State<'_, ClaudeCodeState>, data: String) -> Result<(), String> {
-    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+pub async fn claude_code_write(
+    state: State<'_, ClaudeCodeState>,
+    data: String,
+) -> Result<(), String> {
+    let mut guard = state.session.lock().map_err(|e| e.to_string())?;
     let session = guard.as_mut().ok_or("Claude Code no está en marcha.")?;
     session
         .writer
@@ -253,12 +262,12 @@ pub fn claude_code_write(state: State<'_, ClaudeCodeState>, data: String) -> Res
 }
 
 #[tauri::command]
-pub fn claude_code_resize(
+pub async fn claude_code_resize(
     state: State<'_, ClaudeCodeState>,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
-    let guard = state.0.lock().map_err(|e| e.to_string())?;
+    let guard = state.session.lock().map_err(|e| e.to_string())?;
     if let Some(session) = guard.as_ref() {
         session
             .master
@@ -275,22 +284,6 @@ pub fn claude_code_resize(
 
 #[tauri::command]
 pub fn claude_code_stop(state: State<'_, ClaudeCodeState>) -> Result<(), String> {
-    stop(state.0.lock().map_err(|e| e.to_string())?.take());
+    stop(state.session.lock().map_err(|e| e.to_string())?.take());
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Usa las sesiones reales del equipo: `cargo test -- --ignored sesion`.
-    #[test]
-    #[ignore]
-    fn encuentra_la_sesion_nexo() {
-        let home = std::env::var("HOME").unwrap();
-        let found =
-            find_named_session_in(&PathBuf::from(home).join(".claude/projects"), SESSION_NAME)
-                .expect("hay una sesión Nexo");
-        println!("{} · {}", found.id, found.cwd.display());
-    }
 }

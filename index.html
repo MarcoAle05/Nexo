@@ -41,10 +41,26 @@
           <button type="button" aria-pressed="false">Notas</button>
           <button type="button" aria-pressed="false">Audio</button>
         </div>
-        <button type="button" class="ghost-btn muted">
-          <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 3.8 3.8"/></svg>
-          Buscar <kbd>⌘K</kbd>
-        </button>
+        <div class="vault-anchor">
+          <button type="button" class="ghost-btn muted" id="search-button" aria-haspopup="dialog" aria-expanded="false" aria-controls="search-menu">
+            <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 3.8 3.8"/></svg>
+            Buscar <kbd id="search-kbd">⌘K</kbd>
+          </button>
+          <div class="vault-menu search-menu" id="search-menu" role="dialog" aria-label="Buscar en el grafo" hidden>
+            <div class="search-row">
+              <label class="search-field">
+                <svg width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="9" cy="9" r="5.5"/><path d="m13.2 13.2 3.8 3.8"/></svg>
+                <span class="visually-hidden">Buscar en el grafo</span>
+                <input type="search" id="search-input" placeholder="Nodo, fuente o palabra clave" autocomplete="off" spellcheck="false">
+              </label>
+              <span class="search-count" id="search-count" aria-live="polite"></span>
+              <button type="button" class="icon-btn search-nav" id="search-prev" aria-label="Coincidencia anterior" disabled><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12 5-5 5 5"/></svg></button>
+              <button type="button" class="icon-btn search-nav" id="search-next" aria-label="Coincidencia siguiente" disabled><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg></button>
+            </div>
+            <ul class="search-results" id="search-results"></ul>
+            <p class="search-hint" id="search-hint">Busca por nombre en el grafo, no dentro del contenido de las notas.</p>
+          </div>
+        </div>
         <button type="button" class="icon-btn filled" aria-label="Cuenta">M</button>
       </nav>
     </header>
@@ -68,6 +84,23 @@
             <span class="cta-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></span>
           </button>
 
+          <form class="link-form" id="link-form">
+            <label>
+              <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="10" cy="10" r="7.5"/><path d="M2.5 10h15M10 2.5c2.4 2.4 2.4 12.6 0 15M10 2.5c-2.4 2.4-2.4 12.6 0 15"/></svg>
+              <span class="visually-hidden">Enlace de una página web</span>
+              <input type="url" id="link-input" placeholder="Pega un enlace web" autocomplete="off" spellcheck="false">
+            </label>
+            <button type="submit" class="icon-btn light" id="link-submit" aria-label="Añadir página como fuente"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h12M11 5l5 5-5 5"/></svg></button>
+          </form>
+
+          <div class="read-mode">
+            <span class="read-mode-label">Leer con</span>
+            <div class="segmented small" role="group" aria-label="Cómo leer los enlaces" data-segmented>
+              <button type="button" aria-pressed="true" data-read="agy" title="Antigravity abre la página y la resume en una sola tarea">Antigravity</button>
+              <button type="button" aria-pressed="false" data-read="playwright" title="Playwright abre la página en Chrome (también webs con JavaScript), MarkItDown la pasa a Markdown y Antigravity solo la resume">Playwright</button>
+            </div>
+          </div>
+
           <div class="chips" role="group" aria-label="Filtrar por tipo" data-segmented>
             <button type="button" class="chip" aria-pressed="true" data-kind="all">Todas <span class="dim" data-count="all">0</span></button>
             <button type="button" class="chip" aria-pressed="false" data-kind="pdf">PDF <span class="dim" data-count="pdf">0</span></button>
@@ -85,6 +118,51 @@
             <div class="detected" id="detected-vaults" hidden></div>
             <button type="button" class="pill-btn" id="vault-pick">Elegir carpeta</button>
           </div>
+
+          <section class="source-detail" id="source-detail" aria-label="Resumen de la fuente" hidden>
+            <button type="button" class="back-btn" id="detail-back">
+              <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 6 10l6 6"/></svg>
+              Fuentes
+            </button>
+            <div class="detail-head">
+              <span class="source-icon" id="detail-icon" aria-hidden="true"></span>
+              <div class="detail-title">
+                <span class="eyebrow detail-eyebrow" id="detail-eyebrow">Fuente</span>
+                <h3 id="detail-name"></h3>
+                <form class="rename-form" id="rename-form" hidden>
+                  <label>
+                    <span class="visually-hidden">Nuevo nombre de la fuente</span>
+                    <input type="text" id="rename-input" autocomplete="off" spellcheck="false">
+                  </label>
+                  <button type="submit" class="icon-btn light" aria-label="Guardar nombre"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m4 10 4 4 8-8"/></svg></button>
+                  <button type="button" class="icon-btn filled" id="rename-cancel" aria-label="Cancelar"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m5 5 10 10M15 5 5 15"/></svg></button>
+                </form>
+                <span class="source-meta" id="detail-meta"></span>
+              </div>
+              <button type="button" class="icon-btn outline" id="detail-rename" aria-label="Renombrar fuente" title="Renombrar"><svg width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3.5l3 3L7 16H4v-3z"/></svg></button>
+            </div>
+            <div class="detail-card">
+            <div class="detail-body">
+              <h4>Resumen</h4>
+              <p class="detail-summary" id="detail-summary"></p>
+              <h4 id="detail-points-title">Ideas clave</h4>
+              <ul class="detail-points" id="detail-points"></ul>
+              <h4 id="detail-concepts-title">Conceptos</h4>
+              <div class="concept-chips" id="detail-concepts"></div>
+            </div>
+            </div>
+            <div class="detail-actions">
+              <button type="button" class="cta small" id="detail-summarize">
+                <span id="detail-summarize-label">Resumir con Antigravity</span>
+                <span class="cta-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 2.5v4M10 13.5v4M2.5 10h4M13.5 10h4"/><circle cx="10" cy="10" r="1.6" fill="currentColor" stroke="none"/></svg></span>
+              </button>
+              <div class="detail-links">
+                <button type="button" class="chip" id="detail-open">Original</button>
+                <button type="button" class="chip" id="detail-open-md">Markdown</button>
+                <button type="button" class="chip" id="detail-graph">Ver en el grafo</button>
+              </div>
+            </div>
+          </section>
 
           <div class="drop-overlay" aria-hidden="true">
             <p>Suelta para añadir</p>
@@ -146,6 +224,27 @@
               <button type="button" aria-pressed="true" data-mode="api">API</button>
               <button type="button" aria-pressed="false" data-mode="claude-code">Claude Code</button>
             </div>
+          </div>
+
+          <div class="terminal-tools">
+            <button type="button" class="activity-btn" id="activity-button" aria-pressed="false" aria-controls="activity-view">
+              <span class="activity-dot" id="activity-dot" aria-hidden="true"></span>
+              Actividad Antigravity
+              <span class="activity-count" id="activity-count" hidden>0</span>
+            </button>
+            <button type="button" class="save-btn" id="cc-save" hidden title="Claude Code escribe las conclusiones en wiki/conversaciones/ y aparecen como nodo en el grafo">
+              <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="10" r="2.6"/><circle cx="10" cy="10" r="6.5"/><path d="M10 1.5v2M10 16.5v2M1.5 10h2M16.5 10h2"/></svg>
+              Guardar en el grafo
+            </button>
+          </div>
+
+          <div class="activity-view" id="activity-view" hidden>
+            <div class="activity-head">
+              <span class="eyebrow">Antigravity · agy</span>
+              <button type="button" class="chip" id="activity-clear">Limpiar terminados</button>
+            </div>
+            <ol class="activity-list" id="activity-list"></ol>
+            <p class="activity-empty" id="activity-empty">Antigravity todavía no ha trabajado en esta sesión. Pega un enlace o añade una fuente y verás aquí cada paso.</p>
           </div>
 
           <div class="terminal-output" id="output" aria-live="polite"></div>
