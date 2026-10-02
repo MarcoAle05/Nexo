@@ -138,6 +138,16 @@ fn fingerprint(wiki: &Path) -> HashMap<String, (u64, std::time::SystemTime)> {
 struct WikiChanged {
     /// Notas nuevas desde la última comprobación.
     added: Vec<String>,
+    /// Notas nuevas, modificadas o borradas (rutas relativas a `wiki/`).
+    changed: Vec<String>,
+}
+
+/// Fecha de modificación del escritorio de notas (`.nexo/escritorio.json`).
+fn desk_mtime(wiki: &Path) -> Option<std::time::SystemTime> {
+    let root = wiki.parent()?;
+    fs::metadata(crate::notas::desk_path(root))
+        .and_then(|m| m.modified())
+        .ok()
 }
 
 /// Vigila `wiki/` para que el grafo se actualice cuando otro programa (Claude Code,
@@ -146,28 +156,61 @@ struct WikiChanged {
 pub fn watch(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last: Option<(PathBuf, HashMap<String, (u64, std::time::SystemTime)>)> = None;
+        let mut last_desk = None;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
             let Ok(wiki) = vault_dir(&app, "wiki") else {
                 last = None;
                 continue;
             };
-            let now = fingerprint(&wiki);
+            let mut now = fingerprint(&wiki);
+            let desk = desk_mtime(&wiki);
             match &last {
                 // Otro vault: se toma como punto de partida sin avisar.
                 Some((dir, before)) if *dir == wiki => {
                     if *before != now {
+                        let mut changed: Vec<String> = now
+                            .iter()
+                            .filter(|(k, v)| before.get(*k) != Some(*v))
+                            .map(|(k, _)| k.clone())
+                            .chain(before.keys().filter(|k| !now.contains_key(*k)).cloned())
+                            .collect();
+                        // Algo cambió en Notas (p. ej. Claude Code creó una nota): se ponen
+                        // al día los índices de los temas antes de avisar.
+                        if changed.iter().any(|k| k.starts_with("notas/"))
+                            && let Some(root) = wiki.parent()
+                            && crate::notas::sync(root).unwrap_or(false)
+                        {
+                            let synced = fingerprint(&wiki);
+                            changed.extend(
+                                synced
+                                    .iter()
+                                    .filter(|(k, v)| now.get(*k) != Some(*v))
+                                    .map(|(k, _)| k.clone()),
+                            );
+                            now = synced;
+                        }
                         let added = now
                             .keys()
                             .filter(|k| !before.contains_key(*k))
                             .cloned()
                             .collect();
-                        let _ = app.emit("wiki-changed", WikiChanged { added });
+                        changed.sort();
+                        changed.dedup();
+                        let _ = app.emit("wiki-changed", WikiChanged { added, changed });
+                    }
+                    // El escritorio de notas cambió fuera de nexo (Claude Code).
+                    if desk != last_desk
+                        && let Some(mtime) = desk
+                        && !crate::notas::desk_written_by_us(mtime)
+                    {
+                        let _ = app.emit("desk-changed", ());
                     }
                 }
                 _ => {}
             }
             last = Some((wiki, now));
+            last_desk = desk;
         }
     });
 }
@@ -198,10 +241,20 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
 
     let mut edges = BTreeSet::new();
     let mut missing = BTreeSet::new();
+    // `title:` del frontmatter (notas del apartado Notas, índices de sus temas…).
+    let mut titles: HashMap<usize, String> = HashMap::new();
     for (i, file) in files.iter().enumerate() {
         let Ok(text) = fs::read_to_string(file) else {
             continue;
         };
+        if let Some((_, title)) = split_frontmatter(&text)
+            .0
+            .into_iter()
+            .find(|(k, _)| k == "title")
+            && !title.is_empty()
+        {
+            titles.insert(i, title);
+        }
         // Toda nota que cita `raw/<fuente>` queda unida a la ficha de esa fuente.
         for (rel, &j) in &fichas {
             if j != i && text.contains(&format!("raw/{rel}")) {
@@ -258,6 +311,7 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
                 label: source
                     .as_deref()
                     .map(crate::fichas::display_name)
+                    .or_else(|| titles.get(&i).cloned())
                     .unwrap_or_else(|| label_for(id)),
                 group: id
                     .split_once('/')

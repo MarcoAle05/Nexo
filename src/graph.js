@@ -28,7 +28,7 @@ function hashString(text) {
   return h >>> 0;
 }
 // Los índices de fuentes y de conversaciones se dibujan como minigalaxias.
-const GALAXIES = new Set(['fuentes/_index.md', 'conversaciones/_index.md']);
+const GALAXIES = new Set(['fuentes/_index.md', 'conversaciones/_index.md', 'notas/_index.md']);
 const isGalaxy = (d) => GALAXIES.has(d.id);
 
 export function colorFor(d) {

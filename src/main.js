@@ -8,11 +8,12 @@ import './styles.css';
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
-import { open } from '@tauri-apps/plugin-dialog';
+import { ask, open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
 import { createClaudeCode } from './claude-code.js';
 import { colorFor, createGraph } from './graph.js';
+import { createNotes } from './notes.js';
 import { renderMarkdown, resolveLink } from './note-view.js';
 
 const $ = (id) => document.getElementById(id);
@@ -52,18 +53,28 @@ tickClock();
 // Cada carta puede expandirse hasta el borde de la otra; con las dos expandidas se
 // reparten el ancho. Contraer una deja a la otra como esté. Se recuerda entre aperturas.
 const expanded = { left: false, right: false };
+// La carta derecha (Nexo / Claude Code) se puede minimizar a un riel estrecho.
+let minimized = false;
+try {
+  minimized = localStorage.getItem('nexo.minimized') === 'true';
+} catch {}
 try {
   Object.assign(expanded, JSON.parse(localStorage.getItem('nexo.expanded') ?? '{}'));
 } catch {}
 
 function renderExpanded() {
   const layout = $('layout');
+  // Minimizada, la terminal no puede estar expandida.
+  if (minimized) expanded.right = false;
   layout.classList.toggle('expand-left', expanded.left);
   layout.classList.toggle('expand-right', expanded.right);
   layout.classList.toggle('expanded', expanded.left || expanded.right);
+  layout.classList.toggle('min-right', minimized);
+  $('term-rail').hidden = !minimized;
+  document.querySelector('#terminal-panel > .panel-core').hidden = minimized;
   document.querySelectorAll('[data-expand]').forEach((b) => {
     const on = expanded[b.dataset.expand];
-    const what = b.dataset.expand === 'left' ? 'la carta de fuentes' : 'la terminal';
+    const what = b.dataset.expand === 'right' ? 'la terminal' : b.closest('#notes-core') ? 'la carta de notas' : 'la carta de fuentes';
     b.setAttribute('aria-pressed', String(on));
     b.setAttribute('aria-label', `${on ? 'Contraer' : 'Expandir'} ${what}`);
     b.title = `${on ? 'Contraer' : 'Expandir'} ${what}`;
@@ -82,6 +93,25 @@ document.querySelectorAll('[data-expand]').forEach((b) =>
   }),
 );
 renderExpanded();
+
+function setMinimized(value) {
+  minimized = value;
+  renderExpanded();
+  try {
+    localStorage.setItem('nexo.minimized', String(minimized));
+    localStorage.setItem('nexo.expanded', JSON.stringify(expanded));
+  } catch {}
+  // xterm deja de dibujar mientras está oculto: al volver se reajusta y enfoca.
+  if (!minimized && mode === 'claude-code' && vault && desktop) requestAnimationFrame(() => claudeCode.show());
+}
+$('term-minimize').addEventListener('click', () => setMinimized(true));
+$('term-restore').addEventListener('click', () => setMinimized(false));
+document.querySelectorAll('[data-rail-mode]').forEach((b) =>
+  b.addEventListener('click', () => {
+    setMinimized(false);
+    document.querySelector(`[data-mode="${b.dataset.railMode}"]`)?.click();
+  }),
+);
 
 // ---------------------------------------------------------------- terminal
 const output = $('output');
@@ -273,6 +303,8 @@ function setMode(next) {
   $('prompt').hidden = cc;
   $('cc-view').hidden = !cc;
   $('terminal-title').textContent = cc ? 'Claude Code' : 'Nexo';
+  $('rail-label').textContent = cc ? 'Claude Code' : 'Nexo';
+  document.querySelectorAll('[data-rail-mode]').forEach((b) => b.classList.toggle('active', b.dataset.railMode === mode));
   $('cc-save').hidden = !cc;
   if (!cc) return $('prompt-input').focus();
   if (!desktop) return printLine('Claude Code solo funciona en la app de escritorio.', 'error');
@@ -334,6 +366,8 @@ async function useVault(path) {
       'system',
     );
     await refresh();
+    notesStale = true;
+    if (view === 'notas') activateNotes();
     // Claude Code trabaja dentro del vault: al cambiarlo se cierra la sesión anterior.
     await claudeCode.stop();
     if (mode === 'claude-code') setMode('claude-code');
@@ -1199,26 +1233,20 @@ function renderNode() {
   );
   $('note-links').hidden = $('note-links-title').hidden = !linked.length;
   $('note-open').hidden = missing;
+  $('note-notes').hidden = !isNotesNode(node);
+  $('note-notes').textContent = node.kind === 'index' ? 'Abrir tema en Notas' : 'Abrir en el escritorio';
 }
 
 $('note-back').addEventListener('click', closeNode);
 $('note-open').addEventListener('click', () => noteNode && openNote(noteNode));
 $('note-graph').addEventListener('click', () => noteNode && graph.focus(noteNode.id));
+$('note-notes').addEventListener('click', () => noteNode && openInNotes(noteNode.id));
 // Enlaces dentro de la nota: [[wiki]] y notas .md llevan a su nodo; las webs se abren fuera.
 $('note-body').addEventListener('click', (event) => {
   const link = event.target.closest('a');
   if (!link || !noteNode) return;
   event.preventDefault();
-  const href = link.getAttribute('href') ?? '';
-  if (/^https?:\/\//i.test(href)) {
-    if (desktop) openUrl(href).catch(fail);
-    else window.open(href, '_blank', 'noopener');
-    return;
-  }
-  const target = link.dataset.target ?? decodeURIComponent(href.split('#')[0]);
-  if (!target) return;
-  const node = resolveLink(graphData.nodes, noteNode.id, target);
-  if (!node || !graph.focus(node.id)) printLine(`«${target}» aún no está en el grafo`, 'info');
+  followLink(link, noteNode.id);
 });
 
 // Un concepto de la ficha → su nodo (nota existente o pendiente) en el grafo.
@@ -1303,6 +1331,7 @@ function renderActivity() {
   $('activity-count').hidden = !active;
   $('activity-count').textContent = `${active} en curso`;
   $('activity-dot').classList.toggle('busy', active > 0);
+  $('rail-activity').hidden = active === 0;
   if (!activityOpen) return;
   $('activity-empty').hidden = list.length > 0;
   $('activity-list').replaceChildren(
@@ -1383,6 +1412,7 @@ if (desktop) {
   let wikiTimer = 0;
   let wikiAdded = [];
   listen('wiki-changed', ({ payload }) => {
+    notes.onWikiChanged(payload.changed ?? payload.added);
     wikiAdded.push(...payload.added);
     clearTimeout(wikiTimer);
     wikiTimer = setTimeout(async () => {
@@ -1394,6 +1424,7 @@ if (desktop) {
       if (added.length) graph.announce(added);
     }, 400);
   });
+  listen('desk-changed', () => notes.onDeskChanged());
   invoke('agy_jobs')
     .then((list) => {
       list.forEach((job) => jobs.set(job.id, job));
@@ -1448,6 +1479,80 @@ async function loadGraph() {
   }
 }
 let graphData = { nodes: [], edges: [] };
+
+// ---------------------------------------------------------------- vistas: Grafo / Notas
+// Notas cambia la carta de la izquierda por temas y notas y el grafo por el escritorio
+// de notas; la terminal de la derecha no cambia.
+const notes = createNotes({
+  invoke: (cmd, args) => (desktop ? invoke(cmd, args) : Promise.reject('Las notas solo funcionan en la app de escritorio.')),
+  ask: (message, options) => (desktop ? ask(message, options) : Promise.resolve(window.confirm(message))),
+  renderMarkdown,
+  fail,
+  onLink: (link, from) => followLink(link, `notas/${from}`),
+});
+let view = 'grafo';
+let notesStale = true;
+// Activación en curso del apartado Notas: quien vaya a abrir algo en él la espera
+// (si no, la activación cerraría la carta recién abierta al aplicar el escritorio guardado).
+let notesActivation = Promise.resolve();
+
+function activateNotes() {
+  if (!desktop || !vault) return notesActivation;
+  const reset = notesStale;
+  notesStale = false;
+  notesActivation = notesActivation.then(() => notes.activate({ reset })).catch(fail);
+  return notesActivation;
+}
+
+function setView(next) {
+  view = next === 'notas' ? 'notas' : 'grafo';
+  document.body.dataset.view = view;
+  document.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
+  const inNotes = view === 'notas';
+  document.querySelector('#sources-panel > .panel-core.sources').hidden = inNotes;
+  $('notes-core').hidden = !inNotes;
+  $('desk').hidden = !inNotes;
+  $('desk-toolbar').hidden = !inNotes;
+  $('stage').setAttribute('aria-label', inNotes ? 'Escritorio de notas' : 'Grafo de conocimiento');
+  try {
+    localStorage.setItem('nexo.view', view);
+  } catch {}
+  if (inNotes) {
+    activateNotes();
+    requestAnimationFrame(() => notes.relayout());
+  }
+}
+document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
+try {
+  if (localStorage.getItem('nexo.view') === 'notas') setView('notas');
+} catch {}
+
+// Un nodo de wiki/notas/ → su nota en el escritorio (o su tema en la carta de notas).
+async function openInNotes(id) {
+  const rel = id.replace(/^notas\//, '');
+  if (view !== 'notas') setView('notas');
+  await notesActivation;
+  if (/(^|\/)_index\.md$/.test(rel)) return notes.openTopic(rel.replace(/\/?_index\.md$/, ''));
+  return notes.openNote(rel);
+}
+const isNotesNode = (node) => node?.id?.startsWith('notas/') && node.kind !== 'missing';
+
+// Enlaces dentro de notas y nodos: webs fuera; [[notas]] a su carta; el resto al grafo.
+function followLink(link, fromId) {
+  const href = link.getAttribute('href') ?? '';
+  if (/^https?:\/\//i.test(href)) {
+    if (desktop) openUrl(href).catch(fail);
+    else window.open(href, '_blank', 'noopener');
+    return;
+  }
+  const target = link.dataset.target ?? decodeURIComponent(href.split('#')[0]);
+  if (!target) return;
+  const node = resolveLink(graphData.nodes, fromId, target);
+  if (!node) return printLine(`«${target}» aún no está en el grafo`, 'info');
+  if (isNotesNode(node)) return openInNotes(node.id);
+  setView('grafo');
+  graph.focus(node.id);
+}
 
 document.querySelectorAll('[data-scope]').forEach((b) =>
   b.addEventListener('click', () => graph.setScope(b.dataset.scope)),
@@ -1558,7 +1663,13 @@ function renderSearch() {
 function goToHit(index) {
   if (!searchHits.length) return;
   searchAt = (index + searchHits.length) % searchHits.length;
-  graph.focus(searchHits[searchAt].id);
+  const hit = searchHits[searchAt];
+  // En la vista Notas, las notas se abren en el escritorio; lo demás lleva al grafo.
+  if (view === 'notas' && isNotesNode(hit)) openInNotes(hit.id);
+  else {
+    if (view === 'notas') setView('grafo');
+    graph.focus(hit.id);
+  }
   renderSearch();
 }
 
@@ -1655,6 +1766,7 @@ if (desktop) {
       if (vault) printLine(`vault → ${vault.path}`, 'system');
       else if (detected.length) printLine(`${detected.length} vaults de Obsidian detectados`, 'system');
       await refresh();
+      if (view === 'notas') activateNotes();
     } catch (error) {
       fail(error);
     }

@@ -8,6 +8,7 @@ mod graph;
 mod markitdown;
 mod mcp;
 mod nexo;
+mod notas;
 mod playwright;
 mod sources;
 mod usage;
@@ -54,7 +55,16 @@ pub fn run() {
             browser::browser_status,
             browser::browser_import,
             usage::usage_claude,
-            usage::usage_agy
+            usage::usage_agy,
+            notas::notes_tree,
+            notas::note_read,
+            notas::note_create,
+            notas::note_save,
+            notas::topic_create,
+            notas::topic_rename,
+            notas::notes_delete,
+            notas::desk_load,
+            notas::desk_save
         ])
         .setup(|app| {
             graph::watch(app.handle().clone());

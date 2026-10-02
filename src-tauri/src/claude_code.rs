@@ -95,6 +95,26 @@ vuelta en la sección ## Relacionado de esas notas (créala al final si no está
 4. Enlázala desde el _index.md de su tema (créalo si no existe, con [[...]] a cada nota) y asegúrate de que \
 _master-index.md enlaza ese _index.\n\
 5. Al terminar, di qué nodo creaste y con qué nodos lo uniste.\n\n\
+Notas (el apartado «Notas» de nexo): las notas del usuario viven en wiki/notas/ y también son nodos del grafo. \
+Puedes crearlas, editarlas, moverlas y borrarlas igual que el usuario, estés en el apartado que estés:\n\
+- Un tema es una carpeta (kebab-case) con un _index.md cuyo frontmatter es `type: tema` y `title: <nombre visible>`; \
+los subtemas son carpetas dentro de carpetas, sin límite de niveles (p. ej. wiki/notas/rutinas/push-pull-legs/pecho/). \
+En cada _index.md nexo regenera solo la sección entre <!-- nexo:contenido --> y <!-- /nexo:contenido --> con los \
+enlaces a sus subtemas y notas: no la escribas tú; el texto fuera de esa sección (descripción) sí puedes editarlo.\n\
+- Una nota es un .md con frontmatter: title (nombre visible), type (texto | lista | fecha), date: AAAA-MM-DD (solo \
+en las de tipo fecha, o si la nota tiene fecha), created y updated (AAAA-MM-DD HH:MM; actualiza updated al editar). \
+El cuerpo es Markdown; las listas para marcar usan «- [ ] elemento» / «- [x] elemento». Nombre de archivo en \
+kebab-case; no lo cambies al renombrar (cambia title), para no romper enlaces.\n\
+- Para mostrar notas en el escritorio de notas, edita .nexo/escritorio.json (en la raíz del vault): \
+{{\"cards\":[{{\"path\":\"<ruta relativa a wiki/notas/, p. ej. rutinas/pecho/press.md>\",\"x\":24,\"y\":24,\"w\":340,\"h\":280,\"z\":1}}]}} \
+(x, y, w, h en píxeles dentro del escritorio; z es la capa, mayor = encima). Conserva las cartas que ya estén y \
+añade o quita solo las que te pidan; la app lo aplica al momento.\n\
+- Historial y seguimiento: si el usuario quiere conservar lo anterior (p. ej. series y cargas de cada día) mientras \
+la nota muestra lo más reciente, actualiza la nota con lo nuevo y guarda el registro en notas del grafo fuera de \
+notas/ (p. ej. wiki/<tema>/historial/AAAA-MM-DD-<cosa>.md o una nota de progreso con una tabla por fecha), \
+enlazadas con [[...]] a la nota y a su índice, siguiendo las reglas del apartado Grafo.\n\
+- Las tareas que piden actuar en webs (compras, reservas, búsquedas) se hacen con el navegador de Playwright; \
+apunta en la nota lo que hiciste (con fecha, precios, enlaces) y pide confirmación antes de pagar, comprar o enviar.\n\n\
 Guardar la conversación: cuando el usuario lo pida (por ejemplo «guarda la conversación en el grafo»), escribe \
 wiki/conversaciones/AAAA-MM-DD-<tema-en-kebab-case>.md con frontmatter (type: conversacion, date: AAAA-MM-DD, \
 session: {session}), un título, y las secciones ## Conclusiones, ## Decisiones, ## Preguntas abiertas y \
@@ -331,4 +351,15 @@ pub async fn claude_code_resize(
 pub fn claude_code_stop(state: State<'_, ClaudeCodeState>) -> Result<(), String> {
     stop(state.session.lock().map_err(|e| e.to_string())?.take());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn el_prompt_explica_notas_y_escritorio() {
+        let prompt = super::orchestrator_prompt(std::path::Path::new("/vault"), "Nexo · prueba");
+        assert!(prompt.contains("wiki/notas/"));
+        assert!(prompt.contains(r#"{"cards":[{"path":"#));
+        assert!(prompt.contains("<!-- nexo:contenido -->"));
+    }
 }
