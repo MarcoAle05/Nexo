@@ -33,6 +33,19 @@
             <div class="vault-menu-title">Conexiones</div>
             <ul class="conn-list" id="conn-list"></ul>
             <div class="vault-sep" aria-hidden="true"></div>
+            <div class="vault-menu-title">Navegador</div>
+            <div class="conn-item" id="browser-item">
+              <span class="conn-dot" id="browser-dot" data-state="checking" aria-hidden="true"></span>
+              <span class="conn-name">Perfil de Playwright<span class="conn-kind">COPIA</span></span>
+              <span class="conn-state" id="browser-state">Comprobando…</span>
+              <span class="conn-detail" id="browser-detail"></span>
+            </div>
+            <button type="button" class="vault-option browser-load" id="browser-load">
+              <span id="browser-load-label">Cargar navegador</span>
+              <small id="browser-load-hint">Copia tus sesiones y contraseñas</small>
+            </button>
+            <p class="browser-note" id="browser-note" role="status" aria-live="polite" hidden></p>
+            <div class="vault-sep" aria-hidden="true"></div>
             <button type="button" class="vault-option" id="conn-refresh">Comprobar de nuevo</button>
           </div>
         </div>
@@ -63,9 +76,13 @@
         </div>
         <button type="button" class="icon-btn filled" aria-label="Cuenta">M</button>
       </nav>
+      <div class="clock" id="clock" aria-label="Hora y fecha">
+        <time class="clock-time" id="clock-time"><span id="clock-hm">00:00</span><span class="clock-sec" id="clock-sec">:00</span></time>
+        <span class="clock-date" id="clock-date"></span>
+      </div>
     </header>
 
-    <main class="layout">
+    <main class="layout" id="layout">
       <!-- Fuentes -->
       <aside class="panel" aria-label="Fuentes" id="sources-panel">
         <div class="panel-core sources">
@@ -74,9 +91,15 @@
               <span class="eyebrow">Cuaderno</span>
               <h2>Fuentes <span class="dim" id="source-count">0</span></h2>
             </div>
-            <button type="button" class="icon-btn outline" aria-label="Ordenar fuentes">
-              <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 6h12M6 10h8M8 14h4"/></svg>
-            </button>
+            <div class="head-actions">
+              <button type="button" class="icon-btn outline" aria-label="Ordenar fuentes">
+                <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M4 6h12M6 10h8M8 14h4"/></svg>
+              </button>
+              <button type="button" class="icon-btn outline expand-btn" data-expand="left" aria-pressed="false" aria-label="Expandir la carta de fuentes" title="Expandir la carta de fuentes">
+                <svg class="expand-icon" width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5h4.5V8M8 16.5H3.5V12M16.5 3.5l-5 5M3.5 16.5l5-5"/></svg>
+                <svg class="contract-icon" width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 8.5H11.5V4.5M4.5 11.5h4v4M11.5 8.5l5-5M8.5 11.5l-5 5"/></svg>
+              </button>
+            </div>
           </div>
 
           <button type="button" class="cta" id="add-source">
@@ -164,6 +187,33 @@
             </div>
           </section>
 
+          <section class="source-detail note-detail" id="note-detail" aria-label="Contenido del nodo" hidden>
+            <button type="button" class="back-btn" id="note-back">
+              <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 6 10l6 6"/></svg>
+              Fuentes
+            </button>
+            <div class="detail-head note-head">
+              <span class="source-icon note-icon" id="note-icon" aria-hidden="true"></span>
+              <div class="detail-title">
+                <span class="eyebrow detail-eyebrow" id="note-eyebrow">Nodo</span>
+                <h3 id="note-name"></h3>
+                <span class="source-meta" id="note-meta"></span>
+              </div>
+            </div>
+            <div class="detail-card">
+              <div class="detail-body">
+                <div class="note-props" id="note-props" hidden></div>
+                <article class="note-body" id="note-body"></article>
+                <h4 id="note-links-title">Conexiones</h4>
+                <div class="concept-chips" id="note-links"></div>
+              </div>
+            </div>
+            <div class="detail-links">
+              <button type="button" class="chip" id="note-open">Abrir en Obsidian</button>
+              <button type="button" class="chip" id="note-graph">Ver en el grafo</button>
+            </div>
+          </section>
+
           <div class="drop-overlay" aria-hidden="true">
             <p>Suelta para añadir</p>
             <p class="dim">Se copiarán a raw/</p>
@@ -213,16 +263,22 @@
       </section>
 
       <!-- Terminal -->
-      <aside class="panel" aria-label="Terminal">
+      <aside class="panel" aria-label="Terminal" id="terminal-panel">
         <div class="panel-core terminal">
           <div class="terminal-head">
             <div class="panel-title">
               <h2 class="small" id="terminal-title">Nexo</h2>
               <span class="path" id="vault-path">sin vault</span>
             </div>
-            <div class="segmented" role="group" aria-label="Modo" data-segmented>
-              <button type="button" aria-pressed="true" data-mode="api">API</button>
-              <button type="button" aria-pressed="false" data-mode="claude-code">Claude Code</button>
+            <div class="head-actions">
+              <div class="segmented" role="group" aria-label="Modo" data-segmented>
+                <button type="button" aria-pressed="true" data-mode="api">API</button>
+                <button type="button" aria-pressed="false" data-mode="claude-code">Claude Code</button>
+              </div>
+              <button type="button" class="icon-btn outline expand-btn" data-expand="right" aria-pressed="false" aria-label="Expandir la terminal" title="Expandir la terminal">
+                <svg class="expand-icon" width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5h4.5V8M8 16.5H3.5V12M16.5 3.5l-5 5M3.5 16.5l5-5"/></svg>
+                <svg class="contract-icon" width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 8.5H11.5V4.5M4.5 11.5h4v4M11.5 8.5l5-5M8.5 11.5l-5 5"/></svg>
+              </button>
             </div>
           </div>
 

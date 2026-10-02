@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Manager};
 
+use crate::browser;
 use crate::markitdown;
 use crate::mcp::McpClient;
 
@@ -55,11 +56,19 @@ pub fn browser() -> Option<&'static str> {
     chrome.then_some("chrome")
 }
 
-fn start(server: &Path, workdir: &Path) -> Result<McpClient, String> {
+/// Sin `profile`, un navegador aislado en memoria; con él, el perfil cargado con
+/// "Cargar navegador" (sesiones iniciadas del usuario), siempre sin ventana.
+fn start(server: &Path, workdir: &Path, profile: Option<&[String]>) -> Result<McpClient, String> {
     let output = workdir.to_string_lossy().to_string();
-    let mut args = vec!["--headless", "--isolated", "--output-dir", &output];
-    if let Some(name) = browser() {
-        args.extend(["--browser", name]);
+    let mut args = vec!["--output-dir", &output];
+    match profile {
+        Some(profile) => args.extend(profile.iter().map(String::as_str)),
+        None => {
+            args.extend(["--headless", "--isolated"]);
+            if let Some(name) = browser() {
+                args.extend(["--browser", name]);
+            }
+        }
     }
     McpClient::start(server, &args, Some(workdir), "Playwright MCP")
 }
@@ -67,7 +76,7 @@ fn start(server: &Path, workdir: &Path) -> Result<McpClient, String> {
 /// Saluda al servidor y lista sus herramientas, sin abrir el navegador. Bloqueante.
 pub fn probe(server: &Path, workdir: &Path) -> Result<Vec<String>, String> {
     fs::create_dir_all(workdir).map_err(|e| e.to_string())?;
-    start(server, workdir)?.list_tools()
+    start(server, workdir, None)?.list_tools()
 }
 
 /// Playwright devuelve el resultado de `browser_evaluate` en una sección `### Result`.
@@ -136,7 +145,12 @@ pub fn read_page(
     )?;
     let converter = markitdown::find_server(app)
         .ok_or("MarkItDown no está disponible para convertir la página.")?;
-    read_page_with(&server, &converter, url, workdir, step)
+    // Con el navegador cargado se leen también páginas que piden sesión; si Claude Code
+    // lo tiene abierto, se usa uno aislado.
+    let profile = browser::ready_for_reader(app)
+        .then(|| browser::mcp_args(app, true).ok())
+        .flatten();
+    read_page_with(&server, &converter, url, workdir, profile.as_deref(), step)
 }
 
 fn read_page_with(
@@ -144,19 +158,25 @@ fn read_page_with(
     converter: &Path,
     url: &str,
     workdir: &Path,
+    profile: Option<&[String]>,
     step: impl Fn(&str),
 ) -> Result<Page, String> {
     fs::create_dir_all(workdir).map_err(|e| e.to_string())?;
 
     step(&format!(
-        "Abre la página en {} (Playwright)",
+        "Abre la página en {}{} (Playwright)",
         if browser().is_some() {
             "Chrome"
         } else {
             "el navegador"
+        },
+        if profile.is_some() {
+            " con tus sesiones"
+        } else {
+            ""
         }
     ));
-    let mut browser = start(server, workdir)?;
+    let mut browser = start(server, workdir, profile)?;
     browser.call_tool("browser_navigate", json!({"url": url}))?;
     // Margen para que terminen de cargar las páginas que pintan su contenido con JavaScript.
     let _ = browser.call_tool("browser_wait_for", json!({"time": 1.5}));
@@ -212,6 +232,7 @@ mod tests {
             &bin.join("markitdown-mcp"),
             "https://example.com",
             &dir,
+            None,
             |s| println!("· {s}"),
         )
         .expect("lee la página");

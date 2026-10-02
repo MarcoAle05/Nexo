@@ -1,4 +1,5 @@
 mod agy;
+mod browser;
 mod claude;
 mod claude_code;
 mod connections;
@@ -9,6 +10,7 @@ mod mcp;
 mod nexo;
 mod playwright;
 mod sources;
+mod usage;
 mod vault;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -19,6 +21,7 @@ pub fn run() {
         .manage(nexo::ChatState::default())
         .manage(claude_code::ClaudeCodeState::default())
         .manage(agy::AgyState::default())
+        .manage(usage::UsageState::default())
         .invoke_handler(tauri::generate_handler![
             vault::get_vault,
             vault::detect_vaults,
@@ -29,6 +32,7 @@ pub fn run() {
             sources::remove_source,
             graph::read_graph,
             graph::open_note,
+            graph::note_view,
             nexo::key_status,
             nexo::set_api_key,
             nexo::chat_send,
@@ -46,9 +50,14 @@ pub fn run() {
             claude_code::claude_code_start,
             claude_code::claude_code_write,
             claude_code::claude_code_resize,
-            claude_code::claude_code_stop
+            claude_code::claude_code_stop,
+            browser::browser_status,
+            browser::browser_import,
+            usage::usage_claude,
+            usage::usage_agy
         ])
         .setup(|app| {
+            graph::watch(app.handle().clone());
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

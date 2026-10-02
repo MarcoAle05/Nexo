@@ -5,8 +5,8 @@
   --faint: rgba(245, 245, 245, 0.45);
   --line: rgba(255, 255, 255, 0.08);
   --line-strong: rgba(255, 255, 255, 0.14);
-  --glass: rgba(14, 14, 14, 0.62);
-  --glass-bar: rgba(18, 18, 18, 0.66);
+  --glass: rgba(12, 12, 12, 0.9);
+  --glass-bar: rgba(16, 16, 16, 0.86);
   --blur: 18px;
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --sans: 'Geist Variable', 'Geist', ui-sans-serif, system-ui, sans-serif;
@@ -579,7 +579,7 @@ kbd {
   list-style: none;
   border-radius: 20px;
   border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(14, 14, 14, 0.9);
+  background: rgba(12, 12, 12, 0.97);
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.5);
@@ -763,6 +763,22 @@ kbd {
 }
 .conn-state { font-size: 11.5px; color: var(--dim); white-space: nowrap; }
 .conn-detail { grid-column: 2 / -1; font-size: 11.5px; line-height: 1.45; color: var(--dim); overflow-wrap: anywhere; }
+.conn-menu { max-height: calc(100dvh - 96px); overflow-y: auto; overscroll-behavior: contain; }
+.browser-load:disabled { cursor: progress; }
+.browser-load:disabled #browser-load-label { animation: breathe 1.4s var(--ease) infinite; }
+.browser-note {
+  margin: 4px 6px 2px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--fg);
+  animation: source-in 400ms var(--ease) both;
+}
+.browser-note[hidden] { display: none; }
+.browser-note[data-kind="error"] { border-style: dashed; color: var(--dim); }
 
 /* ---------- Enlaces web (Antigravity) ---------- */
 .link-form {
@@ -909,6 +925,200 @@ kbd {
 .detail-card { flex: 1 1 auto; min-height: 0; display: flex; }
 .detail-card > .detail-body { flex: 1 1 auto; }
 
+/* ---------- Límites de uso (mini pestaña en Conexiones) ---------- */
+.usage-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 20px;
+  margin-left: 2px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: rgba(245, 245, 245, 0.85);
+  transition: background 300ms var(--ease), border-color 300ms var(--ease);
+}
+.usage-tab:hover, .usage-tab[aria-expanded="true"] { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.22); }
+.usage-tab.loading { animation: breathe 1.4s var(--ease) infinite; color: var(--dim); }
+.usage-mini, .usage-bar {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.usage-mini { width: 28px; height: 4px; }
+.usage-bar { grid-column: 1 / -1; height: 5px; }
+.usage-mini > span, .usage-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: var(--fg);
+  transition: width 600ms var(--ease);
+}
+[data-level="mid"] > span { box-shadow: 0 0 8px rgba(255, 255, 255, 0.45); }
+[data-level="high"] > span { box-shadow: 0 0 12px rgba(255, 255, 255, 0.8); }
+[data-level="high"] { outline: 1px dashed rgba(255, 255, 255, 0.35); outline-offset: 1px; }
+.usage-panel {
+  grid-column: 2 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.025);
+  animation: source-in 350ms var(--ease) both;
+}
+.usage-group {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.usage-group:not(:first-child) { margin-top: 8px; }
+.usage-group small { font-size: 10.5px; font-weight: 400; letter-spacing: 0; text-transform: none; color: var(--faint); }
+.usage-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 5px 10px; }
+.usage-label { font-size: 12px; color: rgba(245, 245, 245, 0.88); }
+.usage-value { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--fg); }
+.usage-reset { grid-column: 1 / -1; margin-top: -1px; font-size: 10.5px; color: var(--faint); }
+.usage-note { margin: 0; font-size: 11.5px; line-height: 1.45; color: var(--dim); }
+
+/* ---------- Reloj (arriba a la derecha) ---------- */
+.clock {
+  position: absolute;
+  top: 12px;
+  right: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  user-select: none;
+  animation: source-in 600ms var(--ease) both;
+}
+.clock-time {
+  display: flex;
+  align-items: baseline;
+  font-family: var(--display);
+  font-size: 34px;
+  font-weight: 400;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  text-shadow: 0 0 24px rgba(255, 255, 255, 0.18);
+}
+.clock-sec {
+  margin-left: 2px;
+  font-size: 15px;
+  letter-spacing: 0;
+  color: var(--faint);
+}
+.clock-date {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+/* Sin sitio junto a la barra central, el reloj se oculta en vez de taparla. */
+@media (max-width: 1279px) { .clock { display: none; } }
+
+/* ---------- Contenido de un nodo de la wiki ---------- */
+.source-detail[hidden] { display: none; }
+.note-icon { border-color: rgba(255, 255, 255, 0.08); }
+.note-props {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 14px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+}
+.note-props[hidden] { display: none; }
+.note-prop { display: contents; }
+.note-prop span:first-child { font-family: var(--mono); font-size: 10.5px; color: var(--faint); }
+.note-prop span:last-child { color: var(--dim); overflow-wrap: anywhere; }
+
+.note-body { font-size: 13px; line-height: 1.6; color: rgba(245, 245, 245, 0.88); overflow-wrap: anywhere; }
+.note-body.pending { color: var(--dim); }
+.note-body > :first-child { margin-top: 0; }
+.note-body > :last-child { margin-bottom: 0; }
+.note-body h1, .note-body h2, .note-body h3 {
+  margin: 18px 0 8px;
+  font-family: var(--display);
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+  color: var(--fg);
+}
+.note-body h1 { font-size: 17px; }
+.note-body h2 { font-size: 14px; }
+.note-body h3 { font-size: 13px; }
+.note-body h4, .note-body h5, .note-body h6 {
+  margin: 14px 0 6px;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.note-body p { margin: 0 0 10px; }
+.note-body ul, .note-body ol { margin: 0 0 12px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.note-body li > ul, .note-body li > ol { margin: 4px 0 0; }
+.note-body li:has(> input[type="checkbox"]) { list-style: none; margin-left: -20px; }
+.note-body input[type="checkbox"] { width: 13px; height: 13px; margin: 0 8px 0 0; vertical-align: -2px; accent-color: var(--fg); }
+.note-body strong { font-weight: 600; color: var(--fg); }
+.note-body a { color: var(--fg); text-decoration: underline; text-decoration-color: rgba(255, 255, 255, 0.3); text-underline-offset: 3px; }
+.note-body a:hover { text-decoration-color: var(--fg); }
+.note-body a.wikilink { text-decoration: none; padding: 0 2px; border-radius: 4px; background: rgba(255, 255, 255, 0.07); }
+.note-body a.wikilink:hover { background: rgba(255, 255, 255, 0.14); }
+.note-body code { padding: 1px 5px; border-radius: 5px; background: rgba(255, 255, 255, 0.07); font-family: var(--mono); font-size: 11.5px; }
+.note-body pre { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: rgba(0, 0, 0, 0.35); overflow-x: auto; }
+.note-body pre code { padding: 0; background: none; }
+.note-body blockquote { margin: 0 0 12px; padding: 2px 0 2px 12px; border-left: 2px solid var(--line-strong); color: var(--dim); }
+.note-body hr { border: 0; height: 1px; margin: 16px 0; background: var(--line); }
+.note-body table { width: 100%; margin: 0 0 12px; border-collapse: collapse; font-size: 12px; }
+.note-body th, .note-body td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.note-body th { font-weight: 500; color: var(--dim); }
+.note-body img { max-width: 100%; border-radius: 10px; }
+.note-detail .detail-body h4#note-links-title { margin-top: 20px; }
+.note-detail .detail-links .chip[hidden] { display: none; }
+#note-links[hidden], #note-links-title[hidden] { display: none; }
+
+.node-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  height: 30px;
+  padding: 0 12px 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  color: rgba(245, 245, 245, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 300ms var(--ease), color 300ms var(--ease);
+}
+.node-chip:hover { background: rgba(255, 255, 255, 0.1); color: var(--fg); }
+.node-chip-dot { flex-shrink: 0; width: 6px; height: 6px; border-radius: 999px; box-shadow: 0 0 8px currentColor; }
+
 /* ---------- Actividad Antigravity ---------- */
 .terminal-tools { display: flex; gap: 8px; padding: 10px 12px 0; }
 .activity-btn, .save-btn {
@@ -1044,6 +1254,38 @@ html, body { overflow: hidden; }
 .terminal-output { min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.14) transparent; }
 .cc-view, .activity-view { min-height: 0; }
 .empty { min-height: 0; overflow-y: auto; }
+
+/* ---------- Cartas expandibles ----------
+   Una carta expandida crece hasta el borde de la otra (el grafo central se pliega);
+   con las dos expandidas se reparten el espacio a partes iguales. */
+.head-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.expand-btn .contract-icon, .expand-btn[aria-pressed="true"] .expand-icon { display: none; }
+.expand-btn[aria-pressed="true"] .contract-icon { display: block; }
+.expand-btn[aria-pressed="true"] { background: rgba(255, 255, 255, 0.1); }
+.panel, .stage {
+  transition: flex-grow 520ms var(--ease), flex-basis 520ms var(--ease), margin 520ms var(--ease), opacity 320ms var(--ease);
+}
+@media (min-width: 768px) {
+.layout.expanded .stage {
+  flex: 0 1 0px;
+  min-width: 0;
+  /* Se come uno de los dos huecos para que entre las cartas quede el mismo espacio de siempre. */
+  margin-inline: -10px;
+  opacity: 0;
+  overflow: hidden;
+}
+.layout.expanded .stage * { pointer-events: none; }
+.layout.expanded .panel { flex-grow: 0; }
+.layout.expand-left #sources-panel { flex: 999 1 320px; }
+.layout.expand-right #terminal-panel { flex: 999 1 400px; }
+.layout.expand-left.expand-right #sources-panel,
+.layout.expand-left.expand-right #terminal-panel { flex: 999 1 0px; }
+}
+
+@media (max-width: 767px) {
+  /* Apiladas, las cartas ya ocupan todo el ancho. */
+  .expand-btn { display: none; }
+}
 
 @media (max-width: 767px) {
   /* En el móvil las cartas se apilan: ahí sí se desplaza la página entera. */

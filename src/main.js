@@ -9,9 +9,11 @@ import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { open } from '@tauri-apps/plugin-dialog';
+import { openUrl } from '@tauri-apps/plugin-opener';
 
 import { createClaudeCode } from './claude-code.js';
 import { colorFor, createGraph } from './graph.js';
+import { renderMarkdown, resolveLink } from './note-view.js';
 
 const $ = (id) => document.getElementById(id);
 const desktop = isTauri();
@@ -30,6 +32,56 @@ document.querySelectorAll('[data-switch]').forEach((toggle) => {
     toggle.setAttribute('aria-checked', String(toggle.getAttribute('aria-checked') !== 'true'));
   });
 });
+
+// ---------------------------------------------------------------- reloj
+// Hora del sistema; cada actualización se programa al inicio del segundo siguiente
+// para que no se desfase.
+const clockDate = new Intl.DateTimeFormat('es', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+function tickClock() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  $('clock-hm').textContent = `${pad(now.getHours())}:${pad(now.getMinutes())}`;
+  $('clock-sec').textContent = `:${pad(now.getSeconds())}`;
+  $('clock-time').dateTime = now.toISOString();
+  $('clock-date').textContent = clockDate.format(now);
+  setTimeout(tickClock, 1000 - now.getMilliseconds() + 5);
+}
+tickClock();
+
+// ---------------------------------------------------------------- cartas expandibles
+// Cada carta puede expandirse hasta el borde de la otra; con las dos expandidas se
+// reparten el ancho. Contraer una deja a la otra como esté. Se recuerda entre aperturas.
+const expanded = { left: false, right: false };
+try {
+  Object.assign(expanded, JSON.parse(localStorage.getItem('nexo.expanded') ?? '{}'));
+} catch {}
+
+function renderExpanded() {
+  const layout = $('layout');
+  layout.classList.toggle('expand-left', expanded.left);
+  layout.classList.toggle('expand-right', expanded.right);
+  layout.classList.toggle('expanded', expanded.left || expanded.right);
+  document.querySelectorAll('[data-expand]').forEach((b) => {
+    const on = expanded[b.dataset.expand];
+    const what = b.dataset.expand === 'left' ? 'la carta de fuentes' : 'la terminal';
+    b.setAttribute('aria-pressed', String(on));
+    b.setAttribute('aria-label', `${on ? 'Contraer' : 'Expandir'} ${what}`);
+    b.title = `${on ? 'Contraer' : 'Expandir'} ${what}`;
+  });
+  // Con el grafo plegado no se puede usar su barra ni el enfoque.
+  $('stage').inert = expanded.left || expanded.right;
+}
+
+document.querySelectorAll('[data-expand]').forEach((b) =>
+  b.addEventListener('click', () => {
+    expanded[b.dataset.expand] = !expanded[b.dataset.expand];
+    renderExpanded();
+    try {
+      localStorage.setItem('nexo.expanded', JSON.stringify(expanded));
+    } catch {}
+  }),
+);
+renderExpanded();
 
 // ---------------------------------------------------------------- terminal
 const output = $('output');
@@ -482,11 +534,12 @@ function renderSources() {
 
   const visible = filter === 'all' ? sources : sources.filter((s) => s.kind === filter);
   $('source-list').replaceChildren(...visible.map(sourceRow));
-  const inDetail = Boolean(detailPath);
+  const inDetail = Boolean(detailPath || noteNode);
   $('source-list').hidden = inDetail || visible.length === 0;
   $('sources-empty').hidden = inDetail || visible.length > 0;
   document.querySelector('.chips').hidden = inDetail;
-  $('source-detail').hidden = !inDetail;
+  $('source-detail').hidden = !detailPath;
+  $('note-detail').hidden = !noteNode;
 
   const [title, text] = !vault
     ? ['Elige tu vault', detected.length
@@ -671,7 +724,109 @@ const STATE_LABEL = { ok: 'Activo', missing: 'No disponible', error: 'Error' };
 const connMenu = $('conn-menu');
 const connButton = $('conn-button');
 
+// Límites de uso de las suscripciones (Claude Code y Antigravity): una mini pestaña junto
+// al nombre con el porcentaje más alto, que despliega cada límite con su barra.
+const USAGE_OF = { 'claude-code': 'claude', antigravity: 'agy' };
+const usage = { claude: null, agy: null }; // { loading } | { data } | { error }
+const usageOpen = new Set();
+let lastConnections = [];
+
+function resetText(iso) {
+  if (!iso) return 'sin consumo pendiente';
+  const minutes = Math.max(0, Math.round((new Date(iso) - Date.now()) / 60000));
+  if (minutes < 60) return `se renueva en ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `se renueva en ${hours} h ${minutes % 60} min`;
+  return `se renueva en ${Math.floor(hours / 24)} d ${hours % 24} h`;
+}
+
+const pct = (n) => `${n < 10 && n % 1 ? n.toFixed(1) : Math.round(n)} %`;
+
+function usageBar(used, className) {
+  const bar = document.createElement('span');
+  bar.className = className;
+  const fill = document.createElement('span');
+  fill.style.width = `${Math.min(100, Math.max(used > 0 ? 2 : 0, used))}%`;
+  bar.dataset.level = used >= 90 ? 'high' : used >= 70 ? 'mid' : 'low';
+  bar.append(fill);
+  return bar;
+}
+
+function addUsage(li, name, service) {
+  const info = usage[service];
+  const tab = document.createElement('button');
+  tab.type = 'button';
+  tab.className = 'usage-tab';
+  const open = usageOpen.has(service);
+  tab.setAttribute('aria-expanded', String(open));
+  const limits = info?.data?.groups.flatMap((g) => g.limits) ?? [];
+  const top = limits.reduce((max, l) => Math.max(max, l.used), 0);
+  if (info?.data) {
+    tab.append(usageBar(top, 'usage-mini'), Object.assign(document.createElement('span'), { textContent: pct(top) }));
+    tab.title = 'Límites de uso: el más consumido. Pulsa para ver el detalle.';
+  } else {
+    tab.textContent = info?.error ? 'Uso ?' : 'Uso…';
+    tab.title = info?.error ?? 'Consultando los límites de uso…';
+    tab.classList.toggle('loading', !info?.error);
+  }
+  tab.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (usageOpen.has(service)) usageOpen.delete(service);
+    else usageOpen.add(service);
+    renderConnections(lastConnections);
+  });
+  name.append(tab);
+  if (!open) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'usage-panel';
+  if (info?.error) {
+    panel.append(Object.assign(document.createElement('p'), { className: 'usage-note', textContent: info.error }));
+  } else if (!info?.data) {
+    panel.append(Object.assign(document.createElement('p'), { className: 'usage-note', textContent: 'Consultando…' }));
+  } else {
+    for (const group of info.data.groups) {
+      const head = document.createElement('div');
+      head.className = 'usage-group';
+      head.textContent = group.name;
+      if (group.models) {
+        const models = document.createElement('small');
+        models.textContent = group.models;
+        head.append(models);
+      }
+      panel.append(head);
+      for (const limit of group.limits) {
+        const row = document.createElement('div');
+        row.className = 'usage-row';
+        const label = document.createElement('span');
+        label.className = 'usage-label';
+        label.textContent = limit.label;
+        const value = document.createElement('span');
+        value.className = 'usage-value';
+        value.textContent = pct(limit.used);
+        const reset = document.createElement('span');
+        reset.className = 'usage-reset';
+        reset.textContent = resetText(limit.resets_at);
+        row.append(label, value, usageBar(limit.used, 'usage-bar'), reset);
+        panel.append(row);
+      }
+    }
+  }
+  li.append(panel);
+}
+
+async function loadUsage(service, force) {
+  usage[service] = { ...(usage[service]?.data ? { data: usage[service].data } : {}), loading: true };
+  try {
+    usage[service] = { data: await invoke(service === 'claude' ? 'usage_claude' : 'usage_agy', { force }) };
+  } catch (error) {
+    usage[service] = { error: String(error) };
+  }
+  if (!connMenu.hidden) renderConnections(lastConnections);
+}
+
 function renderConnections(list) {
+  lastConnections = list;
   const dot = (state) => {
     const d = document.createElement('span');
     d.className = 'conn-dot';
@@ -697,6 +852,8 @@ function renderConnections(list) {
       detail.className = 'conn-detail';
       detail.textContent = c.detail;
       li.append(dot(c.state), name, state, detail);
+      const service = USAGE_OF[c.id];
+      if (service && c.state === 'ok') addUsage(li, name, service);
       return li;
     }),
   );
@@ -711,6 +868,7 @@ function renderConnections(list) {
 
 async function refreshConnections() {
   if (!desktop) return;
+  refreshBrowser();
   $('conn-dot').dataset.state = 'checking';
   try {
     const list = await invoke('connections_status');
@@ -722,6 +880,10 @@ async function refreshConnections() {
     $('link-input').title = agyReady ? '' : 'Antigravity (agy) no está disponible: revisa Conexiones';
     renderConnections(list);
     renderSources();
+    for (const [id, service] of Object.entries(USAGE_OF)) {
+      if (list.some((c) => c.id === id && c.state === 'ok')) loadUsage(service, usageForce);
+    }
+    usageForce = false;
   } catch (error) {
     fail(error);
   }
@@ -734,7 +896,81 @@ connButton.addEventListener('click', (event) => {
   connButton.setAttribute('aria-expanded', String(opening));
   if (opening) refreshConnections();
 });
-$('conn-refresh').addEventListener('click', refreshConnections);
+let usageForce = false;
+$('conn-refresh').addEventListener('click', () => {
+  usageForce = true;
+  refreshConnections();
+});
+
+// Navegador: copia del perfil del navegador predeterminado (sesiones, cookies, contraseñas)
+// que usan Playwright al leer enlaces y Claude Code.
+let browserBusy = false;
+
+function copyDate(copy) {
+  const date = new Date(copy.copied_at.replace(' ', 'T'));
+  if (Number.isNaN(date.getTime())) return copy.copied_at;
+  return date.toLocaleString('es', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
+function renderBrowser(status) {
+  const { copy } = status;
+  const source = status.source.Ok;
+  $('browser-dot').dataset.state = copy ? 'ok' : 'warn';
+  $('browser-state').textContent = copy ? 'Cargado' : 'Sin cargar';
+  $('browser-detail').textContent = copy
+    ? `Copia de ${copy.browser} · ${copyDate(copy)} · ${copy.cookies} cookies de ${copy.sites} sitios`
+    : source
+      ? `Playwright y Claude Code abren un navegador sin tus sesiones. Puedes copiar las de ${source}.`
+      : status.source.Err;
+  $('browser-load-label').textContent = copy ? 'Actualizar navegador' : 'Cargar navegador';
+  $('browser-load-hint').textContent = copy
+    ? `Vuelve a copiar ${source ?? copy.browser} y borra la copia del ${copyDate(copy)}`
+    : source
+      ? `Copia las sesiones y contraseñas de ${source}`
+      : 'Necesita Chrome, Chromium, Brave, Edge o Vivaldi';
+  $('browser-load').disabled = browserBusy || !source;
+}
+
+async function refreshBrowser() {
+  if (!desktop) return;
+  try {
+    renderBrowser(await invoke('browser_status'));
+  } catch (error) {
+    fail(error);
+  }
+}
+
+function browserNote(text, kind) {
+  const note = $('browser-note');
+  note.textContent = text;
+  note.dataset.kind = kind;
+  note.hidden = false;
+}
+
+$('browser-load').addEventListener('click', async (event) => {
+  event.stopPropagation();
+  if (!desktop) return printLine('Cargar el navegador solo funciona en la app de escritorio.', 'error');
+  if (browserBusy) return;
+  const updating = $('browser-load-label').textContent.startsWith('Actualizar');
+  browserBusy = true;
+  $('browser-load').disabled = true;
+  $('browser-load-label').textContent = updating ? 'Actualizando navegador…' : 'Cargando navegador…';
+  $('browser-load-hint').textContent = 'Copiando el perfil y comprobando que se abre';
+  $('browser-dot').dataset.state = 'checking';
+  $('browser-note').hidden = true;
+  try {
+    const copy = await invoke('browser_import');
+    const message = `${updating ? 'Navegador actualizado' : 'Navegador cargado'}: se copió ${copy.browser} correctamente, con ${copy.cookies} cookies de ${copy.sites} sitios (sesiones iniciadas) y sus contraseñas guardadas.${updating ? ' La copia anterior se borró.' : ''}`;
+    browserNote(message, 'ok');
+    printLine(message, 'info');
+  } catch (error) {
+    browserNote(String(error), 'error');
+    printLine(String(error), 'error');
+  } finally {
+    browserBusy = false;
+    refreshBrowser();
+  }
+});
 document.addEventListener('click', (event) => {
   if (!connMenu.hidden && !connMenu.contains(event.target)) {
     connMenu.hidden = true;
@@ -769,9 +1005,13 @@ $('add-source').addEventListener('click', async () => {
 
 // ---------------------------------------------------------------- pestaña de resumen de una fuente
 let detailPath = null;
+let noteNode = null; // nodo de la wiki abierto en la carta (ver «contenido de un nodo»)
+let noteView = null; // { id, body, meta, modified }
 let detailView = null; // ficha: resumen, ideas clave, conceptos
 
 async function openDetail(path, { fromGraph = false } = {}) {
+  noteNode = null;
+  noteView = null;
   detailPath = path;
   detailView = null;
   closeRename();
@@ -852,6 +1092,134 @@ function renderDetail() {
   $('detail-open-md').hidden = !source.converted;
   $('detail-graph').disabled = !detailView;
 }
+
+// ---------------------------------------------------------------- contenido de un nodo
+// Al elegir un nodo del grafo (que no sea una fuente), la carta de la izquierda muestra
+// lo que hay dentro de su nota: el Markdown, sus propiedades y sus conexiones.
+async function showNode(node) {
+  if (detailPath) closeDetail();
+  noteNode = node;
+  noteView = null;
+  renderSources();
+  renderNode();
+  if (node.kind === 'missing') return;
+  try {
+    const view = await invoke('note_view', { id: node.id });
+    if (noteNode?.id === node.id) noteView = view;
+  } catch (error) {
+    fail(error);
+  }
+  if (noteNode?.id === node.id) renderNode();
+}
+
+// Vuelve a leer el nodo abierto (cuando cambia la wiki); si ya no existe, se cierra.
+async function refreshNode() {
+  if (!noteNode) return;
+  const fresh = graphData.nodes.find((n) => n.id === noteNode.id);
+  if (!fresh) return closeNode();
+  const id = fresh.id;
+  if (fresh.kind !== 'missing') {
+    try {
+      const view = await invoke('note_view', { id });
+      if (noteNode?.id === id) noteView = view;
+    } catch {}
+  }
+  if (noteNode?.id === id) {
+    noteNode = fresh;
+    renderNode();
+  }
+}
+
+function closeNode() {
+  noteNode = null;
+  noteView = null;
+  renderSources();
+}
+
+function neighborsOf(id) {
+  const ids = new Set();
+  for (const [a, b] of graphData.edges) {
+    if (a === id) ids.add(b);
+    else if (b === id) ids.add(a);
+  }
+  return graphData.nodes.filter((n) => ids.has(n.id)).sort((a, b) => a.label.localeCompare(b.label, 'es'));
+}
+
+const NODE_STAR = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" stroke="none"><path d="M10 1.5c.6 4.6 3.9 7.9 8.5 8.5-4.6.6-7.9 3.9-8.5 8.5-.6-4.6-3.9-7.9-8.5-8.5 4.6-.6 7.9-3.9 8.5-8.5z"/></svg>';
+
+function renderNode() {
+  const node = noteNode;
+  if (!node) return;
+  const missing = node.kind === 'missing';
+  const linked = neighborsOf(node.id);
+  $('note-icon').innerHTML = NODE_STAR;
+  $('note-icon').style.color = colorFor(node);
+  $('note-eyebrow').textContent = node.group && !missing ? `${SEARCH_TYPE[node.kind]} · ${node.group}` : SEARCH_TYPE[node.kind];
+  $('note-name').textContent = node.label;
+  $('note-meta').textContent = missing
+    ? `Sin nota · ${linked.length} ${linked.length === 1 ? 'mención' : 'menciones'}`
+    : [`wiki/${node.id}`, noteView?.modified && `editada ${noteView.modified}`].filter(Boolean).join(' · ');
+
+  const props = noteView?.meta ?? [];
+  $('note-props').replaceChildren(
+    ...props.map(([key, value]) => {
+      const row = document.createElement('div');
+      row.className = 'note-prop';
+      const k = document.createElement('span');
+      k.textContent = key;
+      const v = document.createElement('span');
+      v.textContent = value;
+      row.append(k, v);
+      return row;
+    }),
+  );
+  $('note-props').hidden = !props.length;
+
+  const body = $('note-body');
+  body.classList.toggle('pending', missing || !noteView);
+  if (missing) body.textContent = 'Esta palabra clave todavía no tiene nota propia. Aparece en el grafo porque otras notas la enlazan con [[…]].';
+  else if (!noteView) body.textContent = 'Leyendo la nota…';
+  else if (!noteView.body.trim()) body.textContent = 'La nota está vacía.';
+  else body.innerHTML = renderMarkdown(noteView.body);
+
+  $('note-links-title').textContent = missing ? 'La enlazan' : `Conexiones · ${linked.length}`;
+  $('note-links').replaceChildren(
+    ...linked.map((n) => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'node-chip';
+      chip.title = `${SEARCH_TYPE[n.kind]} · ver en el grafo`;
+      const dot = document.createElement('span');
+      dot.className = 'node-chip-dot';
+      dot.style.background = colorFor(n);
+      chip.append(dot, n.label);
+      chip.addEventListener('click', () => graph.focus(n.id));
+      return chip;
+    }),
+  );
+  $('note-links').hidden = $('note-links-title').hidden = !linked.length;
+  $('note-open').hidden = missing;
+}
+
+$('note-back').addEventListener('click', closeNode);
+$('note-open').addEventListener('click', () => noteNode && openNote(noteNode));
+$('note-graph').addEventListener('click', () => noteNode && graph.focus(noteNode.id));
+// Enlaces dentro de la nota: [[wiki]] y notas .md llevan a su nodo; las webs se abren fuera.
+$('note-body').addEventListener('click', (event) => {
+  const link = event.target.closest('a');
+  if (!link || !noteNode) return;
+  event.preventDefault();
+  const href = link.getAttribute('href') ?? '';
+  if (/^https?:\/\//i.test(href)) {
+    if (desktop) openUrl(href).catch(fail);
+    else window.open(href, '_blank', 'noopener');
+    return;
+  }
+  const target = link.dataset.target ?? decodeURIComponent(href.split('#')[0]);
+  if (!target) return;
+  const node = resolveLink(graphData.nodes, noteNode.id, target);
+  if (!node || !graph.focus(node.id)) printLine(`«${target}» aún no está en el grafo`, 'info');
+});
 
 // Un concepto de la ficha → su nodo (nota existente o pendiente) en el grafo.
 function focusConcept(name) {
@@ -1010,6 +1378,22 @@ if (desktop) {
       Promise.all([loadSources(), loadGraph()]).then(refreshDetail);
     }
   });
+  // Cuando algo escribe en wiki/ (Claude Code, Obsidian…), el grafo se actualiza solo
+  // y los nodos nuevos se señalan.
+  let wikiTimer = 0;
+  let wikiAdded = [];
+  listen('wiki-changed', ({ payload }) => {
+    wikiAdded.push(...payload.added);
+    clearTimeout(wikiTimer);
+    wikiTimer = setTimeout(async () => {
+      const added = wikiAdded;
+      wikiAdded = [];
+      await loadGraph();
+      refreshDetail();
+      refreshNode();
+      if (added.length) graph.announce(added);
+    }, 400);
+  });
   invoke('agy_jobs')
     .then((list) => {
       list.forEach((job) => jobs.set(job.id, job));
@@ -1033,7 +1417,9 @@ const graph = createGraph($('graph-canvas'), {
     $('focus-degree').textContent = `· ${node.degree} ${node.degree === 1 ? 'conexión' : 'conexiones'}`;
     $('focus-open').hidden = node.kind === 'missing';
     focused = node;
-    if (node.kind === 'source' && node.source && node.source !== detailPath) openDetail(node.source, { fromGraph: true });
+    if (node.kind === 'source' && node.source) {
+      if (node.source !== detailPath) openDetail(node.source, { fromGraph: true });
+    } else if (node.id !== noteNode?.id) showNode(node);
   },
   onOpen: (node) => openNote(node),
 });

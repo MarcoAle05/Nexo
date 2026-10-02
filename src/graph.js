@@ -189,6 +189,9 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
     }
   }
 
+  const BIRTH_MS = 6000;
+  const births = new Map();
+
   function requestDraw() {
     if (!frame) frame = requestAnimationFrame(draw);
   }
@@ -266,6 +269,27 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
       }
     }
 
+    // nodos recién creados: ondas que se expanden durante unos segundos
+    for (const [id, start] of births) {
+      const d = nodes.find((n) => n.id === id);
+      const age = (now - start) / BIRTH_MS;
+      if (!d || age >= 1) {
+        births.delete(id);
+        continue;
+      }
+      if (!isVisible(d) || d.x == null) continue;
+      const color = colorFor(d);
+      for (const lag of [0, 0.33, 0.66]) {
+        const t = (age * 3 + lag) % 1;
+        ctx.beginPath();
+        ctx.arc(d.x, d.y, radius(d) + 46 * (1 - Math.pow(1 - t, 3)), 0, Math.PI * 2);
+        ctx.strokeStyle = rgba(color, 0.55 * (1 - t) * (1 - age));
+        ctx.lineWidth = 1 / k;
+        ctx.stroke();
+      }
+    }
+    if (births.size) requestDraw();
+
     // nodo en foco con pulso
     if (selected) {
       const t = ((now - pulseStart) % 3200) / 3200;
@@ -293,7 +317,7 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
       for (const d of nodes) {
         if (!isVisible(d)) continue;
         const inFocus = highlight?.has(d.id);
-        const always = d.kind === 'index' || d.kind === 'source' || d.kind === 'conversation' || d === hovered || (selected && inFocus);
+        const always = d.kind === 'index' || d.kind === 'source' || d.kind === 'conversation' || d === hovered || births.has(d.id) || (selected && inFocus);
         if (!always && k < 1.3) continue;
         const size = (d === selected ? 15 : d.kind === 'index' ? 12.5 : 11) / k;
         ctx.font = `${d.kind === 'index' || d === selected ? 500 : 400} ${size}px ${FONT}`;
@@ -434,6 +458,12 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
       fit();
     },
     clearSelection: () => setSelected(null),
+    // Señala nodos recién añadidos a la wiki (p. ej. por Claude Code) con unas ondas.
+    announce(ids) {
+      const now = performance.now();
+      for (const id of ids) births.set(id, now);
+      requestDraw();
+    },
     // Enfoca el nodo con ese id (p. ej. al abrir una fuente) y lo centra.
     focus(id) {
       const d = nodes.find((n) => n.id === id);

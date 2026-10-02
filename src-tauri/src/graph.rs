@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::vault::{resolve_inside, vault_dir};
@@ -119,6 +119,57 @@ fn label_for(id: &str) -> String {
             .unwrap_or_else(|| "Índice".into()),
         _ => stem.to_string(),
     }
+}
+
+/// Huella de `wiki/`: cada nota con su tamaño y fecha de modificación.
+fn fingerprint(wiki: &Path) -> HashMap<String, (u64, std::time::SystemTime)> {
+    let mut files = Vec::new();
+    collect_notes(wiki, &mut files);
+    files
+        .iter()
+        .filter_map(|p| {
+            let meta = fs::metadata(p).ok()?;
+            Some((rel_id(wiki, p), (meta.len(), meta.modified().ok()?)))
+        })
+        .collect()
+}
+
+#[derive(Clone, Serialize)]
+struct WikiChanged {
+    /// Notas nuevas desde la última comprobación.
+    added: Vec<String>,
+}
+
+/// Vigila `wiki/` para que el grafo se actualice cuando otro programa (Claude Code,
+/// Obsidian, Antigravity) crea, cambia o borra notas: emite `wiki-changed`.
+/// Se sondea cada segundo; para una wiki personal es barato y no necesita dependencias.
+pub fn watch(app: AppHandle) {
+    std::thread::spawn(move || {
+        let mut last: Option<(PathBuf, HashMap<String, (u64, std::time::SystemTime)>)> = None;
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let Ok(wiki) = vault_dir(&app, "wiki") else {
+                last = None;
+                continue;
+            };
+            let now = fingerprint(&wiki);
+            match &last {
+                // Otro vault: se toma como punto de partida sin avisar.
+                Some((dir, before)) if *dir == wiki => {
+                    if *before != now {
+                        let added = now
+                            .keys()
+                            .filter(|k| !before.contains_key(*k))
+                            .cloned()
+                            .collect();
+                        let _ = app.emit("wiki-changed", WikiChanged { added });
+                    }
+                }
+                _ => {}
+            }
+            last = Some((wiki, now));
+        }
+    });
 }
 
 #[tauri::command]
@@ -239,6 +290,63 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
     })
 }
 
+#[derive(Serialize)]
+pub struct NoteView {
+    id: String,
+    /// Cuerpo en Markdown, sin el frontmatter.
+    body: String,
+    /// Campos del frontmatter (`clave: valor`), en orden.
+    meta: Vec<(String, String)>,
+    /// Última modificación, `AAAA-MM-DD HH:MM`.
+    modified: Option<String>,
+}
+
+/// Separa el frontmatter YAML (`---` … `---` al principio) del cuerpo.
+fn split_frontmatter(text: &str) -> (Vec<(String, String)>, &str) {
+    let Some(rest) = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))
+    else {
+        return (Vec::new(), text);
+    };
+    let Some(end) = rest.find("\n---") else {
+        return (Vec::new(), text);
+    };
+    let meta = rest[..end]
+        .lines()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            let key = key.trim();
+            (!key.is_empty() && !key.starts_with(['-', ' ', '#']))
+                .then(|| (key.to_string(), value.trim().trim_matches('"').to_string()))
+        })
+        .collect();
+    let body = rest[end + 4..].trim_start_matches(['-']).trim_start();
+    (meta, body)
+}
+
+/// Contenido de una nota de `wiki/` para verla dentro de nexo.
+#[tauri::command]
+pub fn note_view(app: AppHandle, id: String) -> Result<NoteView, String> {
+    let file = resolve_inside(&vault_dir(&app, "wiki")?, &id)?;
+    let text = fs::read_to_string(&file).map_err(|e| format!("No se pudo leer la nota: {e}"))?;
+    let (meta, body) = split_frontmatter(&text);
+    let modified = fs::metadata(&file)
+        .and_then(|m| m.modified())
+        .ok()
+        .map(|t| {
+            chrono::DateTime::<chrono::Local>::from(t)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        });
+    Ok(NoteView {
+        id,
+        body: body.to_string(),
+        meta,
+        modified,
+    })
+}
+
 /// Abre una nota de `wiki/` con la aplicación predeterminada (Obsidian si está asociada a .md).
 #[tauri::command]
 pub fn open_note(app: AppHandle, id: String) -> Result<(), String> {
@@ -259,6 +367,23 @@ mod tests {
             extract_links(text),
             vec!["RAG", "agentes", "temas/chunking.md"]
         );
+    }
+
+    #[test]
+    fn separa_el_frontmatter() {
+        let (meta, body) =
+            split_frontmatter("---\ntype: tareas\nfuente: \"Classroom\"\n---\n\n# Tareas\n");
+        assert_eq!(
+            meta,
+            vec![
+                ("type".into(), "tareas".into()),
+                ("fuente".into(), "Classroom".into())
+            ]
+        );
+        assert_eq!(body, "# Tareas\n");
+        let (meta, body) = split_frontmatter("# Sin frontmatter");
+        assert!(meta.is_empty());
+        assert_eq!(body, "# Sin frontmatter");
     }
 
     #[test]
