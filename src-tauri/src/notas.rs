@@ -4,9 +4,11 @@
 //!   nexo mantiene en cada índice la sección entre `<!-- nexo:contenido -->` y
 //!   `<!-- /nexo:contenido -->` con enlaces a sus subtemas y notas; el resto del índice
 //!   (la descripción) es libre. Así todo el árbol aparece en el grafo.
-//! - Una **nota** es un `.md` con frontmatter `title`, `type` (`texto`, `lista` o `fecha`),
-//!   `date` (notas con fecha), `created` y `updated`; el cuerpo es Markdown normal
-//!   (las listas usan `- [ ]` / `- [x]`).
+//! - Una **nota** es un `.md` con frontmatter `title`, `created` y `updated` (y `date`
+//!   opcional). El cuerpo es Markdown normal, una línea por bloque, como lo escribe el
+//!   editor de nexo: casillas `- [ ]` / `- [x]`, viñetas, números, títulos, citas, código,
+//!   tablas y fechas `📅 AAAA-MM-DD` (la convención del plugin Tasks de Obsidian). Las notas
+//!   antiguas con `type: texto | lista | fecha` siguen valiendo: ese campo ya no se usa.
 //! - El escritorio de notas (cartas abiertas, posición, tamaño y capa) vive en
 //!   `.nexo/escritorio.json`, para que también Claude Code pueda abrir notas en él.
 //!
@@ -29,7 +31,6 @@ pub const DIR: &str = "wiki/notas";
 const INDEX: &str = "_index.md";
 const START: &str = "<!-- nexo:contenido -->";
 const END: &str = "<!-- /nexo:contenido -->";
-pub const KINDS: [&str; 3] = ["texto", "lista", "fecha"];
 const DESK: &str = ".nexo/escritorio.json";
 
 fn notes_dir(root: &Path) -> PathBuf {
@@ -151,7 +152,7 @@ pub struct NoteInfo {
     /// Relativa a `wiki/notas/`, p. ej. `rutinas/pecho/press-con-mancuernas.md`.
     path: String,
     title: String,
-    kind: String,
+    /// `date` del frontmatter o, si no tiene, la fecha 📅 más próxima que siga pendiente.
     date: Option<String>,
     updated: Option<String>,
     /// Primeras palabras del cuerpo, sin Markdown.
@@ -184,6 +185,26 @@ fn is_task(line: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+/// `📅 2026-10-10` → `2026-10-10`.
+fn date_mark(line: &str) -> Option<&str> {
+    let rest = line[line.find('📅')? + '📅'.len_utf8()..].trim_start();
+    let date = rest.get(..10)?;
+    let ok = date.char_indices().all(|(i, c)| match i {
+        4 | 7 => c == '-',
+        _ => c.is_ascii_digit(),
+    });
+    ok.then_some(date)
+}
+
+/// La fecha más próxima de las líneas que no están marcadas como hechas.
+fn due_date(body: &str) -> Option<String> {
+    body.lines()
+        .filter(|l| is_task(l) != Some(true))
+        .filter_map(date_mark)
+        .min()
+        .map(String::from)
 }
 
 fn preview(body: &str) -> String {
@@ -220,11 +241,9 @@ fn note_info(root: &Path, path: &Path) -> Option<NoteInfo> {
         title: get(&meta, "title")
             .map(String::from)
             .unwrap_or_else(|| pretty(&stem)),
-        kind: get(&meta, "type")
-            .filter(|k| KINDS.contains(k))
-            .unwrap_or("texto")
-            .to_string(),
-        date: get(&meta, "date").map(String::from),
+        date: get(&meta, "date")
+            .map(String::from)
+            .or_else(|| due_date(&body)),
         updated: get(&meta, "updated").map(String::from),
         preview: preview(&body),
         done: tasks.iter().filter(|d| **d).count(),
@@ -402,7 +421,6 @@ pub fn notes_tree(app: AppHandle) -> Result<Topic, String> {
 pub struct NoteDoc {
     path: String,
     title: String,
-    kind: String,
     date: Option<String>,
     updated: Option<String>,
     body: String,
@@ -419,10 +437,6 @@ pub fn note_read(app: AppHandle, path: String) -> Result<NoteDoc, String> {
         title: get(&meta, "title")
             .map(String::from)
             .unwrap_or_else(|| pretty(&stem)),
-        kind: get(&meta, "type")
-            .filter(|k| KINDS.contains(k))
-            .unwrap_or("texto")
-            .to_string(),
         date: get(&meta, "date").map(String::from),
         updated: get(&meta, "updated").map(String::from),
         body,
@@ -459,13 +473,7 @@ fn topic_dir(root: &Path, parent: &str) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-pub fn note_create(
-    app: AppHandle,
-    parent: String,
-    title: String,
-    kind: String,
-    date: Option<String>,
-) -> Result<String, String> {
+pub fn note_create(app: AppHandle, parent: String, title: String) -> Result<String, String> {
     let root = vault_root(&app)?;
     sync(&root)?;
     let dir = topic_dir(&root, &parent)?;
@@ -473,23 +481,13 @@ pub fn note_create(
     if title.is_empty() {
         return Err("La nota necesita un título.".into());
     }
-    let kind = if KINDS.contains(&kind.as_str()) {
-        kind
-    } else {
-        "texto".into()
-    };
     let name = free_name(&dir, &slug_or(title, "nota"), ".md");
     let stamp = now();
-    let mut meta = vec![
+    let meta = vec![
         ("title".to_string(), title.to_string()),
-        ("type".to_string(), kind.clone()),
+        ("created".to_string(), stamp.clone()),
+        ("updated".to_string(), stamp),
     ];
-    if kind == "fecha" {
-        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-        set(&mut meta, "date", Some(date.as_deref().unwrap_or(&today)));
-    }
-    meta.push(("created".into(), stamp.clone()));
-    meta.push(("updated".into(), stamp));
     fs::write(dir.join(&name), render(&meta, "")).map_err(|e| e.to_string())?;
     sync(&root)?;
     Ok(rel_of(&root, &dir.join(name)))
@@ -498,7 +496,6 @@ pub fn note_create(
 #[derive(Deserialize)]
 pub struct NoteChanges {
     title: Option<String>,
-    kind: Option<String>,
     /// `Some("")` quita la fecha.
     date: Option<String>,
     body: Option<String>,
@@ -514,11 +511,6 @@ pub fn note_save(app: AppHandle, path: String, changes: NoteChanges) -> Result<N
         && !title.is_empty()
     {
         set(&mut meta, "title", Some(title));
-    }
-    if let Some(kind) = changes.kind.as_deref()
-        && KINDS.contains(&kind)
-    {
-        set(&mut meta, "type", Some(kind));
     }
     if let Some(date) = changes.date.as_deref() {
         set(&mut meta, "date", Some(date));
@@ -710,6 +702,14 @@ mod tests {
                 .contains("Mi plan de entrenamiento.")
         );
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn fecha_pendiente_mas_proxima() {
+        let body = "- [x] Pagado 📅 2026-10-01\n- [ ] Renta 📅 2026-10-20\nCita médica 📅2026-10-12\n- [ ] Mal 📅 2026-1-5\n";
+        assert_eq!(due_date(body).as_deref(), Some("2026-10-12"));
+        assert_eq!(due_date("- [x] hecho 📅 2026-10-01"), None);
+        assert_eq!(date_mark("sin fecha"), None);
     }
 
     #[test]

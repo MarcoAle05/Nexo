@@ -10,6 +10,7 @@ mod mcp;
 mod nexo;
 mod notas;
 mod playwright;
+pub mod render;
 mod sources;
 mod usage;
 mod vault;
@@ -64,9 +65,12 @@ pub fn run() {
             notas::topic_rename,
             notas::notes_delete,
             notas::desk_load,
-            notas::desk_save
+            notas::desk_save,
+            render::render_info,
+            render::render_retry_gpu
         ])
         .setup(|app| {
+            render::attach(app);
             graph::watch(app.handle().clone());
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -77,6 +81,16 @@ pub fn run() {
             }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while building tauri application");
+        .on_window_event(|_, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                render::shutdown();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_, event| {
+            if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                render::shutdown();
+            }
+        });
 }

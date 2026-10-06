@@ -71,6 +71,7 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "futures-util",
+ "libc",
  "log",
  "portable-pty",
  "reqwest",
@@ -84,6 +85,7 @@ dependencies = [
  "tokio",
  "trash",
  "uuid",
+ "webkit2gtk",
 ]
 
 [[package]]

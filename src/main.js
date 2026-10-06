@@ -12,6 +12,7 @@ import { ask, open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
 import { createClaudeCode } from './claude-code.js';
+import { reconcile } from './dom.js';
 import { colorFor, createGraph } from './graph.js';
 import { createNotes } from './notes.js';
 import { renderMarkdown, resolveLink } from './note-view.js';
@@ -62,10 +63,14 @@ try {
   Object.assign(expanded, JSON.parse(localStorage.getItem('nexo.expanded') ?? '{}'));
 } catch {}
 
+// El grafo deja de dibujarse mientras está tapado (se conecta más abajo, al crearlo).
+let syncGraphActive = () => {};
+
 function renderExpanded() {
   const layout = $('layout');
   // Minimizada, la terminal no puede estar expandida.
   if (minimized) expanded.right = false;
+  syncGraphActive();
   layout.classList.toggle('expand-left', expanded.left);
   layout.classList.toggle('expand-right', expanded.right);
   layout.classList.toggle('expanded', expanded.left || expanded.right);
@@ -90,9 +95,18 @@ document.querySelectorAll('[data-expand]').forEach((b) =>
     try {
       localStorage.setItem('nexo.expanded', JSON.stringify(expanded));
     } catch {}
+    // Expandir o contraer el chat es para seguir escribiendo en él.
+    if (b.dataset.expand === 'right') focusChat();
   }),
 );
 renderExpanded();
+
+// Lleva el teclado al chat de la carta derecha: la terminal de Claude Code o el campo de Nexo.
+function focusChat() {
+  if (minimized || activityOpen) return;
+  if (mode !== 'claude-code') $('prompt-input').focus();
+  else if (vault && desktop) claudeCode.focus();
+}
 
 function setMinimized(value) {
   minimized = value;
@@ -101,8 +115,10 @@ function setMinimized(value) {
     localStorage.setItem('nexo.minimized', String(minimized));
     localStorage.setItem('nexo.expanded', JSON.stringify(expanded));
   } catch {}
-  // xterm deja de dibujar mientras está oculto: al volver se reajusta y enfoca.
-  if (!minimized && mode === 'claude-code' && vault && desktop) requestAnimationFrame(() => claudeCode.show());
+  if (minimized) return;
+  // xterm deja de dibujar mientras está oculto: al volver se repinta y recupera el foco.
+  if (mode === 'claude-code' && vault && desktop && !activityOpen) requestAnimationFrame(() => claudeCode.show());
+  else focusChat();
 }
 $('term-minimize').addEventListener('click', () => setMinimized(true));
 $('term-restore').addEventListener('click', () => setMinimized(false));
@@ -567,7 +583,11 @@ function renderSources() {
   });
 
   const visible = filter === 'all' ? sources : sources.filter((s) => s.kind === filter);
-  $('source-list').replaceChildren(...visible.map(sourceRow));
+  reconcile($('source-list'), visible, {
+    key: (s) => s.path,
+    sig: (s) => JSON.stringify([s, converting, excluded.has(s.path)]),
+    build: sourceRow,
+  });
   const inDetail = Boolean(detailPath || noteNode);
   $('source-list').hidden = inDetail || visible.length === 0;
   $('sources-empty').hidden = inDetail || visible.length > 0;
@@ -900,9 +920,36 @@ function renderConnections(list) {
   connButton.title = list.map((c) => `${c.name}: ${STATE_LABEL[c.state] ?? '…'}`).join(' · ');
 }
 
+// Gráficos: si WebKit pinta por GPU (y a qué refresco) o volvió a la CPU tras un fallo.
+async function refreshRender() {
+  try {
+    const info = await invoke('render_info');
+    $('render-dot').dataset.state = info.gpu ? 'ok' : 'warn';
+    $('render-state').textContent = info.gpu ? 'GPU' : 'CPU';
+    $('render-detail').textContent = info.gpu
+      ? `WebKit pinta con la tarjeta gráfica${info.hz ? `, a ${info.hz} Hz como tu monitor` : ''}.`
+      : info.fallback
+        ? 'La GPU falló y nexo volvió a pintar por CPU: va más lento.'
+        : 'Una variable de entorno de WebKit obliga a pintar por CPU.';
+    $('render-retry').hidden = !info.fallback;
+  } catch (error) {
+    $('render-state').textContent = 'Error';
+    $('render-detail').textContent = String(error);
+  }
+}
+$('render-retry').addEventListener('click', async () => {
+  const ok = await ask('nexo se reiniciará para volver a pintar con la tarjeta gráfica. Si vuelve a fallar, regresará a la CPU.', {
+    title: 'Volver a probar la GPU',
+    okLabel: 'Reiniciar',
+    cancelLabel: 'Cancelar',
+  });
+  if (ok) invoke('render_retry_gpu').catch(fail);
+});
+
 async function refreshConnections() {
   if (!desktop) return;
   refreshBrowser();
+  refreshRender();
   $('conn-dot').dataset.state = 'checking';
   try {
     const list = await invoke('connections_status');
@@ -1181,11 +1228,17 @@ function neighborsOf(id) {
 
 const NODE_STAR = '<svg width="16" height="16" viewBox="0 0 20 20" fill="currentColor" stroke="none"><path d="M10 1.5c.6 4.6 3.9 7.9 8.5 8.5-4.6.6-7.9 3.9-8.5 8.5-.6-4.6-3.9-7.9-8.5-8.5 4.6-.6 7.9-3.9 8.5-8.5z"/></svg>';
 
+let nodeShown = '';
 function renderNode() {
   const node = noteNode;
-  if (!node) return;
+  if (!node) return (nodeShown = '');
   const missing = node.kind === 'missing';
   const linked = neighborsOf(node.id);
+  // La wiki avisa de cambios a menudo: si la nota y sus conexiones siguen igual, no se
+  // repinta (repintar el cuerpo entero hacía parpadear la carta).
+  const shown = JSON.stringify([node, noteView, linked.map((n) => [n.id, n.label, n.kind])]);
+  if (shown === nodeShown) return;
+  nodeShown = shown;
   $('note-icon').innerHTML = NODE_STAR;
   $('note-icon').style.color = colorFor(node);
   $('note-eyebrow').textContent = node.group && !missing ? `${SEARCH_TYPE[node.kind]} · ${node.group}` : SEARCH_TYPE[node.kind];
@@ -1334,8 +1387,10 @@ function renderActivity() {
   $('rail-activity').hidden = active === 0;
   if (!activityOpen) return;
   $('activity-empty').hidden = list.length > 0;
-  $('activity-list').replaceChildren(
-    ...list.map((job) => {
+  reconcile($('activity-list'), list, {
+    key: (job) => job.id,
+    sig: (job) => JSON.stringify(job) + jobStatus(job),
+    build: (job) => {
       const li = document.createElement('li');
       li.className = `job ${job.status}`;
       const core = document.createElement('div');
@@ -1368,8 +1423,8 @@ function renderActivity() {
         core.append(Object.assign(document.createElement('p'), { className: 'job-foot', textContent: job.error ?? `→ ${job.result}` }));
       }
       return li;
-    }),
-  );
+    },
+  });
 }
 
 function showActivity(open) {
@@ -1517,11 +1572,14 @@ function setView(next) {
   try {
     localStorage.setItem('nexo.view', view);
   } catch {}
+  syncGraphActive();
   if (inNotes) {
     activateNotes();
     requestAnimationFrame(() => notes.relayout());
   }
 }
+syncGraphActive = () => graph.setActive(view === 'grafo' && !expanded.left && !expanded.right);
+syncGraphActive();
 document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
 try {
   if (localStorage.getItem('nexo.view') === 'notas') setView('notas');

@@ -46,6 +46,18 @@
             </button>
             <p class="browser-note" id="browser-note" role="status" aria-live="polite" hidden></p>
             <div class="vault-sep" aria-hidden="true"></div>
+            <div class="vault-menu-title">Gráficos</div>
+            <div class="conn-item" id="render-item">
+              <span class="conn-dot" id="render-dot" data-state="checking" aria-hidden="true"></span>
+              <span class="conn-name">Pintado de la interfaz<span class="conn-kind">WEBKIT</span></span>
+              <span class="conn-state" id="render-state">Comprobando…</span>
+              <span class="conn-detail" id="render-detail"></span>
+            </div>
+            <button type="button" class="vault-option browser-load" id="render-retry" hidden>
+              <span>Volver a probar la GPU</span>
+              <small>nexo se reinicia</small>
+            </button>
+            <div class="vault-sep" aria-hidden="true"></div>
             <button type="button" class="vault-option" id="conn-refresh">Comprobar de nuevo</button>
           </div>
         </div>
@@ -261,15 +273,6 @@
               <span class="visually-hidden" id="notes-create-input-label">Título</span>
               <input type="text" id="notes-create-input" autocomplete="off" spellcheck="true" placeholder="Título de la nota">
             </label>
-            <div class="segmented small notes-kind" role="group" aria-label="Tipo de nota" id="notes-kind">
-              <button type="button" aria-pressed="true" data-kind="texto">Texto</button>
-              <button type="button" aria-pressed="false" data-kind="lista">Lista</button>
-              <button type="button" aria-pressed="false" data-kind="fecha">Fecha</button>
-            </div>
-            <label class="notes-create-date" id="notes-create-date" hidden>
-              <span class="notes-create-date-label">Fecha</span>
-              <input type="date" id="notes-create-date-input">
-            </label>
             <div class="notes-create-actions">
               <button type="button" class="chip" id="notes-create-cancel">Cancelar</button>
               <button type="submit" class="chip notes-create-ok" id="notes-create-ok">Crear</button>
@@ -334,7 +337,7 @@
           <div class="desk-empty" id="desk-empty">
             <svg width="44" height="44" viewBox="0 0 22 22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="0.7"><rect x="3" y="4" width="10" height="12" rx="2"/><rect x="9" y="7" width="10" height="12" rx="2"/></svg>
             <p class="desk-empty-title">Escritorio vacío</p>
-            <p class="desk-empty-text">Abre una nota desde la carta de la izquierda: aparecerá aquí como una carta que puedes mover, redimensionar y apilar.</p>
+            <p class="desk-empty-text">Abre o crea una nota desde la carta de la izquierda: aparecerá aquí como una carta donde escribir, que puedes mover, redimensionar y apilar.</p>
           </div>
         </div>
         <div class="toolbar desk-toolbar" id="desk-toolbar" role="toolbar" aria-label="Escritorio de notas" hidden>

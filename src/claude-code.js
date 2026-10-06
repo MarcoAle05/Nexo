@@ -56,9 +56,18 @@ export function createClaudeCode({ container, exitBox, exitText, onError }) {
     container.parentElement.addEventListener('mousedown', () => requestAnimationFrame(() => term.focus()));
     term.onData((data) => running && send(data));
     term.onResize(({ cols, rows }) => running && invoke('claude_code_resize', { cols, rows }).catch(() => {}));
-    new ResizeObserver(() => {
+    new ResizeObserver(scheduleFit).observe(container);
+  }
+
+  // Al expandir, contraer o minimizar las cartas el panel cambia de ancho en cada fotograma
+  // de la animación. Cada reajuste redimensiona el PTY y Claude Code redibuja su pantalla
+  // entera, así que se reajusta una sola vez, cuando el tamaño deja de cambiar.
+  let fitTimer = 0;
+  function scheduleFit() {
+    clearTimeout(fitTimer);
+    fitTimer = setTimeout(() => {
       if (container.offsetParent) fit.fit();
-    }).observe(container);
+    }, 140);
   }
 
   // xterm mide las celdas al abrirse: primero se asegura Geist Mono (normal y negrita).
@@ -102,11 +111,15 @@ export function createClaudeCode({ container, exitBox, exitText, onError }) {
     show() {
       if (running) {
         requestAnimationFrame(() => {
-          fit.fit();
           term.refresh(0, term.rows - 1);
           term.focus();
         });
+        scheduleFit();
       } else if (!term || exitBox.hidden) start();
+    },
+    // Lleva el teclado a la terminal sin arrancar nada.
+    focus() {
+      if (running) term.focus();
     },
     restart: start,
     get running() {

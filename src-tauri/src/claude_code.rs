@@ -101,10 +101,13 @@ Puedes crearlas, editarlas, moverlas y borrarlas igual que el usuario, estés en
 los subtemas son carpetas dentro de carpetas, sin límite de niveles (p. ej. wiki/notas/rutinas/push-pull-legs/pecho/). \
 En cada _index.md nexo regenera solo la sección entre <!-- nexo:contenido --> y <!-- /nexo:contenido --> con los \
 enlaces a sus subtemas y notas: no la escribas tú; el texto fuera de esa sección (descripción) sí puedes editarlo.\n\
-- Una nota es un .md con frontmatter: title (nombre visible), type (texto | lista | fecha), date: AAAA-MM-DD (solo \
-en las de tipo fecha, o si la nota tiene fecha), created y updated (AAAA-MM-DD HH:MM; actualiza updated al editar). \
-El cuerpo es Markdown; las listas para marcar usan «- [ ] elemento» / «- [x] elemento». Nombre de archivo en \
-kebab-case; no lo cambies al renombrar (cambia title), para no romper enlaces.\n\
+- Una nota es un .md con frontmatter: title (nombre visible), created y updated (AAAA-MM-DD HH:MM; actualiza \
+updated al editar); no lleva type. El usuario la escribe en nexo como un bloc de notas por bloques, así que el \
+cuerpo va una línea por bloque: texto, títulos (#, ##, ###), casillas «- [ ] elemento» / «- [x] hecho», viñetas \
+«- », listas «1. », citas «> », separador «---», bloques de código y tablas Markdown; los subniveles de una lista \
+se sangran con tabulador. Para fechas y vencimientos escribe «📅 AAAA-MM-DD» en la línea (p. ej. «- [ ] Pagar la \
+renta 📅 2026-10-31»): nexo la muestra como fecha y avisa si vence. Nombre de archivo en kebab-case; no lo \
+cambies al renombrar (cambia title), para no romper enlaces.\n\
 - Para mostrar notas en el escritorio de notas, edita .nexo/escritorio.json (en la raíz del vault): \
 {{\"cards\":[{{\"path\":\"<ruta relativa a wiki/notas/, p. ej. rutinas/pecho/press.md>\",\"x\":24,\"y\":24,\"w\":340,\"h\":280,\"z\":1}}]}} \
 (x, y, w, h en píxeles dentro del escritorio; z es la capa, mayor = encima). Conserva las cartas que ya estén y \
@@ -361,5 +364,6 @@ mod tests {
         assert!(prompt.contains("wiki/notas/"));
         assert!(prompt.contains(r#"{"cards":[{"path":"#));
         assert!(prompt.contains("<!-- nexo:contenido -->"));
+        assert!(prompt.contains("📅 AAAA-MM-DD"));
     }
 }

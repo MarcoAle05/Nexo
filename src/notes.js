@@ -1,23 +1,25 @@
 // Apartado Notas: la carta de la izquierda muestra temas, subtemas y notas de
 // wiki/notas/, y el centro es un escritorio donde cada nota abierta es una carta que se
-// mueve, se redimensiona y se apila. Todo se guarda en Markdown (notas.rs); la
-// disposición del escritorio, en .nexo/escritorio.json (Claude Code también la edita).
+// mueve, se redimensiona y se apila. Las notas se escriben directamente en la carta, línea a
+// línea (note-editor.js), y se guardan en Markdown (notas.rs); la disposición del
+// escritorio, en .nexo/escritorio.json (Claude Code también la edita).
+
+import { reconcile } from './dom.js';
+import { createNoteEditor, isoToday, parseDate, relativeDay, taskCount } from './note-editor.js';
 
 const $ = (id) => document.getElementById(id);
 
-const KIND_LABEL = { texto: 'Texto', lista: 'Lista', fecha: 'Fecha' };
 const icon = (paths, size = 16) =>
   `<svg width="${size}" height="${size}" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 const ICON = {
-  texto: '<path d="M5 2.5h7l3 3v12H5z"/><path d="M7.5 9h5M7.5 12h5M7.5 15h3"/>',
+  nota: '<path d="M5 2.5h7l3 3v12H5z"/><path d="M7.5 9h5M7.5 12h5M7.5 15h3"/>',
   lista: '<rect x="3" y="4" width="4" height="4" rx="1"/><path d="m3.8 13.6 1.2 1.2 2.2-2.4M10 6h7M10 13.5h7"/>',
-  fecha: '<rect x="3" y="4.5" width="14" height="12.5" rx="2"/><path d="M3 8.5h14M7 2.5v4M13 2.5v4"/>',
   tema: '<path d="M2.5 6V15.5h15V7.5H9.5L8 5.5H2.5z"/>',
   chevron: '<path d="m8 5 5 5-5 5"/>',
   pencil: '<path d="M13.5 3.5l3 3L7 16H4v-3z"/>',
   trash: '<path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10"/>',
-  check: '<path d="m4 10 4 4 8-8"/>',
   close: '<path d="m5 5 10 10M15 5 5 15"/>',
+  markdown: '<path d="m7 6-4 4 4 4M13 6l4 4-4 4"/>',
   front: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M4 13V5a1 1 0 0 1 1-1h8"/>',
   back: '<rect x="3" y="3" width="10" height="10" rx="2"/><path d="M16 7v8a1 1 0 0 1-1 1H7" stroke-dasharray="2 2"/>',
 };
@@ -25,38 +27,9 @@ const ICON = {
 const MIN_W = 220;
 const MIN_H = 150;
 const GAP = 14;
+const CARD_W = 380;
+const CARD_H = 440;
 
-// Líneas de tarea (`- [ ]`, `1. [x]`) fuera de bloques de código, en el orden en que
-// marked dibuja sus casillas.
-const TASK = /^(\s*(?:[-*+]|\d+[.)])\s+)\[( |x|X)\](?=\s|$)/;
-function taskLines(lines) {
-  const out = [];
-  let code = false;
-  lines.forEach((line, i) => {
-    if (/^\s*(```|~~~)/.test(line)) code = !code;
-    else if (!code && TASK.test(line)) out.push(i);
-  });
-  return out;
-}
-
-const pad = (n) => String(n).padStart(2, '0');
-const isoToday = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-};
-function parseDate(text) {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text ?? '');
-  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : null;
-}
-function relativeDay(date) {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const days = Math.round((date - today) / 86_400_000);
-  if (days === 0) return 'hoy';
-  if (days === 1) return 'mañana';
-  if (days === -1) return 'ayer';
-  return days > 0 ? `en ${days} días` : `hace ${-days} días`;
-}
 // «2026-10-02 18:30» → «hoy 18:30», «ayer 9:05» o «2 oct 18:30».
 function editedText(stamp) {
   const date = parseDate(stamp);
@@ -67,13 +40,14 @@ function editedText(stamp) {
   return `${day} ${time}`.trim();
 }
 const shortDate = (date) => date.toLocaleDateString('es', { weekday: 'short', day: 'numeric', month: 'short' });
+// El backend guarda el cuerpo con un salto final y sin líneas vacías al principio.
+const same = (a, b) => (a ?? '').replace(/^\n+|\s+$/g, '') === (b ?? '').replace(/^\n+|\s+$/g, '');
 
 export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
   let tree = null;
   let current = '';
   let loaded = false;
   let createMode = null; // 'nota' | 'tema'
-  let createKind = 'texto';
   const cards = new Map(); // ruta → carta
   const surface = $('desk-surface');
 
@@ -164,12 +138,12 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     return li;
   }
 
+  const startOfToday = () => new Date(new Date().setHours(0, 0, 0, 0));
+
   function noteMeta(note) {
     const parts = [];
-    if (note.kind === 'fecha' || note.date) {
-      const date = parseDate(note.date);
-      if (date) parts.push(`${shortDate(date)} · ${relativeDay(date)}`);
-    }
+    const date = parseDate(note.date);
+    if (date) parts.push(`${shortDate(date)} · ${relativeDay(date)}`);
     if (note.total) parts.push(`${note.done}/${note.total}`);
     if (!parts.length && note.preview) parts.push(note.preview);
     return parts.join(' · ');
@@ -179,19 +153,17 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     const { li, row } = rowShell('note-row');
     row.classList.toggle('is-open', cards.has(note.path));
     const date = parseDate(note.date);
-    if (date && date < new Date(new Date().setHours(0, 0, 0, 0)) && note.done < note.total) row.classList.add('overdue');
+    if (date && date < startOfToday() && note.done < note.total) row.classList.add('overdue');
     const main = document.createElement('button');
     main.type = 'button';
     main.className = 'row-main';
-    main.innerHTML = `<span class="row-icon">${icon(ICON[note.kind] ?? ICON.texto)}</span>
-      <span class="row-text"><span class="row-title"></span>
-      <span class="row-meta"><span class="note-type-badge"></span><span class="row-meta-text"></span></span></span>
+    main.innerHTML = `<span class="row-icon">${icon(note.total ? ICON.lista : ICON.nota)}</span>
+      <span class="row-text"><span class="row-title"></span><span class="row-meta"><span class="row-meta-text"></span></span></span>
       <span class="row-open-dot" aria-hidden="true"></span>`;
     main.querySelector('.row-title').textContent = note.title;
-    main.querySelector('.note-type-badge').textContent = KIND_LABEL[note.kind] ?? 'Texto';
     main.querySelector('.row-meta-text').textContent = noteMeta(note);
     main.title = cards.has(note.path) ? 'Abierta en el escritorio' : 'Abrir en el escritorio';
-    main.addEventListener('click', () => openNote(note.path));
+    main.addEventListener('click', () => openNote(note.path, { focus: true }));
     const actions = document.createElement('div');
     actions.className = 'row-actions';
     actions.append(actionButton(ICON.trash, `Borrar ${note.title}`, () => remove(note.path, note.title, false)));
@@ -238,8 +210,18 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
 
     $('notes-description').textContent = topic.description;
     $('notes-description').hidden = !topic.description || !topic.path;
-    $('notes-topics').replaceChildren(...topic.topics.map(topicRow));
-    $('notes-notes').replaceChildren(...topic.notes.map(noteRow));
+    // Solo cambian las filas que cambiaron: recargar el árbol (cada vez que se guarda una
+    // nota) no hace parpadear la lista.
+    reconcile($('notes-topics'), topic.topics, {
+      key: (t) => t.path,
+      sig: (t) => JSON.stringify([t.title, t.topics.length, t.notes.length, countNotes(t)]),
+      build: topicRow,
+    });
+    reconcile($('notes-notes'), topic.notes, {
+      key: (n) => n.path,
+      sig: (n) => JSON.stringify([n, cards.has(n.path), isoToday()]),
+      build: noteRow,
+    });
     $('notes-topics-label').hidden = !topic.topics.length;
     $('notes-notes-label').hidden = !topic.notes.length;
     const empty = !topic.topics.length && !topic.notes.length;
@@ -303,7 +285,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       return fail(error);
     }
     for (const key of [...cards.keys()]) {
-      if (key === path || key.startsWith(`${path}/`)) closeCard(key, false);
+      if (key === path || key.startsWith(`${path}/`)) closeCard(key, { persist: false, save: false });
     }
     saveDesk();
     await loadTree();
@@ -319,10 +301,8 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     $('notes-create-label').textContent = mode === 'tema' ? (topic?.path ? 'Nuevo subtema' : 'Nuevo tema') : 'Nueva nota';
     $('notes-create-where').textContent = topic ? `en ${topic.title}` : '';
     const input = $('notes-create-input');
-    input.placeholder = mode === 'tema' ? 'Nombre del tema' : 'Título de la nota';
+    input.placeholder = mode === 'tema' ? 'Nombre del tema' : 'Título (opcional)';
     $('notes-create-input-label').textContent = mode === 'tema' ? 'Nombre del tema' : 'Título de la nota';
-    $('notes-kind').hidden = mode === 'tema';
-    setCreateKind(mode === 'tema' ? 'texto' : createKind);
     input.value = '';
     input.focus();
   }
@@ -332,29 +312,17 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     $('notes-create').hidden = true;
   }
 
-  function setCreateKind(kind) {
-    createKind = kind;
-    $('notes-kind').querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.kind === kind)));
-    const dated = createMode === 'nota' && kind === 'fecha';
-    $('notes-create-date').hidden = !dated;
-    if (dated && !$('notes-create-date-input').value) $('notes-create-date-input').value = isoToday();
-  }
-
   $('notes-new-note').addEventListener('click', () => (createMode === 'nota' ? closeCreate() : openCreate('nota')));
   $('notes-new-topic').addEventListener('click', () => (createMode === 'tema' ? closeCreate() : openCreate('tema')));
-  $('notes-kind').addEventListener('click', (event) => {
-    const button = event.target.closest('button[data-kind]');
-    if (button) setCreateKind(button.dataset.kind);
-  });
   $('notes-create-cancel').addEventListener('click', closeCreate);
   $('notes-create').addEventListener('keydown', (event) => {
     if (event.key === 'Escape') closeCreate();
   });
   $('notes-create').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const title = $('notes-create-input').value.trim();
-    if (!title) return $('notes-create-input').focus();
     const mode = createMode;
+    const title = $('notes-create-input').value.trim() || (mode === 'nota' ? 'Sin título' : '');
+    if (!title) return $('notes-create-input').focus();
     try {
       if (mode === 'tema') {
         const path = await invoke('topic_create', { parent: current, title });
@@ -362,11 +330,11 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
         current = path;
         await loadTree();
       } else {
-        const date = createKind === 'fecha' ? $('notes-create-date-input').value || isoToday() : null;
-        const path = await invoke('note_create', { parent: current, title, kind: createKind, date });
+        const path = await invoke('note_create', { parent: current, title });
         closeCreate();
         await loadTree();
-        await openNote(path, { edit: createKind !== 'lista', focusAdd: createKind === 'lista' });
+        // La nota se abre lista para escribir.
+        await openNote(path, { focus: true });
       }
     } catch (error) {
       fail(error);
@@ -462,30 +430,49 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
         </div>
         <div class="desk-card-tools"></div>
       </header>
-      <div class="desk-card-config" hidden>
-        <div class="segmented small desk-kind" role="group" aria-label="Tipo de nota">
-          <button type="button" data-kind="texto">Texto</button>
-          <button type="button" data-kind="lista">Lista</button>
-          <button type="button" data-kind="fecha">Fecha</button>
-        </div>
-        <input type="date" class="desk-date-input" aria-label="Fecha de la nota">
-      </div>
-      <div class="desk-date-block" hidden><span class="desk-date"></span><span class="desk-date-sub"></span></div>
-      <div class="desk-card-body note-body"></div>
-      <textarea class="desk-editor" spellcheck="true" aria-label="Contenido en Markdown" hidden></textarea>
-      <form class="desk-add" hidden><input type="text" class="desk-add-item" placeholder="Añadir elemento" aria-label="Añadir elemento a la lista" autocomplete="off"></form>
+      <div class="desk-card-body"></div>
+      <textarea class="desk-editor" spellcheck="true" aria-label="Markdown de la nota" hidden></textarea>
       <span class="desk-resize" aria-hidden="true"></span>`;
     card.el = el;
+    const body = el.querySelector('.desk-card-body');
+    const source = el.querySelector('.desk-editor');
     const tools = el.querySelector('.desk-card-tools');
-    card.editButton = cardButton(ICON.pencil, 'Editar', () => setEditing(card, !card.editing), 'card-edit');
+    card.sourceButton = cardButton(ICON.markdown, 'Ver el Markdown', () => setSource(card, !card.source), 'card-source');
     tools.append(
-      card.editButton,
+      cardButton(ICON.pencil, 'Renombrar', () => renameCard(card)),
+      card.sourceButton,
       cardButton(ICON.front, 'Traer al frente', () => bringToFront(card)),
       cardButton(ICON.back, 'Enviar al fondo', () => sendToBack(card)),
       cardButton(ICON.close, 'Cerrar del escritorio', () => closeCard(card.path)),
     );
 
-    // Mover: se arrastra por la cabecera.
+    card.editor = createNoteEditor(body, {
+      onChange(markdown) {
+        card.draft = markdown;
+        scheduleSave(card);
+        scheduleHead(card);
+      },
+      onLink: (link) => onLink(link, card.path),
+      onEscape: () => el.focus({ preventScroll: true }),
+      renderTable: renderMarkdown,
+    });
+
+    // Al tocar una carta, pasa al frente.
+    el.addEventListener('pointerdown', () => bringToFront(card), true);
+    // Al salir de la carta se guarda lo pendiente y, si la nota cambió fuera, se recarga.
+    el.addEventListener('focusout', (event) => {
+      if (el.contains(event.relatedTarget)) return;
+      flush(card).then(() => {
+        if (card.stale && !busy(card)) {
+          card.stale = false;
+          reloadCard(card);
+        }
+      });
+    });
+
+    // Mover: se arrastra por la cabecera. Mientras se arrastra solo cambia `translate` (no
+    // hay que recalcular la página en cada movimiento del ratón). No vale `transform`: la
+    // animación de entrada de la carta lo fija al terminar y anularía el desplazamiento.
     const head = el.querySelector('.desk-card-head');
     head.addEventListener('pointerdown', (event) => {
       if (event.button !== 0 || event.target.closest('button, input, textarea')) return;
@@ -496,15 +483,15 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       head.setPointerCapture(event.pointerId);
       const move = (e) => {
         const { w: W } = deskSize();
-        card.x = Math.max(-card.w + 80, Math.min(start.x + e.clientX - start.px, W - 80));
+        card.x = Math.max(-card.w + 80, Math.min(start.x + e.clientX - start.px, W - 80 + surface.scrollLeft));
         card.y = Math.max(0, start.y + e.clientY - start.py);
-        el.style.left = `${card.x}px`;
-        el.style.top = `${card.y}px`;
+        el.style.translate = `${card.x - start.x}px ${card.y - start.y}px`;
       };
       const up = () => {
         head.removeEventListener('pointermove', move);
         el.classList.remove('dragging');
         card.x = Math.max(0, card.x);
+        el.style.translate = '';
         place(card);
         saveDesk();
       };
@@ -513,7 +500,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       head.addEventListener('pointercancel', up, { once: true });
     });
     head.addEventListener('dblclick', (event) => {
-      if (!event.target.closest('button')) setEditing(card, true, { focusTitle: true });
+      if (!event.target.closest('button')) renameCard(card);
     });
 
     // Redimensionar: por la esquina inferior derecha.
@@ -528,7 +515,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       grip.setPointerCapture(event.pointerId);
       const move = (e) => {
         const { w: W } = deskSize();
-        card.w = Math.max(MIN_W, Math.min(start.w + e.clientX - start.px, W - card.x));
+        card.w = Math.max(MIN_W, Math.min(start.w + e.clientX - start.px, W - card.x + surface.scrollLeft));
         card.h = Math.max(MIN_H, start.h + e.clientY - start.py);
         el.style.width = `${card.w}px`;
         el.style.height = `${card.h}px`;
@@ -543,272 +530,211 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       grip.addEventListener('pointercancel', up, { once: true });
     });
 
-    // Edición.
-    const editor = el.querySelector('.desk-editor');
-    editor.addEventListener('input', () => {
-      card.draft = editor.value;
+    // Markdown a la vista: para tablas largas o pegar una nota entera.
+    source.addEventListener('input', () => {
+      card.draft = source.value;
       scheduleSave(card);
+      scheduleHead(card);
     });
-    editor.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') setEditing(card, false);
-    });
-    el.querySelector('.desk-kind').addEventListener('click', (event) => {
-      const b = event.target.closest('button[data-kind]');
-      if (!b || b.dataset.kind === card.doc?.kind) return;
-      const changes = { kind: b.dataset.kind };
-      if (b.dataset.kind === 'fecha' && !card.doc?.date) changes.date = isoToday();
-      save(card, changes);
-    });
-    el.querySelector('.desk-date-input').addEventListener('change', (event) => save(card, { date: event.target.value || '' }));
-    el.querySelector('.desk-add').addEventListener('submit', (event) => {
-      event.preventDefault();
-      const input = el.querySelector('.desk-add-item');
-      const text = input.value.trim();
-      if (!text || !card.doc) return;
-      input.value = '';
-      const body = card.doc.body.replace(/\s+$/, '');
-      save(card, { body: `${body ? `${body}\n` : ''}- [ ] ${text}\n` }, { keepFocus: true });
-    });
-    el.querySelector('.desk-card-body').addEventListener('click', (event) => {
-      const link = event.target.closest('a');
-      if (!link) return;
-      event.preventDefault();
-      onLink(link, card.path);
+    source.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') setSource(card, false);
     });
     return el;
   }
 
-  function renderCard(card) {
+  // Cabecera de la carta: icono, título y «3/5 · editada hoy 18:30».
+  function renderHead(card) {
     const { el, doc } = card;
     if (!el) return;
-    const kind = doc?.kind ?? 'texto';
-    el.dataset.kind = kind;
-    el.classList.toggle('editing', card.editing);
-    el.querySelector('.desk-card-icon').innerHTML = icon(ICON[kind] ?? ICON.texto);
+    const markdown = card.draft ?? doc?.body ?? '';
+    const [done, total] = taskCount(markdown);
+    el.querySelector('.desk-card-icon').innerHTML = icon(total ? ICON.lista : ICON.nota);
     const title = el.querySelector('.desk-card-title');
     if (!title.querySelector('input')) title.textContent = doc?.title ?? 'Cargando…';
-
-    const lines = (doc?.body ?? '').split('\n');
-    const tasks = taskLines(lines);
-    const done = tasks.filter((i) => /\[(x|X)\]/.test(lines[i])).length;
-    const meta = [KIND_LABEL[kind]];
-    if (tasks.length) meta.push(`${done}/${tasks.length}`);
+    const meta = [];
+    if (total) meta.push(`${done}/${total}`);
+    const date = parseDate(doc?.date);
+    if (date) meta.push(`${date.toLocaleDateString('es', { day: 'numeric', month: 'short' })} · ${relativeDay(date)}`);
     if (doc?.updated) meta.push(`editada ${editedText(doc.updated)}`);
     el.querySelector('.desk-card-meta').textContent = meta.join(' · ');
+  }
 
-    // Fecha destacada.
-    const date = parseDate(doc?.date);
-    const block = el.querySelector('.desk-date-block');
-    block.hidden = !date || card.editing;
-    if (date) {
-      el.querySelector('.desk-date').textContent = date.toLocaleDateString('es', { day: 'numeric', month: 'short' });
-      el.querySelector('.desk-date-sub').textContent = `${date.toLocaleDateString('es', { weekday: 'long' })} · ${relativeDay(date)}`;
-    }
-
-    // Configuración (solo editando).
-    const config = el.querySelector('.desk-card-config');
-    config.hidden = !card.editing;
-    config.querySelectorAll('.desk-kind button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.kind === kind)));
-    const dateInput = config.querySelector('.desk-date-input');
-    dateInput.hidden = kind !== 'fecha' && !doc?.date;
-    if (document.activeElement !== dateInput) dateInput.value = doc?.date ?? '';
-
-    const body = el.querySelector('.desk-card-body');
-    const editor = el.querySelector('.desk-editor');
-    body.hidden = card.editing;
-    editor.hidden = !card.editing;
-    el.querySelector('.desk-add').hidden = card.editing || kind !== 'lista';
-    card.editButton.innerHTML = icon(card.editing ? ICON.check : ICON.pencil, 14);
-    card.editButton.title = card.editing ? 'Terminar de editar' : 'Editar';
-    card.editButton.setAttribute('aria-label', card.editButton.title);
-
-    if (card.editing) {
-      if (document.activeElement !== editor) editor.value = card.draft ?? doc?.body ?? '';
-      return;
-    }
-    if (!doc) {
-      body.innerHTML = '<p class="desk-card-placeholder">Cargando…</p>';
-      return;
-    }
-    if (!doc.body.trim()) {
-      body.innerHTML = '';
-      const p = document.createElement('p');
-      p.className = 'desk-card-placeholder';
-      p.textContent = kind === 'lista' ? 'Lista vacía: añade el primer elemento abajo.' : 'Nota vacía. Pulsa el lápiz o haz doble clic en la cabecera para escribir.';
-      body.append(p);
-      return;
-    }
-    body.innerHTML = renderMarkdown(doc.body);
-    // Casillas: marcarlas edita el Markdown; en las listas, cada elemento se puede quitar.
-    body.querySelectorAll('input[type="checkbox"]').forEach((box, index) => {
-      box.disabled = false;
-      const item = box.closest('li');
-      item?.classList.add('desk-check-item');
-      item?.classList.toggle('done', box.checked);
-      box.addEventListener('change', () => toggleTask(card, index, box.checked));
-      if (kind === 'lista' && item) {
-        const del = cardButton(ICON.close, 'Quitar elemento', () => removeTask(card, index), 'item-remove');
-        item.append(del);
-      }
+  function scheduleHead(card) {
+    if (card.headFrame) return;
+    card.headFrame = requestAnimationFrame(() => {
+      card.headFrame = 0;
+      renderHead(card);
     });
   }
 
-  function toggleTask(card, index, checked) {
-    const lines = card.doc.body.split('\n');
-    const line = taskLines(lines)[index];
-    if (line == null) return;
-    lines[line] = lines[line].replace(TASK, (_, lead) => `${lead}[${checked ? 'x' : ' '}]`);
-    save(card, { body: lines.join('\n') });
-  }
+  const busy = (card) =>
+    card.draft != null || card.editor.hasFocus() || card.el.querySelector('.desk-title-input') != null || document.activeElement === card.el.querySelector('.desk-editor');
 
-  function removeTask(card, index) {
-    const lines = card.doc.body.split('\n');
-    const line = taskLines(lines)[index];
-    if (line == null) return;
-    lines.splice(line, 1);
-    save(card, { body: lines.join('\n') });
-  }
-
-  async function save(card, changes, { keepFocus = false } = {}) {
-    try {
-      const doc = await invoke('note_save', { path: card.path, changes });
-      card.doc = doc;
-      if (changes.body != null && card.draft === changes.body) card.draft = null;
-      renderCard(card);
-      if (keepFocus) card.el.querySelector('.desk-add-item')?.focus();
-      scheduleTreeReload();
-    } catch (error) {
-      fail(error);
-    }
+  // Guardar: las escrituras de una carta van en fila, nunca dos a la vez (si no, una más
+  // vieja podría llegar al disco después de una más nueva).
+  function save(card, changes) {
+    card.saving = (card.saving ?? Promise.resolve()).then(async () => {
+      try {
+        const doc = await invoke('note_save', { path: card.path, changes });
+        card.doc = doc;
+        renderHead(card);
+        scheduleTreeReload();
+      } catch (error) {
+        fail(error);
+      }
+    });
+    return card.saving;
   }
 
   function scheduleSave(card) {
     clearTimeout(card.timer);
-    card.timer = setTimeout(() => {
-      if (card.draft != null && card.draft !== card.doc?.body) save(card, { body: card.draft });
-    }, 700);
+    card.timer = setTimeout(() => flush(card), 600);
   }
 
-  async function setEditing(card, editing, { focusTitle = false } = {}) {
+  function flush(card) {
+    clearTimeout(card.timer);
+    const body = card.draft;
+    card.draft = null;
+    if (body == null || same(body, card.doc?.body)) return card.saving ?? Promise.resolve();
+    return save(card, { body });
+  }
+
+  function setSource(card, on) {
+    const body = card.el.querySelector('.desk-card-body');
+    const source = card.el.querySelector('.desk-editor');
+    if (on === card.source) return;
+    if (!on) card.editor.setValue(source.value);
+    else source.value = card.editor.getValue();
+    card.source = on;
+    body.hidden = on;
+    source.hidden = !on;
+    card.el.classList.toggle('source', on);
+    card.sourceButton.title = on ? 'Volver a la nota' : 'Ver el Markdown';
+    card.sourceButton.setAttribute('aria-label', card.sourceButton.title);
+    card.sourceButton.setAttribute('aria-pressed', String(on));
+    if (on) source.focus();
+    else card.editor.focusEnd();
+  }
+
+  function renameCard(card) {
     if (!card.doc) return;
-    if (card.editing && !editing) {
-      clearTimeout(card.timer);
-      commitTitle(card);
-      if (card.draft != null && card.draft !== card.doc.body) await save(card, { body: card.draft });
-      card.draft = null;
-      if (card.stale) {
-        card.stale = false;
-        await reloadCard(card);
-      }
-    }
-    card.editing = editing;
-    if (editing) card.draft = card.doc.body;
     const title = card.el.querySelector('.desk-card-title');
-    if (editing) {
-      const input = document.createElement('input');
-      input.className = 'desk-title-input';
-      input.value = card.doc.title;
-      input.setAttribute('aria-label', 'Título de la nota');
-      input.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-          event.preventDefault();
-          commitTitle(card);
-          card.el.querySelector('.desk-editor').focus();
-        }
-        if (event.key === 'Escape') setEditing(card, false);
-      });
-      title.replaceChildren(input);
-    } else {
+    if (title.querySelector('input')) return title.querySelector('input').focus();
+    const input = document.createElement('input');
+    input.className = 'desk-title-input';
+    input.value = card.doc.title;
+    input.setAttribute('aria-label', 'Título de la nota');
+    let done = false;
+    const finish = (keep) => {
+      if (done) return;
+      done = true;
+      const value = input.value.trim();
       title.textContent = card.doc.title;
-    }
-    renderCard(card);
-    bringToFront(card);
-    if (editing) {
-      const target = focusTitle ? title.querySelector('input') : card.el.querySelector('.desk-editor');
-      target?.focus();
-      if (!focusTitle) target?.setSelectionRange(target.value.length, target.value.length);
-    }
-  }
-
-  function commitTitle(card) {
-    const input = card.el.querySelector('.desk-title-input');
-    const value = input?.value.trim();
-    if (value && value !== card.doc.title) save(card, { title: value });
+      if (keep && value && value !== card.doc.title) {
+        title.textContent = value;
+        save(card, { title: value });
+      }
+    };
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        finish(true);
+        card.editor.focusEnd();
+      }
+      if (event.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
+    title.replaceChildren(input);
+    input.focus();
+    input.select();
   }
 
   async function reloadCard(card) {
     try {
       const doc = await invoke('note_read', { path: card.path });
-      const same = card.doc && ['title', 'kind', 'date', 'body'].every((k) => card.doc[k] === doc[k]);
       card.doc = doc;
-      if (!same) renderCard(card);
+      if (!same(doc.body, card.editor.getValue())) {
+        card.editor.setValue(doc.body);
+        if (card.source) card.el.querySelector('.desk-editor').value = doc.body;
+      }
+      renderHead(card);
     } catch {
       // La nota ya no existe (borrada o movida fuera de nexo).
-      closeCard(card.path);
+      closeCard(card.path, { save: false });
     }
   }
 
-  // Solo para cartas nuevas: que aparezcan dentro del escritorio visible.
-  function fitInside(card) {
+  // Sitio libre en la parte visible del escritorio para una carta nueva: la primera
+  // posición (de arriba abajo y de izquierda a derecha) donde no tapa a ninguna otra. Si no
+  // cabe con su tamaño, se prueba algo más pequeña; si tampoco, va en cascada.
+  function newGeometry() {
     const { w: W, h: H } = deskSize();
-    if (W < MIN_W || H < MIN_H) return;
-    card.w = Math.max(MIN_W, Math.min(card.w, W - 2 * GAP));
-    card.h = Math.max(MIN_H, Math.min(card.h, H - 2 * GAP));
-    card.x = Math.max(0, Math.min(card.x, W - card.w));
-    card.y = Math.max(0, Math.min(card.y, H - card.h));
-  }
-
-  function cascadePosition() {
+    const left = surface.scrollLeft;
+    const top = surface.scrollTop;
+    const taken = [...cards.values()].filter((c) => c.el?.isConnected);
+    const w = Math.max(MIN_W, Math.min(CARD_W, W - 2 * GAP));
+    const h = Math.max(MIN_H, Math.min(CARD_H, H - 2 * GAP));
+    const small = Math.max(MIN_H + 110, Math.min(h, Math.round(H * 0.42)));
+    for (const [cw, ch] of [[w, h], [w, small], [Math.max(MIN_W + 60, Math.round(w * 0.8)), small]]) {
+      for (let y = top + GAP; y + ch <= top + H - GAP; y += 24) {
+        for (let x = left + GAP; x + cw <= left + W - GAP; x += 24) {
+          const free = !taken.some((c) => x < c.x + c.w + GAP && x + cw + GAP > c.x && y < c.y + c.h + GAP && y + ch + GAP > c.y);
+          if (free) return { x, y, w: cw, h: ch };
+        }
+      }
+    }
+    // Sin hueco: en cascada desde la esquina, para que se vea que hay una carta nueva.
     const k = cards.size;
-    return { x: 24 + ((k * 28) % 220), y: 20 + ((k * 28) % 160) };
+    return { x: left + 24 + ((k * 28) % 220), y: top + 20 + ((k * 28) % 160), w, h };
   }
 
-  async function openNote(path, { edit = false, focusAdd = false, geometry = null } = {}) {
+  async function openNote(path, { focus = false, geometry = null } = {}) {
     const existing = cards.get(path);
     if (existing) {
       bringToFront(existing);
       existing.el.classList.remove('pulse');
       void existing.el.offsetWidth;
       existing.el.classList.add('pulse');
-      if (edit) setEditing(existing, true);
+      if (focus) existing.editor.focusEnd();
       return existing;
     }
     const card = {
       path,
-      ...(geometry ?? { ...cascadePosition(), w: 340, h: 300 }),
+      ...(geometry ?? newGeometry()),
       z: geometry?.z ?? Math.max(0, ...zValues()) + 1,
       doc: null,
-      editing: false,
       draft: null,
+      source: false,
     };
     cards.set(path, card);
     surface.append(createCardEl(card));
-    if (!geometry) fitInside(card);
     place(card);
-    renderCard(card);
+    renderHead(card);
     if (!geometry) saveDesk();
     renderDeskChrome();
     try {
       card.doc = await invoke('note_read', { path });
     } catch (error) {
-      closeCard(path);
+      closeCard(path, { save: false });
       if (!geometry) fail(error);
       return null;
     }
-    renderCard(card);
+    if (!cards.has(path)) return null;
+    card.editor.setValue(card.doc.body);
+    renderHead(card);
     renderPanel();
-    if (edit) setEditing(card, true);
-    if (focusAdd) card.el.querySelector('.desk-add-item')?.focus();
+    if (!geometry) card.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (focus) card.editor.focusEnd();
     return card;
   }
 
-  function closeCard(path, persist = true) {
+  function closeCard(path, { persist = true, save: keep = true } = {}) {
     const card = cards.get(path);
     if (!card) return;
-    clearTimeout(card.timer);
-    if (card.editing && card.draft != null && card.draft !== card.doc?.body) {
-      invoke('note_save', { path, changes: { body: card.draft } }).catch(fail);
-    }
+    if (keep) flush(card);
+    else clearTimeout(card.timer);
+    cancelAnimationFrame(card.headFrame);
+    card.editor.destroy();
     card.el.remove();
     cards.delete(path);
     if (persist) saveDesk();
@@ -841,15 +767,16 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       const col = i % best.cols;
       const row = Math.floor(i / best.cols);
       Object.assign(card, { x: GAP + col * (best.w + GAP), y: GAP + row * (best.h + GAP), w: best.w, h: best.h, z: i + 1 });
-      Object.assign(card.el.style, { left: `${card.x}px`, top: `${card.y}px`, width: `${card.w}px`, height: `${card.h}px`, zIndex: String(card.z) });
+      place(card);
     });
+    surface.scrollTo({ left: 0, top: 0 });
     setTimeout(() => surface.classList.remove('arranging'), 520);
     saveDesk();
   }
 
   $('desk-arrange').addEventListener('click', arrange);
   $('desk-close-all').addEventListener('click', () => {
-    for (const path of [...cards.keys()]) closeCard(path, false);
+    for (const path of [...cards.keys()]) closeCard(path, { persist: false });
     saveDesk();
   });
 
@@ -863,13 +790,13 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     }
     const wanted = Array.isArray(state?.cards) ? state.cards.filter((c) => typeof c?.path === 'string') : [];
     const keep = new Set(wanted.map((c) => c.path));
-    for (const path of [...cards.keys()]) if (!keep.has(path)) closeCard(path, false);
+    for (const path of [...cards.keys()]) if (!keep.has(path)) closeCard(path, { persist: false });
     for (const c of wanted) {
       const geometry = {
         x: Number(c.x) || 0,
         y: Number(c.y) || 0,
-        w: Number(c.w) || 340,
-        h: Number(c.h) || 300,
+        w: Number(c.w) || CARD_W,
+        h: Number(c.h) || CARD_H,
         z: Number(c.z) || 1,
       };
       const card = cards.get(c.path);
@@ -898,7 +825,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     // Se llama al entrar en la vista Notas (o al cambiar de vault).
     async activate({ reset = false } = {}) {
       if (reset) {
-        for (const path of [...cards.keys()]) closeCard(path, false);
+        for (const path of [...cards.keys()]) closeCard(path, { persist: false });
         current = '';
         loaded = false;
       }
@@ -915,8 +842,9 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       scheduleTreeReload();
       for (const path of notes) {
         const card = cards.get(path);
-        if (!card) continue;
-        if (card.editing) card.stale = true;
+        if (!card || !card.doc) continue;
+        // Si el usuario está escribiendo en ella, se recarga al salir de la carta.
+        if (busy(card)) card.stale = true;
         else reloadCard(card);
       }
     },
