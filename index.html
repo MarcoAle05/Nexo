@@ -9,6 +9,7 @@
   <div class="app">
     <div class="backdrop" aria-hidden="true"></div>
     <canvas class="graph-canvas" id="graph-canvas" aria-label="Grafo de la wiki: arrastra para mover, rueda para acercar, doble clic abre la nota"></canvas>
+    <canvas class="galaxy-canvas" id="galaxy-canvas" aria-hidden="true"></canvas>
 
     <header class="topbar">
       <nav class="island" aria-label="Principal">
@@ -64,7 +65,7 @@
         <div class="segmented" role="group" aria-label="Vista" data-segmented>
           <button type="button" aria-pressed="true" data-view="grafo">Grafo</button>
           <button type="button" aria-pressed="false" data-view="notas">Notas</button>
-          <button type="button" aria-pressed="false" disabled title="Próximamente">Audio</button>
+          <button type="button" aria-pressed="false" data-view="agentes">Agentes</button>
         </div>
         <div class="vault-anchor">
           <button type="button" class="ghost-btn muted" id="search-button" aria-haspopup="dialog" aria-expanded="false" aria-controls="search-menu">
@@ -294,10 +295,130 @@
             </div>
           </div>
         </div>
+
+        <!-- Agentes: skills (y más adelante agentes y hooks) de Claude Code (se ve con la vista «Agentes») -->
+        <div class="panel-core agents-core" id="agents-core" hidden>
+          <div class="panel-head">
+            <div class="panel-title">
+              <span class="eyebrow">Automatización</span>
+              <h2>Agentes</h2>
+            </div>
+            <div class="head-actions">
+              <button type="button" class="icon-btn outline expand-btn" data-expand="left" aria-pressed="false" aria-label="Expandir la carta de agentes" title="Expandir la carta de agentes">
+                <svg class="expand-icon" width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5h4.5V8M8 16.5H3.5V12M16.5 3.5l-5 5M3.5 16.5l5-5"/></svg>
+                <svg class="contract-icon" width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 8.5H11.5V4.5M4.5 11.5h4v4M11.5 8.5l5-5M8.5 11.5l-5 5"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="segmented small agents-tabs" role="group" aria-label="Apartado de agentes" data-segmented>
+            <button type="button" aria-pressed="true" data-agents-tab="skills">Skills <span class="agents-tab-count" id="skills-count">0</span></button>
+            <button type="button" aria-pressed="false" data-agents-tab="agentes">Agentes <span class="agents-tab-count" id="agents-count">0</span></button>
+            <button type="button" aria-pressed="false" disabled title="Próximamente">Hooks</button>
+          </div>
+
+          <div class="agents-pane" id="pane-skills">
+          <button type="button" class="cta" id="skill-add">
+            Agregar skill
+            <span class="cta-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></span>
+          </button>
+
+          <form class="notes-create skill-create" id="skill-create" hidden>
+            <div class="notes-create-head">
+              <span class="notes-section-label">Nueva skill</span>
+              <span class="notes-create-where">creador-de-skills · Sonnet 5.5 · esfuerzo medio</span>
+            </div>
+            <label class="skill-create-field">
+              <span class="visually-hidden">Qué debe hacer la skill</span>
+              <textarea id="skill-create-input" rows="4" autocomplete="off" spellcheck="true" placeholder="Qué debe hacer. Ej.: entra a mi Classroom, revisa las tareas pendientes, sube una tarea sin entregarla y dame los anuncios del tablón."></textarea>
+            </label>
+            <p class="skill-create-hint">Un agente de Claude Code la escribe con lo que sabe tu grafo. Verás su trabajo, y lo que te pregunte, en la terminal.</p>
+            <div class="notes-create-actions">
+              <button type="button" class="chip" id="skill-create-cancel">Cancelar</button>
+              <button type="submit" class="chip notes-create-ok" id="skill-create-ok">Crear con el agente</button>
+            </div>
+          </form>
+
+          <div class="notes-scroll" id="skills-scroll">
+            <h4 class="notes-section-label" id="skills-label">Skills</h4>
+            <ul class="notes-list" id="skills-list"></ul>
+            <div class="empty notes-empty" id="skills-empty" hidden>
+              <span class="empty-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="4.5"/><path d="M10 6.5v7M6.5 10h7"/></svg></span>
+              <p class="empty-title">Aún no hay skills</p>
+              <p class="empty-text">Pulsa «Agregar skill» y describe una tarea: un agente la convierte en algo que Claude Code sabe hacer.</p>
+            </div>
+          </div>
+          </div>
+
+          <div class="agents-pane" id="pane-agents" hidden>
+            <button type="button" class="cta" id="agent-add">
+              Agregar agente
+              <span class="cta-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></span>
+            </button>
+
+            <form class="notes-create skill-create agent-create" id="agent-create" hidden>
+              <div class="notes-create-head">
+                <span class="notes-section-label">Nuevo agente</span>
+                <span class="notes-create-where">Lo escribe creador-de-skills con el modelo y el esfuerzo que elijas</span>
+              </div>
+              <label class="skill-create-field">
+                <span class="visually-hidden">Qué debe hacer el agente</span>
+                <textarea id="agent-create-input" rows="3" autocomplete="off" spellcheck="true" placeholder="Qué debe hacer. Ej.: revisar mi Classroom cuando se lo pida y apuntar las tareas pendientes en mis notas."></textarea>
+              </label>
+              <div class="agent-pick">
+                <span class="agent-pick-label">Modelo</span>
+                <div class="segmented small" role="group" aria-label="Modelo del agente" data-segmented>
+                  <button type="button" aria-pressed="false" data-agent-model="claude-haiku-5-5">Haiku 5.5</button>
+                  <button type="button" aria-pressed="true" data-agent-model="claude-sonnet-5-5">Sonnet 5.5</button>
+                  <button type="button" aria-pressed="false" data-agent-model="claude-opus-5-5">Opus 5.5</button>
+                </div>
+              </div>
+              <div class="agent-pick">
+                <span class="agent-pick-label">Esfuerzo</span>
+                <div class="segmented small" role="group" aria-label="Esfuerzo del agente" data-segmented>
+                  <button type="button" aria-pressed="false" data-agent-effort="low">Bajo</button>
+                  <button type="button" aria-pressed="true" data-agent-effort="medium">Medio</button>
+                  <button type="button" aria-pressed="false" data-agent-effort="high">Alto</button>
+                </div>
+              </div>
+              <div class="notes-create-actions">
+                <button type="button" class="chip" id="agent-create-cancel">Cancelar</button>
+                <button type="submit" class="chip notes-create-ok" id="agent-create-ok">Crear con Claude</button>
+              </div>
+            </form>
+
+            <div class="notes-scroll" id="agents-scroll">
+              <h4 class="notes-section-label" id="agents-label">Agentes</h4>
+              <ul class="notes-list agents-list" id="agents-list"></ul>
+              <div class="empty notes-empty" id="agents-empty" hidden>
+                <span class="empty-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7.5" r="3"/><path d="M4.5 16.5c.9-2.8 3-4.3 5.5-4.3s4.6 1.5 5.5 4.3"/></svg></span>
+                <p class="empty-title">Aún no hay agentes</p>
+                <p class="empty-text">Pulsa «Agregar agente» o pídeselo a Claude Code: cada agente tiene su papel, su modelo y su esfuerzo.</p>
+              </div>
+            </div>
+          </div>
+        </div>
       </aside>
 
       <!-- Grafo -->
       <section class="stage" aria-label="Grafo de conocimiento" id="stage">
+        <!-- Galaxia: el plano inicial; las skills orbitan alrededor -->
+        <button type="button" class="plane-open" id="plane-open">
+          <svg width="16" height="16" viewBox="0 0 22 22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="11" cy="11" r="3" fill="currentColor" stroke="none"/><ellipse cx="11" cy="11" rx="9.5" ry="4" transform="rotate(-24 11 11)"/></svg>
+          Abrir grafo
+          <span class="plane-open-count" id="plane-open-count"></span>
+        </button>
+        <div class="skill-orbit" id="skill-orbit" aria-label="Skills"></div>
+        <div class="skill-pop" id="skill-pop" role="dialog" aria-labelledby="skill-pop-name" hidden>
+          <span class="eyebrow">Skill</span>
+          <h3 class="skill-pop-name" id="skill-pop-name"></h3>
+          <p class="skill-pop-text" id="skill-pop-text"></p>
+          <div class="skill-pop-foot">
+            <code class="skill-pop-command" id="skill-pop-command"></code>
+            <button type="button" class="chip skill-pop-use" id="skill-pop-use">Usar en Claude Code</button>
+          </div>
+        </div>
+
         <div class="focus-pill" id="focus-pill" hidden>
           <span class="focus-dot" aria-hidden="true"></span>
           <span class="dim">Enfoque</span>
@@ -313,6 +434,8 @@
         </div>
 
         <div class="toolbar" id="graph-toolbar" role="toolbar" aria-label="Controles del grafo">
+          <button type="button" class="icon-btn filled" id="plane-galaxy" aria-label="Volver a la galaxia" title="Volver a la galaxia"><svg width="17" height="17" viewBox="0 0 22 22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.3"><circle cx="11" cy="11" r="3" fill="currentColor" stroke="none"/><ellipse cx="11" cy="11" rx="9.5" ry="4" transform="rotate(-24 11 11)"/></svg></button>
+          <span class="divider" aria-hidden="true"></span>
           <div class="segmented" role="group" aria-label="Alcance" data-segmented>
             <button type="button" aria-pressed="true" data-scope="global">Global</button>
             <button type="button" aria-pressed="false" data-scope="local">Local</button>
@@ -349,6 +472,44 @@
           <span class="desk-count" id="desk-count">0 cartas</span>
           <span class="divider" aria-hidden="true"></span>
           <button type="button" class="desk-tool" id="desk-close-all">Cerrar todas</button>
+        </div>
+
+        <!-- Registro de agentes (vista «Agentes»): tokens y parte de la sesión de 5 h -->
+        <div class="agent-log" id="agent-log" hidden>
+          <div class="log-scroll">
+            <div class="log-list-view" id="log-list-view">
+              <header class="log-head">
+                <div class="panel-title">
+                  <span class="eyebrow">Registro</span>
+                  <h2>Agentes <span class="dim" id="log-count">0</span></h2>
+                </div>
+                <button type="button" class="icon-btn outline log-refresh" id="log-refresh" aria-label="Actualizar el registro" title="Actualizar"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
+              </header>
+              <section class="log-session" aria-label="Sesión de 5 h de Claude">
+                <div class="log-session-row">
+                  <span class="log-label">Sesión de 5 h</span>
+                  <span class="log-reset" id="log-reset"></span>
+                </div>
+                <p class="log-used"><span id="log-used">—</span><span class="log-used-unit" id="log-used-unit">%</span></p>
+                <div class="log-bar" aria-hidden="true"><span class="log-bar-nexo" id="log-bar-nexo"></span><span class="log-bar-rest" id="log-bar-rest"></span></div>
+                <div class="log-split">
+                  <span class="log-key nexo" title="Lo que gastaron Claude Code y sus agentes en este vault">Agentes de nexo <b id="log-nexo">—</b></span>
+                  <span class="log-key rest" title="Lo demás que gastó tu cuenta en esta sesión: Claude Code en otras carpetas, claude.ai u otros equipos">Resto de Claude <b id="log-rest">—</b></span>
+                </div>
+                <p class="log-note" id="log-note" hidden></p>
+              </section>
+              <p class="log-section-label" id="log-active-label" hidden>Activos</p>
+              <ul class="log-list" id="log-active" aria-label="Agentes activos"></ul>
+              <p class="log-section-label" id="log-past-label" hidden>Terminados</p>
+              <ul class="log-list" id="log-past" aria-label="Agentes terminados"></ul>
+              <div class="log-empty" id="log-empty" hidden>
+                <svg width="40" height="40" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7.5" r="3"/><path d="M4.5 16.5c.9-2.8 3-4.3 5.5-4.3s4.6 1.5 5.5 4.3"/></svg>
+                <p class="desk-empty-title" id="log-empty-title"></p>
+                <p class="desk-empty-text" id="log-empty-text"></p>
+              </div>
+            </div>
+            <div class="log-detail" id="log-detail" hidden></div>
+          </div>
         </div>
       </section>
 

@@ -22,6 +22,9 @@ use crate::agy;
 
 #[derive(Serialize, Clone)]
 pub struct Limit {
+    /// `session`, `weekly_all`…: lo usa el registro de agentes para encontrar la de 5 h.
+    #[serde(skip)]
+    kind: String,
     label: String,
     /// Porcentaje usado (0–100).
     used: f64,
@@ -75,8 +78,10 @@ fn parse_claude(data: &Value, plan: &str) -> Usage {
         .map(|list| {
             list.iter()
                 .filter_map(|l| {
+                    let kind = l["kind"].as_str()?;
                     Some(Limit {
-                        label: claude_label(l["kind"].as_str()?),
+                        kind: kind.into(),
+                        label: claude_label(kind),
                         used: l["percent"].as_f64()?,
                         resets_at: l["resets_at"].as_str().map(String::from),
                     })
@@ -89,6 +94,7 @@ fn parse_claude(data: &Value, plan: &str) -> Usage {
         for (key, kind) in [("five_hour", "session"), ("seven_day", "weekly_all")] {
             if let Some(used) = data[key]["utilization"].as_f64() {
                 limits.push(Limit {
+                    kind: kind.into(),
                     label: claude_label(kind),
                     used,
                     resets_at: data[key]["resets_at"].as_str().map(String::from),
@@ -165,6 +171,31 @@ pub async fn usage_claude(
     state: State<'_, UsageState>,
     force: bool,
 ) -> Result<Usage, String> {
+    claude_usage(&app, &state, force).await
+}
+
+/// La sesión de 5 h del plan de claude.ai: porcentaje usado y cuándo se renueva (`None` en
+/// `resets_at` si aún no hay consumo, es decir, si no hay sesión en curso).
+pub struct SessionLimit {
+    pub used: f64,
+    pub resets_at: Option<String>,
+}
+
+pub async fn claude_session(app: &AppHandle, force: bool) -> Result<Option<SessionLimit>, String> {
+    let state = app.state::<UsageState>();
+    let usage = claude_usage(app, &state, force).await?;
+    Ok(usage
+        .groups
+        .iter()
+        .flat_map(|g| &g.limits)
+        .find(|l| l.kind == "session")
+        .map(|l| SessionLimit {
+            used: l.used,
+            resets_at: l.resets_at.clone(),
+        }))
+}
+
+async fn claude_usage(app: &AppHandle, state: &UsageState, force: bool) -> Result<Usage, String> {
     let mut cache = state.claude.lock().await;
     if let Some((at, usage)) = cache.as_ref()
         && !force
@@ -172,7 +203,7 @@ pub async fn usage_claude(
     {
         return Ok(usage.clone());
     }
-    let usage = fetch_claude(&app).await?;
+    let usage = fetch_claude(app).await?;
     *cache = Some((Instant::now(), usage.clone()));
     Ok(usage)
 }
@@ -277,6 +308,7 @@ fn parse_agy(screen: &str, now: chrono::DateTime<chrono::Local>) -> Vec<Group> {
         ) {
             if let Some(g) = groups.last_mut() {
                 g.limits.push(Limit {
+                    kind: String::new(),
                     label: label.clone(),
                     used: ((100.0 - pct) * 100.0).round() / 100.0,
                     resets_at: None,

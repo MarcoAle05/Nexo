@@ -142,6 +142,15 @@ struct WikiChanged {
     changed: Vec<String>,
 }
 
+#[derive(Clone, Serialize)]
+struct AgentsChanged {}
+
+#[derive(Clone, Serialize)]
+struct SkillsChanged {
+    /// Skills nuevas (carpetas de `.claude/skills/`).
+    added: Vec<String>,
+}
+
 /// Fecha de modificación del escritorio de notas (`.nexo/escritorio.json`).
 fn desk_mtime(wiki: &Path) -> Option<std::time::SystemTime> {
     let root = wiki.parent()?;
@@ -157,12 +166,39 @@ pub fn watch(app: AppHandle) {
     std::thread::spawn(move || {
         let mut last: Option<(PathBuf, HashMap<String, (u64, std::time::SystemTime)>)> = None;
         let mut last_desk = None;
+        let mut last_skills: Option<(PathBuf, Vec<(String, u64, u64)>)> = None;
+        let mut last_agents: Option<(PathBuf, Vec<(String, u64, u64)>)> = None;
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
             let Ok(wiki) = vault_dir(&app, "wiki") else {
                 last = None;
                 continue;
             };
+            // Skills de Claude Code del vault (.claude/skills/): las crea el agente de nexo.
+            if let Some(root) = wiki.parent() {
+                let skills = crate::skills::fingerprint(root);
+                if let Some((dir, before)) = &last_skills
+                    && dir == root
+                    && *before != skills
+                {
+                    let added = skills
+                        .iter()
+                        .filter(|(id, ..)| !before.iter().any(|(b, ..)| b == id))
+                        .map(|(id, ..)| id.clone())
+                        .collect();
+                    let _ = app.emit("skills-changed", SkillsChanged { added });
+                }
+                last_skills = Some((root.to_path_buf(), skills));
+                // Agentes de Claude Code (.claude/agents/): los muestra el apartado Agentes.
+                let agents = crate::agents::fingerprint(root);
+                if let Some((dir, before)) = &last_agents
+                    && dir == root
+                    && *before != agents
+                {
+                    let _ = app.emit("agents-changed", AgentsChanged {});
+                }
+                last_agents = Some((root.to_path_buf(), agents));
+            }
             let mut now = fingerprint(&wiki);
             let desk = desk_mtime(&wiki);
             match &last {

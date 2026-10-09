@@ -13,9 +13,13 @@ import { openUrl } from '@tauri-apps/plugin-opener';
 
 import { createClaudeCode } from './claude-code.js';
 import { reconcile } from './dom.js';
+import { createAgents } from './agents.js';
+import { createGalaxy } from './galaxy.js';
+import { createAgentLog } from './registro.js';
 import { colorFor, createGraph } from './graph.js';
 import { createNotes } from './notes.js';
 import { renderMarkdown, resolveLink } from './note-view.js';
+import { commandFor, createSkills } from './skills.js';
 
 const $ = (id) => document.getElementById(id);
 const desktop = isTauri();
@@ -79,7 +83,14 @@ function renderExpanded() {
   document.querySelector('#terminal-panel > .panel-core').hidden = minimized;
   document.querySelectorAll('[data-expand]').forEach((b) => {
     const on = expanded[b.dataset.expand];
-    const what = b.dataset.expand === 'right' ? 'la terminal' : b.closest('#notes-core') ? 'la carta de notas' : 'la carta de fuentes';
+    const what =
+      b.dataset.expand === 'right'
+        ? 'la terminal'
+        : b.closest('#notes-core')
+          ? 'la carta de notas'
+          : b.closest('#agents-core')
+            ? 'la carta de agentes'
+            : 'la carta de fuentes';
     b.setAttribute('aria-pressed', String(on));
     b.setAttribute('aria-label', `${on ? 'Contraer' : 'Expandir'} ${what}`);
     b.title = `${on ? 'Contraer' : 'Expandir'} ${what}`;
@@ -1280,7 +1291,7 @@ function renderNode() {
       dot.className = 'node-chip-dot';
       dot.style.background = colorFor(n);
       chip.append(dot, n.label);
-      chip.addEventListener('click', () => graph.focus(n.id));
+      chip.addEventListener('click', () => showInGraph(n.id));
       return chip;
     }),
   );
@@ -1292,7 +1303,7 @@ function renderNode() {
 
 $('note-back').addEventListener('click', closeNode);
 $('note-open').addEventListener('click', () => noteNode && openNote(noteNode));
-$('note-graph').addEventListener('click', () => noteNode && graph.focus(noteNode.id));
+$('note-graph').addEventListener('click', () => noteNode && showInGraph(noteNode.id));
 $('note-notes').addEventListener('click', () => noteNode && openInNotes(noteNode.id));
 // Enlaces dentro de la nota: [[wiki]] y notas .md llevan a su nodo; las webs se abren fuera.
 $('note-body').addEventListener('click', (event) => {
@@ -1312,7 +1323,7 @@ function focusConcept(name) {
       n.id.toLowerCase().endsWith(`/${key}.md`) ||
       n.label.toLowerCase() === key,
   );
-  if (!node || !graph.focus(node.id)) printLine(`«${name}» aún no está en el grafo`, 'info');
+  if (!node || !showInGraph(node.id)) printLine(`«${name}» aún no está en el grafo`, 'info');
 }
 
 function closeRename() {
@@ -1359,7 +1370,7 @@ $('detail-open').addEventListener('click', () => detailPath && invoke('open_sour
 $('detail-open-md').addEventListener('click', () =>
   detailPath && invoke('open_source', { path: `markdown/${detailPath.replace(/\.[^./]+$/, '')}.md` }).catch(fail),
 );
-$('detail-graph').addEventListener('click', () => detailView && graph.focus(detailView.id));
+$('detail-graph').addEventListener('click', () => detailView && showInGraph(detailView.id));
 
 // ---------------------------------------------------------------- actividad de Antigravity
 // Cada tarea de agy (leer una web, resumir una fuente) llega como evento `agy-activity`.
@@ -1480,6 +1491,9 @@ if (desktop) {
     }, 400);
   });
   listen('desk-changed', () => notes.onDeskChanged());
+  // El agente creador-de-skills (u otro) escribió en .claude/skills/.
+  listen('skills-changed', ({ payload }) => skills.announce(payload.added ?? []));
+  listen('agents-changed', () => agents.load());
   invoke('agy_jobs')
     .then((list) => {
       list.forEach((job) => jobs.set(job.id, job));
@@ -1526,6 +1540,8 @@ async function loadGraph() {
   $('graph-toolbar').querySelectorAll('button').forEach((b) => (b.disabled = empty));
   graphData = data ?? { nodes: [], edges: [] };
   graph.setData(graphData);
+  const count = graphData.nodes.length;
+  $('plane-open-count').textContent = count ? `${count} ${count === 1 ? 'nodo' : 'nodos'}` : '';
   if (!searchMenu.hidden && searchInput.value.trim()) {
     const current = searchHits[searchAt]?.id;
     searchHits = findNodes(searchInput.value);
@@ -1534,6 +1550,132 @@ async function loadGraph() {
   }
 }
 let graphData = { nodes: [], edges: [] };
+
+// ---------------------------------------------------------------- galaxia y skills
+// En la vista Grafo el plano principal es la galaxia (con las skills alrededor) o el grafo,
+// y se recuerda el último que eligió el usuario. La vista Agentes muestra el registro de agentes.
+let plane = 'galaxia';
+try {
+  if (localStorage.getItem('nexo.plano') === 'grafo') plane = 'grafo';
+} catch {}
+let scene = ''; // lo que se ve en el centro: 'galaxia', 'grafo', 'escritorio' o 'registro'
+let graphFramed = false;
+const galaxy = createGalaxy($('galaxy-canvas'), { stage, onOpen: () => openGraph() });
+
+function renderScene() {
+  const next = view === 'notas' ? 'escritorio' : view === 'agentes' ? 'registro' : plane;
+  const before = scene;
+  scene = next;
+  document.body.dataset.scene = scene;
+  $('stage').setAttribute(
+    'aria-label',
+    { escritorio: 'Escritorio de notas', grafo: 'Grafo de conocimiento', registro: 'Registro de agentes' }[scene] ?? 'Galaxia y skills',
+  );
+  syncGraphActive();
+  if (before === next) return;
+  if (next !== 'galaxia') skills.closePop();
+  if (next === 'grafo') {
+    if (before === 'galaxia') galaxy.open();
+    else galaxy.spread = 1;
+    // La galaxia se dispersa y el grafo crece desde el centro; la primera vez, ya encuadrado
+    // (mientras estaba cerrado nadie lo encuadró).
+    if (before) graph.reveal({ refit: !graphFramed, duration: before === 'galaxia' ? 1000 : 0 });
+    graphFramed = true;
+  } else if (next === 'galaxia') {
+    // Al arrancar y al volver del grafo los puntos se recogen hasta formar la galaxia.
+    if (before === 'grafo' || !before) {
+      galaxy.spread = 1;
+      galaxy.close(before ? 1100 : 1600);
+    } else galaxy.spread = 0;
+    requestAnimationFrame(() => skills.relayout());
+  }
+}
+
+function setPlane(next) {
+  plane = next === 'grafo' ? 'grafo' : 'galaxia';
+  try {
+    localStorage.setItem('nexo.plano', plane);
+  } catch {}
+  if (view === 'grafo') renderScene();
+}
+
+function openGraph() {
+  setPlane('grafo');
+  if (view !== 'grafo') setView('grafo');
+}
+
+// Navegar a un nodo concreto (búsqueda, «Ver en el grafo», enlaces) abre el grafo.
+function showInGraph(id) {
+  openGraph();
+  return graph.focus(id);
+}
+
+$('plane-open').addEventListener('click', openGraph);
+$('plane-galaxy').addEventListener('click', () => setPlane('galaxia'));
+
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Escribe un mensaje en Claude Code como si lo tecleara el usuario: abre la terminal (y la
+// sesión, si hace falta) y espera a que pueda recibirlo.
+async function sendToClaude(text) {
+  if (!desktop) throw 'Claude Code solo funciona en la app de escritorio.';
+  if (!vault) throw 'Primero elige un vault: Claude Code trabaja dentro de él.';
+  if (minimized) setMinimized(false);
+  const wasRunning = claudeCode.running;
+  if (mode !== 'claude-code') document.querySelector('[data-mode="claude-code"]').click();
+  else if (activityOpen) showActivity(false);
+  if (!claudeCode.running && !$('cc-exit').hidden) claudeCode.restart();
+  const started = Date.now();
+  while (!claudeCode.running) {
+    const waited = Date.now() - started;
+    if (waited > 1500 && !$('cc-exit').hidden) throw $('cc-exit-text').textContent;
+    if (waited > 30_000) throw 'Claude Code no arrancó a tiempo.';
+    await wait(200);
+  }
+  // Recién abierto, Claude Code tarda un momento en dibujar su caja de texto.
+  if (!wasRunning) await wait(3000);
+  claudeCode.say(text);
+}
+
+const skills = createSkills({
+  invoke: (cmd, args) => (desktop ? invoke(cmd, args) : Promise.reject('Las skills solo funcionan en la app de escritorio.')),
+  ask: (message, options) => (desktop ? ask(message, options) : Promise.resolve(window.confirm(message))),
+  fail,
+  galaxy,
+  stage,
+  onUse: (skill) => sendToClaude(`/${commandFor(skill)}`).catch(fail),
+  async onCreate(text) {
+    if (!desktop) throw 'Las skills solo funcionan en la app de escritorio.';
+    await invoke('skills_prepare');
+    await sendToClaude(`Usa el agente creador-de-skills para crear una skill. Lo que pide el usuario: «${text}»`);
+  },
+  onShowAgents({ add = false } = {}) {
+    setView('agentes');
+    agents.showTab('skills');
+    if (add) skills.openAdd();
+  },
+});
+
+// Agentes de Claude Code del vault (.claude/agents/): resumen, modelo y esfuerzo de cada uno.
+const agents = createAgents({
+  invoke: (cmd, args) => (desktop ? invoke(cmd, args) : Promise.reject('Los agentes solo funcionan en la app de escritorio.')),
+  ask: (message, options) => (desktop ? ask(message, options) : Promise.resolve(window.confirm(message))),
+  fail,
+  async onCreate({ text, model, effort }) {
+    if (!desktop) throw 'Los agentes solo funcionan en la app de escritorio.';
+    await invoke('skills_prepare');
+    await sendToClaude(
+      `Usa el agente creador-de-skills para crear un agente en .claude/agents/ con model: ${model} y effort: ${effort}. Lo que pide el usuario: «${text}»`,
+    );
+  },
+});
+
+// Registro de agentes (centro de la vista Agentes): tokens y parte de la sesión de 5 h de
+// cada agente del vault, y su contexto como /context.
+const agentLog = createAgentLog({
+  invoke: (cmd, args) => (desktop ? invoke(cmd, args) : Promise.reject('El registro solo funciona en la app de escritorio.')),
+  fail,
+});
 
 // ---------------------------------------------------------------- vistas: Grafo / Notas
 // Notas cambia la carta de la izquierda por temas y notas y el grafo por el escritorio
@@ -1560,30 +1702,40 @@ function activateNotes() {
 }
 
 function setView(next) {
-  view = next === 'notas' ? 'notas' : 'grafo';
+  view = next === 'notas' || next === 'agentes' ? next : 'grafo';
   document.body.dataset.view = view;
   document.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
   const inNotes = view === 'notas';
-  document.querySelector('#sources-panel > .panel-core.sources').hidden = inNotes;
+  const inAgents = view === 'agentes';
+  document.querySelector('#sources-panel > .panel-core.sources').hidden = inNotes || inAgents;
   $('notes-core').hidden = !inNotes;
+  $('agents-core').hidden = !inAgents;
   $('desk').hidden = !inNotes;
   $('desk-toolbar').hidden = !inNotes;
-  $('stage').setAttribute('aria-label', inNotes ? 'Escritorio de notas' : 'Grafo de conocimiento');
   try {
     localStorage.setItem('nexo.view', view);
   } catch {}
-  syncGraphActive();
+  renderScene();
   if (inNotes) {
     activateNotes();
     requestAnimationFrame(() => notes.relayout());
   }
 }
-syncGraphActive = () => graph.setActive(view === 'grafo' && !expanded.left && !expanded.right);
-syncGraphActive();
+// Solo se dibuja lo que se ve: con las cartas expandidas no se ve ninguno de los dos.
+syncGraphActive = () => {
+  const open = !expanded.left && !expanded.right;
+  graph.setActive(scene === 'grafo' && open);
+  galaxy.setActive(scene === 'galaxia' && open);
+  agentLog.activate(scene === 'registro' && open);
+};
 document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
-try {
-  if (localStorage.getItem('nexo.view') === 'notas') setView('notas');
-} catch {}
+{
+  let saved = 'grafo';
+  try {
+    saved = localStorage.getItem('nexo.view') ?? 'grafo';
+  } catch {}
+  setView(saved);
+}
 
 // Un nodo de wiki/notas/ → su nota en el escritorio (o su tema en la carta de notas).
 async function openInNotes(id) {
@@ -1608,8 +1760,7 @@ function followLink(link, fromId) {
   const node = resolveLink(graphData.nodes, fromId, target);
   if (!node) return printLine(`«${target}» aún no está en el grafo`, 'info');
   if (isNotesNode(node)) return openInNotes(node.id);
-  setView('grafo');
-  graph.focus(node.id);
+  showInGraph(node.id);
 }
 
 document.querySelectorAll('[data-scope]').forEach((b) =>
@@ -1725,8 +1876,7 @@ function goToHit(index) {
   // En la vista Notas, las notas se abren en el escritorio; lo demás lleva al grafo.
   if (view === 'notas' && isNotesNode(hit)) openInNotes(hit.id);
   else {
-    if (view === 'notas') setView('grafo');
-    graph.focus(hit.id);
+    showInGraph(hit.id);
   }
   renderSearch();
 }
@@ -1746,7 +1896,12 @@ function closeSearch() {
 searchInput.addEventListener('input', () => {
   searchHits = findNodes(searchInput.value);
   searchAt = searchHits.length ? 0 : -1;
-  if (searchHits.length) graph.focus(searchHits[0].id);
+  // Mientras se escribe no se cambia de vista (solo al elegir un resultado); en la vista
+  // Grafo, la galaxia deja paso al grafo para ver el nodo.
+  if (searchHits.length) {
+    if (view === 'grafo') setPlane('grafo');
+    graph.focus(searchHits[0].id);
+  }
   renderSearch();
 });
 searchInput.addEventListener('keydown', (event) => {
@@ -1782,7 +1937,7 @@ document.addEventListener('keydown', (event) => {
 
 // ---------------------------------------------------------------- arranque
 async function refresh() {
-  await Promise.all([loadSources(), loadGraph()]);
+  await Promise.all([loadSources(), loadGraph(), skills.load(), agents.load()]);
 }
 
 if (desktop) {
@@ -1832,4 +1987,6 @@ if (desktop) {
 } else {
   renderSources();
   loadGraph();
+  skills.load();
+  agents.load();
 }

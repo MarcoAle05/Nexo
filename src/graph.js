@@ -485,12 +485,14 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
   }
 
   function resize() {
-    const rect = canvas.getBoundingClientRect();
     const ratio = window.devicePixelRatio || 1;
     if (ratio !== dpr) sprites.clear();
     dpr = ratio;
-    width = rect.width;
-    height = rect.height;
+    // Tamaño de maquetación y no getBoundingClientRect, que incluye las transformaciones CSS:
+    // medido con el lienzo escalado, el mapa de bits se quedaba pequeño y el grafo se veía
+    // estirado y sin responder al ratón donde estaban los nodos.
+    width = canvas.clientWidth;
+    height = canvas.clientHeight;
     canvas.width = fx.width = Math.round(width * dpr);
     canvas.height = fx.height = Math.round(height * dpr);
     fxDirty = null;
@@ -503,20 +505,20 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
   document.fonts.addEventListener('loadingdone', requestDraw);
   resize();
 
-  // Encaja los nodos visibles dentro del hueco central (entre los paneles).
-  function fit(duration = 600) {
+  // Vista que encaja los nodos visibles dentro del hueco central (entre los paneles).
+  function fitTransform() {
     const view = getViewport();
     const visible = nodes.filter(isVisible);
-    if (!visible.length) {
-      select(canvas).transition().duration(duration).call(zoomBehavior.transform, zoomIdentity.translate(view.cx, view.cy));
-      return;
-    }
+    if (!visible.length) return zoomIdentity.translate(view.cx, view.cy);
     const xs = visible.map((d) => d.x);
     const ys = visible.map((d) => d.y);
     const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
     const k = Math.min(2, 0.85 * Math.min(view.w / Math.max(maxX - minX, 1), view.h / Math.max(maxY - minY, 1)));
-    const next = zoomIdentity.translate(view.cx, view.cy).scale(k).translate(-(minX + maxX) / 2, -(minY + maxY) / 2);
-    select(canvas).transition().duration(duration).call(zoomBehavior.transform, next);
+    return zoomIdentity.translate(view.cx, view.cy).scale(k).translate(-(minX + maxX) / 2, -(minY + maxY) / 2);
+  }
+
+  function fit(duration = 600) {
+    select(canvas).transition().duration(duration).call(zoomBehavior.transform, fitTransform());
   }
 
   return {
@@ -594,6 +596,21 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
       return true;
     },
     fit,
+    // Al abrir el grafo desde la galaxia crece desde el centro del escenario hasta su vista
+    // (la que tenía o, con `refit`, encajada). Se anima con el propio zoom: escalar el lienzo
+    // con CSS obligaba a repintarlo entero en cada fotograma y descuadraba sus medidas.
+    reveal({ refit = false, duration = 1000 } = {}) {
+      const target = refit ? fitTransform() : transform;
+      const { cx, cy } = getViewport();
+      const s = 0.55;
+      const from = zoomIdentity.translate(target.x * s + cx * (1 - s), target.y * s + cy * (1 - s)).scale(target.k * s);
+      select(canvas).interrupt().call(zoomBehavior.transform, from);
+      select(canvas)
+        .transition()
+        .duration(duration)
+        .ease((t) => 1 - Math.pow(1 - t, 3))
+        .call(zoomBehavior.transform, target);
+    },
     get size() {
       return nodes.length;
     },

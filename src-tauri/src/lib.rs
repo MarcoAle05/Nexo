@@ -1,3 +1,4 @@
+mod agents;
 mod agy;
 mod browser;
 mod claude;
@@ -10,7 +11,9 @@ mod mcp;
 mod nexo;
 mod notas;
 mod playwright;
+mod registro;
 pub mod render;
+mod skills;
 mod sources;
 mod usage;
 mod vault;
@@ -24,6 +27,7 @@ pub fn run() {
         .manage(claude_code::ClaudeCodeState::default())
         .manage(agy::AgyState::default())
         .manage(usage::UsageState::default())
+        .manage(registro::RegistroState::default())
         .invoke_handler(tauri::generate_handler![
             vault::get_vault,
             vault::detect_vaults,
@@ -67,7 +71,14 @@ pub fn run() {
             notas::desk_load,
             notas::desk_save,
             render::render_info,
-            render::render_retry_gpu
+            render::render_retry_gpu,
+            skills::skills_list,
+            skills::skills_prepare,
+            skills::skills_remove,
+            agents::agents_list,
+            agents::agents_remove,
+            registro::agent_log,
+            registro::agent_context
         ])
         .setup(|app| {
             render::attach(app);

@@ -73,6 +73,7 @@ dependencies = [
  "futures-util",
  "libc",
  "log",
+ "memchr",
  "portable-pty",
  "reqwest",
  "serde",

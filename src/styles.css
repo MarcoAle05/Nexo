@@ -529,7 +529,7 @@ kbd {
 .graph-fx { pointer-events: none; }
 /* Las capas de encima dejan pasar el ratón al grafo salvo en sus controles. */
 .topbar, .layout, .stage { pointer-events: none; }
-.island, .panel, .toolbar, .focus-pill, .vault-menu { pointer-events: auto; }
+.island, .panel, .toolbar, .focus-pill, .vault-menu, .plane-open, .skill-pill, .skill-pop { pointer-events: auto; }
 .stage { justify-content: space-between; }
 .stage-empty[hidden], .focus-pill[hidden] { display: none; }
 
@@ -1137,7 +1137,7 @@ kbd {
 
 /* Mismo punto que la píldora de "Enfoque": hueco en reposo, encendido con brillo si trabaja. */
 .activity-dot { flex-shrink: 0; width: 7px; height: 7px; border-radius: 999px; border: 1.5px solid currentColor; }
-.activity-dot.busy { background: currentColor; box-shadow: 0 0 10px rgba(255, 255, 255, 0.8); animation: breathe 1.2s var(--ease) infinite; }
+.activity-dot.busy { background: currentColor; animation: breathe 1.2s var(--ease) infinite; }
 .activity-btn[aria-pressed="true"] .activity-dot.busy { box-shadow: none; }
 .activity-count {
   margin-left: auto;
@@ -1521,11 +1521,15 @@ button.crumb:hover { color: var(--fg); text-decoration: underline; text-decorati
 
 /* ---------- Vista Notas: escritorio ---------- */
 .stage { position: relative; }
-body[data-view="notas"] .graph-canvas { opacity: 0; pointer-events: none; }
-.graph-canvas { transition: opacity 400ms var(--ease); }
-body[data-view="notas"] #focus-pill,
-body[data-view="notas"] #graph-toolbar,
-body[data-view="notas"] #stage-empty { display: none; }
+/* El centro muestra una escena: la galaxia, el grafo o el escritorio de notas (body[data-scene]). */
+/* Sin transform en los lienzos del grafo: el crecimiento al abrirlo lo hace su zoom (graph.reveal). */
+.graph-canvas { transition: opacity 800ms var(--ease); }
+body:not([data-scene="grafo"]) .graph-canvas { opacity: 0; pointer-events: none; }
+body:not([data-scene="grafo"]) #focus-pill,
+body:not([data-scene="grafo"]) #graph-toolbar,
+body:not([data-scene="grafo"]) #stage-empty { display: none; }
+#graph-toolbar { margin-top: auto; }
+body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease) both 200ms; }
 .desk { position: absolute; inset: 0 0 72px; pointer-events: auto; }
 .desk[hidden], .desk-toolbar[hidden] { display: none; }
 .desk-surface {
@@ -1935,7 +1939,7 @@ body[data-view="notas"] #stage-empty { display: none; }
 .rail-mode { color: var(--dim); transition: background 300ms var(--ease), color 300ms var(--ease); }
 .rail-mode:hover { background: rgba(255, 255, 255, 0.07); color: var(--fg); }
 .rail-mode.active { background: rgba(255, 255, 255, 0.1); color: var(--fg); }
-.rail-activity { width: 8px; height: 8px; border-radius: 999px; background: var(--fg); box-shadow: 0 0 10px rgba(255, 255, 255, 0.8); animation: breathe 1.2s var(--ease) infinite; }
+.rail-activity { width: 8px; height: 8px; border-radius: 999px; background: var(--fg); animation: breathe 1.2s var(--ease) infinite; }
 .rail-activity[hidden] { display: none; }
 .panel-rail-label {
   margin-top: auto;
@@ -1957,3 +1961,378 @@ body[data-view="notas"] #stage-empty { display: none; }
   .minimize-btn, .panel-rail { display: none !important; }
   #terminal-panel > .panel-core[hidden] { display: flex; }
 }
+
+/* ---------- Galaxia: plano inicial con las skills alrededor ---------- */
+.galaxy-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  transition: opacity 700ms var(--ease);
+}
+body:not([data-scene="galaxia"]) .galaxy-canvas { opacity: 0; pointer-events: none; }
+
+.plane-open {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--glass-bar);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  color: var(--dim);
+  transition: color 300ms var(--ease), border-color 300ms var(--ease), transform 300ms var(--ease);
+  animation: source-in 600ms var(--ease) both 300ms;
+}
+.plane-open:hover { color: var(--fg); border-color: rgba(255, 255, 255, 0.28); }
+.plane-open:active { transform: scale(0.98); }
+.plane-open-count { font-family: var(--mono); font-size: 10.5px; font-weight: 400; letter-spacing: 0.04em; color: var(--faint); font-variant-numeric: tabular-nums; }
+.plane-open-count:empty { display: none; }
+body:not([data-scene="galaxia"]) .plane-open { display: none; }
+
+.skill-orbit { position: absolute; inset: 0; pointer-events: none; transition: opacity 500ms var(--ease), visibility 0s linear 0s; }
+body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; transition: opacity 300ms var(--ease), visibility 0s linear 300ms; }
+/* Recuadros: opacos y de línea fina, para que se lean como objetos y no como parte del cielo. */
+.skill-pill {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  translate: -50% -50%;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  max-width: 180px;
+  padding: 0 12px 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: #0a0a0a;
+  color: var(--dim);
+  font-family: var(--sans);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1;
+  white-space: nowrap;
+  transition: border-color 250ms var(--ease), color 250ms var(--ease), background 250ms var(--ease), transform 250ms var(--ease);
+}
+.skill-pill:hover { color: var(--fg); border-color: rgba(255, 255, 255, 0.3); }
+.skill-pill[aria-expanded="true"] { color: #0a0a0a; background: var(--fg); border-color: var(--fg); }
+.skill-pill:active { transform: scale(0.97); }
+.skill-pill-name { overflow: hidden; text-overflow: ellipsis; }
+.skill-pill-dot { flex-shrink: 0; width: 4px; height: 4px; border-radius: 999px; background: currentColor; opacity: 0.7; }
+.skill-pill-new { border-style: dashed; }
+.skill-pill-plus { font-size: 13px; line-height: 1; }
+.skill-pill-more { padding: 0 10px; font-family: var(--mono); font-size: 10.5px; font-weight: 400; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; }
+.skill-pill.enter { animation: source-in 700ms var(--ease) both; }
+.skill-pill.born { animation: card-pulse 1.6s var(--ease) 2; }
+
+.skill-pop {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 280px;
+  max-width: calc(100% - 28px);
+  padding: 14px 16px 12px;
+  border-radius: 18px;
+  border: 1px solid var(--line-strong);
+  background: #0a0a0a;
+  animation: source-in 350ms var(--ease) both;
+}
+.skill-pop[hidden] { display: none; }
+.skill-pop-name { margin: 0; font-family: var(--display); font-size: 15px; font-weight: 500; line-height: 1.25; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.skill-pop-text { margin: 0; font-size: 12.5px; line-height: 1.6; letter-spacing: 0.005em; color: var(--dim); }
+.skill-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; }
+.skill-pop-command { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 11px; font-weight: 400; letter-spacing: 0.01em; color: var(--dim); }
+.skill-pop-use { height: 30px; font-size: 12px; font-weight: 500; letter-spacing: 0.005em; }
+
+/* ---------- Vista Agentes ---------- */
+.agents-core { gap: 14px; padding: 20px 14px 14px; }
+.agents-tabs button { font-family: var(--sans); font-size: 12px; font-weight: 500; letter-spacing: -0.005em; }
+.agents-tab-count { margin-left: 4px; font-family: var(--mono); font-size: 10px; font-weight: 400; letter-spacing: 0.02em; font-variant-numeric: tabular-nums; opacity: 0.6; }
+.cta[hidden] { display: none; }
+.skill-create-field textarea {
+  display: block;
+  width: 100%;
+  min-height: 96px;
+  resize: vertical;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.05);
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  letter-spacing: 0.005em;
+  color: inherit;
+  transition: border-color 300ms var(--ease);
+}
+.skill-create-field textarea:focus { border-color: rgba(255, 255, 255, 0.4); }
+.skill-create-field textarea::placeholder { color: rgba(245, 245, 245, 0.5); }
+.skill-create-hint { margin: 0 4px; font-size: 11.5px; line-height: 1.55; letter-spacing: 0.01em; color: var(--dim); }
+.skill-row .row-title { font-weight: 500; letter-spacing: -0.01em; }
+.skill-row .row-meta-text { letter-spacing: 0.005em; }
+.skill-pending .row-title { color: var(--dim); font-weight: 400; letter-spacing: 0.005em; }
+.skill-pending-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--fg); animation: breathe 1.2s var(--ease) infinite; }
+.skill-create .notes-create-head { flex-direction: column; align-items: flex-start; gap: 2px; }
+.skill-create .notes-create-where { letter-spacing: 0.01em; }
+.skill-create .notes-create-where { max-width: 100%; white-space: normal; }
+
+/* Paneles Skills / Agentes de la carta Agentes */
+.agents-pane { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 14px; }
+.agents-pane[hidden] { display: none; }
+.agent-pick { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.agent-pick-label { padding-left: 4px; font-size: 10px; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); }
+
+.agents-list { gap: 4px; }
+.agent-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  border-radius: 16px;
+  transition: background 300ms var(--ease);
+}
+.agent-row:hover, .agent-row:focus-within, .agent-row.open { background: rgba(255, 255, 255, 0.05); }
+.agent-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  padding: 10px 8px;
+  border-radius: 16px;
+  text-align: left;
+}
+.agent-text { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding-top: 1px; }
+.agent-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 500; letter-spacing: -0.01em; }
+.agent-name-text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.agent-badge {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  color: var(--dim);
+}
+.agent-specs { display: flex; flex-wrap: wrap; gap: 4px; }
+.agent-spec {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: rgba(245, 245, 245, 0.85);
+  white-space: nowrap;
+}
+.agent-desc {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--dim);
+}
+.agent-row.open .agent-desc { display: block; color: rgba(245, 245, 245, 0.8); }
+.agent-tools { display: none; font-family: var(--mono); font-size: 10.5px; line-height: 1.55; color: var(--faint); }
+.agent-row.open .agent-tools { display: block; }
+.agent-row .row-actions { padding: 10px 6px 0 0; }
+.agent-row:hover .row-actions, .agent-row:focus-within .row-actions { opacity: 1; }
+.agent-pending .agent-name { color: var(--dim); font-weight: 400; }
+
+/* ---------- Vista Agentes: registro de agentes ----------
+   Ocupa el centro bajo la isla (en lugar de la galaxia). Lo único que se anima siempre es
+   el punto de los agentes activos: un rectángulo diminuto. */
+.agent-log { position: absolute; inset: 0; display: flex; justify-content: center; pointer-events: auto; container-type: inline-size; }
+.agent-log[hidden] { display: none; }
+.log-scroll {
+  width: min(680px, 100%);
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 4px 28px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+.log-list-view, .log-detail { display: flex; flex-direction: column; gap: 14px; animation: source-in 450ms var(--ease) both; }
+.log-list-view[hidden], .log-detail[hidden] { display: none; }
+.log-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; padding: 4px 6px 2px; }
+.log-refresh { color: var(--dim); transition: color 300ms var(--ease), transform 300ms var(--ease); }
+.log-refresh:hover { color: var(--fg); }
+.log-refresh.loading svg { animation: breathe 1.2s var(--ease) infinite; }
+
+.log-label, .log-section-label { font-size: 10px; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); }
+.log-session {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px 20px 16px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+.log-session-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.log-reset { font-family: var(--mono); font-size: 11px; letter-spacing: 0.01em; color: var(--faint); text-align: right; }
+.log-used { margin: 0; font-family: var(--display); font-size: 44px; font-weight: 400; line-height: 1; letter-spacing: -0.04em; font-variant-numeric: tabular-nums; }
+.log-used-unit { margin-left: 6px; font-size: 18px; letter-spacing: 0; color: var(--dim); }
+.log-used-unit[hidden] { display: none; }
+.log-bar { display: flex; height: 4px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.log-bar span { height: 100%; transition: width 600ms var(--ease); }
+.log-bar-nexo { background: var(--fg); }
+.log-bar-rest { background: rgba(255, 255, 255, 0.3); }
+.log-split { display: flex; flex-wrap: wrap; gap: 6px 20px; font-size: 12px; color: var(--dim); }
+.log-key { display: inline-flex; align-items: center; gap: 8px; }
+.log-key::before { content: ''; width: 6px; height: 6px; border-radius: 999px; background: var(--fg); }
+.log-key.rest::before { background: rgba(255, 255, 255, 0.3); }
+.log-key b { font-family: var(--mono); font-size: 11.5px; font-weight: 400; font-variant-numeric: tabular-nums; color: var(--fg); }
+.log-note { margin: 0; font-size: 11.5px; line-height: 1.5; color: var(--faint); }
+.log-note[hidden] { display: none; }
+
+.log-section-label { margin: 6px 0 -6px; padding: 0 14px; }
+.log-section-label[hidden] { display: none; }
+.log-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.log-row { position: relative; border-radius: 16px; transition: background 300ms var(--ease); }
+.log-row.enter { animation: source-in 450ms var(--ease) both; }
+/* La línea de abajo mide su parte de lo usado en la sesión. */
+.log-row::after {
+  content: '';
+  position: absolute;
+  left: 46px;
+  right: 16px;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.4) var(--share, 0%), rgba(255, 255, 255, 0.05) var(--share, 0%));
+}
+.log-row:hover, .log-row:focus-within { background: rgba(255, 255, 255, 0.05); }
+.log-main {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 14px;
+  padding: 13px 14px 13px 12px;
+  border-radius: 16px;
+  text-align: left;
+}
+.log-status { justify-self: center; width: 7px; height: 7px; border-radius: 999px; border: 1px solid rgba(255, 255, 255, 0.4); }
+.log-row.active .log-status { border-color: var(--fg); background: var(--fg); animation: breathe 1.8s var(--ease) infinite; }
+.log-text { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.log-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 500; letter-spacing: -0.01em; }
+.log-name-text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.log-model { flex-shrink: 0; }
+.log-sub { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11.5px; color: var(--dim); }
+.log-num { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; white-space: nowrap; font-size: 10.5px; color: var(--faint); }
+.log-num b { font-family: var(--mono); font-weight: 400; font-variant-numeric: tabular-nums; }
+.log-tokens b { font-size: 13px; color: var(--fg); }
+.log-share b { font-size: 11.5px; color: rgba(245, 245, 245, 0.75); }
+.log-chevron { display: flex; color: var(--faint); transition: transform 300ms var(--ease), color 300ms var(--ease); }
+.log-row:hover .log-chevron, .log-main:focus-visible .log-chevron { color: var(--fg); transform: translateX(2px); }
+.log-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 56px 24px; text-align: center; color: var(--faint); }
+.log-empty[hidden] { display: none; }
+.log-empty svg { margin-bottom: 8px; }
+@container (max-width: 420px) { .log-main { gap: 10px; padding-right: 10px; } }
+
+/* Detalle de un agente: su /context y su uso. */
+.log-back {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 14px 0 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--dim);
+  transition: color 300ms var(--ease), background 300ms var(--ease);
+}
+.log-back:hover { color: var(--fg); background: rgba(255, 255, 255, 0.05); }
+.log-detail-head { display: flex; flex-direction: column; gap: 10px; padding: 2px 6px; }
+.log-detail-name { margin: 0; font-family: var(--display); font-size: 22px; font-weight: 500; line-height: 1.2; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.log-detail-title { margin: 0; font-size: 12px; line-height: 1.55; color: var(--dim); }
+.log-spec-active { display: inline-flex; align-items: center; gap: 6px; background: rgba(255, 255, 255, 0.14); color: var(--fg); }
+.log-spec-active::before { content: ''; width: 5px; height: 5px; border-radius: 999px; background: currentColor; animation: breathe 1.8s var(--ease) infinite; }
+.log-spec-done { background: none; border: 1px solid var(--line-strong); color: var(--dim); }
+.log-card {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px 18px 18px;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+}
+.log-card-head { display: flex; align-items: center; gap: 10px; min-height: 30px; }
+.log-card-title { flex: 1 1 auto; margin: 0; font-size: 13px; font-weight: 500; letter-spacing: -0.01em; }
+.log-card-aside { font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--dim); white-space: nowrap; }
+.log-remeasure { width: 30px; height: 30px; color: var(--faint); }
+.log-remeasure:hover:not(:disabled) { color: var(--fg); background: rgba(255, 255, 255, 0.06); }
+.log-measuring { margin: 0; padding: 8px 0; font-size: 12px; color: var(--dim); animation: breathe 1.4s var(--ease) infinite; }
+.log-context { display: flex; flex-direction: column; gap: 14px; }
+.log-context-body { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 24px; }
+@container (max-width: 520px) { .log-context-body { grid-template-columns: minmax(0, 1fr); } }
+/* Cada punto es el 1 % de la ventana de contexto, como los cuadros de /context. */
+.log-grid { display: grid; grid-template-columns: repeat(10, 12px); gap: 5px; }
+.log-cell { display: flex; align-items: center; justify-content: center; width: 12px; height: 12px; }
+.log-cell::before { content: ''; border-radius: 999px; }
+.log-cell.used::before { width: 12px; height: 12px; background: var(--c); transform: scale(var(--f, 1)); }
+.log-cell.free::before { width: 3px; height: 3px; background: rgba(255, 255, 255, 0.24); }
+.log-cell.buffer::before { width: 9px; height: 9px; border: 1px dashed rgba(255, 255, 255, 0.32); }
+.log-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.log-legend-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto minmax(52px, auto); align-items: center; gap: 10px; font-size: 12px; }
+.log-legend-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.log-legend-row .mono { font-size: 11.5px; font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
+.log-swatch { justify-self: center; width: 8px; height: 8px; border-radius: 999px; background: var(--c, transparent); }
+.log-legend-row.free .log-swatch { width: 3px; height: 3px; background: rgba(255, 255, 255, 0.45); }
+.log-legend-row.buffer .log-swatch { border: 1px dashed rgba(255, 255, 255, 0.45); }
+.log-legend-row.deferred .log-swatch { border: 1px solid rgba(255, 255, 255, 0.25); }
+.log-legend-row.free, .log-legend-row.buffer { color: var(--dim); }
+.log-legend-row.deferred { margin-top: 4px; color: var(--faint); }
+.log-usage { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 6px; }
+.log-usage-item { display: flex; flex-direction: column; gap: 5px; padding: 10px 12px; border-radius: 14px; background: rgba(255, 255, 255, 0.04); }
+.log-usage-item dt { font-size: 10px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--faint); }
+.log-usage-item dd { margin: 0; font-family: var(--mono); font-size: 14px; font-variant-numeric: tabular-nums; color: rgba(245, 245, 245, 0.85); }
+.log-usage-item:first-child dd { color: var(--fg); }
+.log-models { display: flex; flex-direction: column; gap: 6px; }
+.log-models[hidden] { display: none; }
+.log-model-line { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--dim); }
+.log-model-line .mono { font-size: 11.5px; color: var(--fg); }
+.log-foot { margin: 0; font-size: 11.5px; line-height: 1.55; color: var(--faint); }
+.log-more { display: flex; flex-direction: column; gap: 6px; }
+.log-group { border-radius: 18px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.02); }
+.log-group summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 14px;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-radius: 18px;
+  font-size: 12.5px;
+  font-weight: 500;
+  list-style: none;
+  cursor: pointer;
+}
+.log-group summary::-webkit-details-marker { display: none; }
+.log-group summary .mono { font-size: 11.5px; font-weight: 400; }
+.log-group summary svg { color: var(--faint); transition: transform 300ms var(--ease); }
+.log-group[open] summary svg { transform: rotate(90deg); }
+.log-group-list { list-style: none; margin: 0; padding: 0 16px 12px; display: flex; flex-direction: column; gap: 7px; }
+.log-group-list li { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--dim); }
+.log-group-list li span:first-child { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.log-group-list .mono { font-size: 11.5px; font-variant-numeric: tabular-nums; color: rgba(245, 245, 245, 0.85); }
+.log-group-label { margin: 2px 16px 8px; font-size: 10px; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; color: var(--faint); }

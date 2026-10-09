@@ -67,10 +67,16 @@ pub fn find_claude(app: &AppHandle) -> Option<PathBuf> {
 
 /// Papel de Claude Code dentro de nexo: orquestador y quien responde sobre las fuentes.
 /// Se añade al prompt de sistema en cada arranque (también al retomar la sesión).
-fn orchestrator_prompt(root: &std::path::Path, session: &str) -> String {
+pub(crate) fn orchestrator_prompt(root: &std::path::Path, session: &str) -> String {
     format!(
         "Estás dentro de nexo, un NotebookLM personal. Eres el orquestador: respondes al usuario sobre sus \
 fuentes y su wiki, y coordinas el trabajo.\n\n\
+Antes de cada tarea, aunque el usuario no nombre ninguna skill ni ningún agente, comprueba si ya hay uno suyo \
+que la cubra: sus skills (las tienes listadas con su descripción y cuándo usarlas) y sus agentes (los de \
+.claude/agents/, que aparecen en la herramienta Agent; si dudas, lista esa carpeta y lee su frontmatter, \
+porque el usuario puede haber creado uno hace un momento). Si encaja una skill, síguela; si encaja un agente, \
+encárgale el trabajo con su subagent_type. Dilo en una línea («Uso la skill classroom», «Se lo encargo al \
+agente revisor-classroom») y después resume lo que devuelva. Si ninguno encaja, hazlo tú.\n\n\
 Vault de Obsidian: {vault}\n\
 - raw/: fuentes originales. raw/markdown/ tiene los PDF y documentos convertidos a Markdown con MarkItDown; \
 raw/web/ tiene páginas web guardadas por Antigravity. Lee siempre la versión .md en lugar del PDF.\n\
@@ -134,6 +140,15 @@ Si alguna vez debes ejecutar agy tú mismo: pasa el prompt como argumento (`agy 
 la tarea, así que solo se añade `read_url(<dominio>)` en ~/.gemini/antigravity-cli/settings.json (nunca read_url(*), \
 command(...) ni --dangerously-skip-permissions), y para textos largos copia el contenido a fuente.md en una carpeta \
 vacía y pídele que lo lea con view_file.\n\n\
+Skills y agentes: las skills del usuario son las de Claude Code de este vault, en \
+.claude/skills/<nombre>/SKILL.md (nexo las muestra alrededor de la galaxia y en Agentes → Skills), y sus \
+agentes, los de .claude/agents/<nombre>.md (nexo los muestra en Agentes → Agentes con su description como \
+resumen, su model y su effort, así que esos tres campos van siempre explícitos). Para crear, cambiar o mejorar \
+una skill o un agente delega SIEMPRE en el agente `creador-de-skills` (herramienta Agent con subagent_type \
+creador-de-skills; trabaja con Sonnet 5.5 y esfuerzo medio y puede leer el grafo): pásale la petición literal \
+del usuario (con el modelo y el esfuerzo que pida) y el contexto que tengas, y no lo escribas tú. Si el agente devuelve preguntas, házselas al usuario y vuelve a llamarlo con \
+las respuestas. Cuando el agente termine, di qué skill quedó y cómo se usa. Cuando el usuario invoque una \
+skill con /<nombre>, síguela.\n\n\
 Navegador: tienes el servidor MCP `playwright` (herramientas mcp__playwright__browser_*), que abre un Chrome con \
 ventana sobre una copia del perfil del navegador del usuario (sus sesiones iniciadas), cargada con el botón \
 «Cargar navegador» de Conexiones. Úsalo cuando el usuario te pida consultar o hacer algo en una web, sobre todo \
@@ -150,6 +165,15 @@ pub fn current_session_name(app: &AppHandle) -> Option<String> {
     let state = app.state::<ClaudeCodeState>();
     let run = state.run.lock().ok()?;
     run.as_ref().map(|r| r.name.clone())
+}
+
+/// Id de la sesión de esta apertura (si ya se creó) y si Claude Code está en marcha: el
+/// registro de agentes marca así al orquestador activo.
+pub fn current_session(app: &AppHandle) -> Option<(String, bool)> {
+    let state = app.state::<ClaudeCodeState>();
+    let id = state.run.lock().ok()?.as_ref()?.id.clone();
+    let running = state.session.lock().is_ok_and(|s| s.is_some());
+    Some((id, running))
 }
 
 /// Claude Code guarda cada sesión en `~/.claude/projects/<carpeta>/<id>.jsonl`; solo existe
@@ -232,6 +256,11 @@ pub fn claude_code_start(
             (run.name.clone(), format!("{} · sesión nueva", run.name))
         }
     };
+    // El agente que escribe las skills tiene que estar antes de arrancar: Claude Code lee
+    // los agentes del vault al empezar la sesión.
+    if let Err(e) = crate::skills::install_agent(&root) {
+        log::warn!("No se pudo instalar el agente de skills: {e}");
+    }
     let cwd = root.clone();
     cmd.args([
         "--append-system-prompt",
