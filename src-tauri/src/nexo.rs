@@ -639,4 +639,92 @@ mod tests {
         assert!(wiki_path(wiki, ".obsidian/app.md", true).is_err());
         assert!(wiki_path(wiki, "rag/nota.txt", true).is_err());
     }
+
+    /// `vault/wiki/` vacía y, fuera del vault, `ajeno/secreto.md`.
+    #[cfg(unix)]
+    fn temp(name: &str) -> (PathBuf, PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("nexo-herramientas-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let wiki = root.join("vault/wiki");
+        let outside = root.join("ajeno");
+        fs::create_dir_all(&wiki).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secreto.md"), "ajeno").unwrap();
+        (wiki, outside)
+    }
+
+    #[cfg(unix)]
+    fn tool(wiki: &Path, name: &str, input: Value) -> Result<String, String> {
+        run_tool(wiki, name, &input, &Channel::new(|_| Ok(())))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wiki_path_rechaza_los_enlaces_que_salen_del_vault() {
+        use std::os::unix::fs::symlink;
+        let (wiki, outside) = temp("ruta");
+        symlink(&outside, wiki.join("carpeta")).unwrap();
+        symlink(outside.join("secreto.md"), wiki.join("archivo.md")).unwrap();
+        symlink(outside.join("nueva.md"), wiki.join("roto.md")).unwrap();
+
+        for path in [
+            "carpeta/nota.md",
+            "carpeta/sub/nota.md",
+            "archivo.md",
+            "roto.md",
+        ] {
+            assert!(wiki_path(&wiki, path, true).is_err(), "aceptó {path}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn wiki_path_acepta_los_enlaces_que_se_quedan_dentro() {
+        use std::os::unix::fs::symlink;
+        let (wiki, _) = temp("dentro");
+        fs::create_dir_all(wiki.join("rag")).unwrap();
+        symlink(wiki.join("rag"), wiki.join("alias")).unwrap();
+
+        assert!(wiki_path(&wiki, "alias/nota.md", true).is_ok());
+        assert!(wiki_path(&wiki, "tema/nuevo/nota.md", true).is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_note_no_escribe_fuera_del_vault() {
+        use std::os::unix::fs::symlink;
+        let (wiki, outside) = temp("escribir");
+        symlink(&outside, wiki.join("carpeta")).unwrap();
+        symlink(outside.join("secreto.md"), wiki.join("archivo.md")).unwrap();
+        symlink(outside.join("nueva.md"), wiki.join("roto.md")).unwrap();
+
+        for path in ["carpeta/nota.md", "archivo.md", "roto.md"] {
+            let result = tool(&wiki, "write_note", json!({"path": path, "content": "x"}));
+            assert!(result.is_err(), "write_note aceptó {path}");
+        }
+        assert!(!outside.join("nota.md").exists(), "creó un archivo fuera");
+        assert!(
+            !outside.join("nueva.md").exists(),
+            "creó el destino del enlace roto"
+        );
+        assert_eq!(
+            fs::read_to_string(outside.join("secreto.md")).unwrap(),
+            "ajeno"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_note_no_lee_fuera_del_vault() {
+        use std::os::unix::fs::symlink;
+        let (wiki, outside) = temp("leer");
+        symlink(&outside, wiki.join("carpeta")).unwrap();
+        symlink(outside.join("secreto.md"), wiki.join("archivo.md")).unwrap();
+
+        for path in ["carpeta/secreto.md", "archivo.md"] {
+            let result = tool(&wiki, "read_note", json!({"path": path}));
+            assert!(result.is_err(), "read_note devolvió {path}: {result:?}");
+        }
+    }
 }
