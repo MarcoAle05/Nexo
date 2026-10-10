@@ -13,6 +13,7 @@ npm run tauri dev          # app de escritorio con recarga en vivo (arranca Vite
 npm run dev                # solo la interfaz en el navegador (sin comandos de Tauri)
 npm run build              # build del frontend (dist/)
 npm run tauri build        # instaladores
+npm test                   # pruebas de la interfaz (node --test tests/*.test.mjs)
 
 cd src-tauri
 cargo build --no-default-features   # compila el backend sin abrir ventana
@@ -21,6 +22,8 @@ cargo test --no-default-features <nombre>            # una prueba
 cargo test --no-default-features -- --ignored        # pruebas de integración (usan markitdown-mcp y ~/.claude reales)
 cargo fmt
 ```
+
+El CI (`.github/workflows/ci.yml`) corre en cada PR y en `main`: `npm test`, `npm run build`, `cargo fmt --check` y `cargo test --no-default-features` (instala antes las dependencias de sistema de Tauri).
 
 Si `cargo` no está en el PATH de la sesión: `source ~/.cargo/env`.
 
@@ -41,7 +44,7 @@ Todo gira en torno a un vault de Obsidian elegido por el usuario (ruta guardada 
 - `.claude/skills/<nombre>/SKILL.md`: las **skills** del usuario, que son skills de Claude Code del vault (la sesión de nexo arranca en la raíz y las carga). nexo lee su frontmatter (`name`, `description` = resumen que ve el usuario, `when_to_use`) y las dibuja alrededor de la galaxia. Las escribe el agente `.claude/agents/creador-de-skills.md` (Sonnet 5.5, `effort: medium`), que nexo instala y mantiene mientras conserve su línea final `<!-- nexo: … -->` (si el usuario la borra, el archivo es suyo).
 - `.claude/agents/*.md`: los **agentes** (subagentes de Claude Code) del vault; también los crea `creador-de-skills`, siempre con `model` y `effort` explícitos. nexo los lista en Agentes → Agentes con su `description` como resumen, el modelo y el esfuerzo.
 
-Toda ruta que llega desde la interfaz o desde herramientas del modelo pasa por `vault::resolve_inside` (fuentes/notas) o `nexo::wiki_path` (herramientas de compile) para impedir salir del vault.
+Toda ruta que llega desde la interfaz o desde herramientas del modelo pasa por un guardián que impide salir del vault. `vault::resolve_inside` (fuentes y grafo) y `nexo::wiki_path` (herramientas de compile, cuyas rutas las escribe el modelo) resuelven además los enlaces simbólicos: uno dentro del vault que apunte fuera se rechaza. `notas::resolve` y `agents::agent_file` solo miran el texto de la ruta; sus rutas vienen de la interfaz.
 
 ## Arquitectura
 
