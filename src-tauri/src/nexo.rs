@@ -324,7 +324,32 @@ fn wiki_path(wiki: &Path, path: &str, must_be_md: bool) -> Result<PathBuf, Strin
     if must_be_md && !clean.to_lowercase().ends_with(".md") {
         return Err("Solo se pueden escribir notas .md".into());
     }
-    Ok(wiki.join(p))
+    let file = wiki.join(p);
+    if !stays_inside(wiki, &file) {
+        return Err(format!("Ruta fuera de la wiki: {path}"));
+    }
+    Ok(file)
+}
+
+/// `false` si un enlace simbólico saca `file` de `wiki`. Se resuelve la parte de la ruta que
+/// ya existe: lo que falta lo crea `write_note` y no puede ser un enlace.
+fn stays_inside(wiki: &Path, file: &Path) -> bool {
+    let Ok(base) = wiki.canonicalize() else {
+        // Sin wiki todavía no hay enlaces que seguir.
+        return true;
+    };
+    let mut existing = file;
+    // `symlink_metadata` y no `exists`: un enlace roto también cuenta, porque escribir en
+    // él crea su destino.
+    while existing.symlink_metadata().is_err() {
+        match existing.parent() {
+            Some(parent) => existing = parent,
+            None => return false,
+        }
+    }
+    existing
+        .canonicalize()
+        .is_ok_and(|real| real.starts_with(&base))
 }
 
 fn wiki_listing(wiki: &Path) -> String {
