@@ -4,7 +4,7 @@ import { select } from 'd3-selection';
 import 'd3-transition';
 import { zoom, zoomIdentity } from 'd3-zoom';
 
-const FONT = "'Geist Variable', 'Geist', system-ui, sans-serif";
+const FONT = "'Inter Variable', 'Inter', system-ui, sans-serif";
 const WHITE = (a) => `rgba(255,255,255,${a})`;
 
 // Paleta galaxia: neones desaturados, luminosos pero suaves sobre el negro.
@@ -68,6 +68,10 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
   let fxFrame = 0;
   let fxDirty = null; // rectángulo (px del dispositivo) pintado en la capa de efectos
   let active = true; // con el grafo tapado (vista Notas, cartas expandidas) no se dibuja
+  // Al cargar, la vista sigue al grafo mientras la simulación lo coloca (si no, aparecía
+  // descentrado y bajo la carta de fuentes hasta que la simulación terminaba y saltaba).
+  // Se deja de seguir en cuanto el usuario mueve o acerca, o se encuadra a propósito.
+  let following = false;
 
   const simulation = forceSimulation()
     .force('link', forceLink().id((d) => d.id).distance(60).strength(0.5))
@@ -76,7 +80,10 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
     .force('x', forceX(0).strength(0.04))
     .force('y', forceY(0).strength(0.04))
     .force('collide', forceCollide((d) => radius(d) * (isGalaxy(d) ? 3 : 1) + 6))
-    .on('tick', requestDraw);
+    .on('tick', () => {
+      if (following) follow();
+      requestDraw();
+    });
 
   function radius(d) {
     const degree = adjacency.get(d.id)?.size ?? 0;
@@ -230,6 +237,21 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
   const BIRTH_MS = 6000;
   const births = new Map();
 
+  // Ancho de cada etiqueta, medido una vez por fuente y texto (cambia al cargar Inter).
+  const labelWidths = new Map();
+  let labelsShown = new Set();
+  function labelWidth(font, text) {
+    const key = `${font}|${text}`;
+    let w = labelWidths.get(key);
+    if (w == null) {
+      ctx.font = font;
+      w = ctx.measureText(text).width;
+      if (labelWidths.size > 5000) labelWidths.clear();
+      labelWidths.set(key, w);
+    }
+    return w;
+  }
+
   function requestDraw() {
     if (!frame && active) frame = requestAnimationFrame(draw);
   }
@@ -358,24 +380,84 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
       ctx.fill();
     }
 
-    // etiquetas: índices y vecindario siempre; el resto al acercar
+    // etiquetas: índices y vecindario siempre; el resto al acercar. Se colocan por prioridad
+    // sin tapar otras etiquetas ni otras estrellas: la que no cabe a la derecha prueba a la
+    // izquierda, encima y debajo, y si no, no se dibuja (al pasar el ratón por el nodo
+    // aparece). Las del foco y la del ratón siempre se ven.
     if (showLabels) {
-      ctx.textBaseline = 'middle';
-      let font = '';
+      const candidates = [];
       for (const d of nodes) {
         if (!isVisible(d) || !onScreen(d)) continue;
         const inFocus = highlight?.has(d.id);
         const always = d.kind === 'index' || d.kind === 'source' || d.kind === 'conversation' || d === hovered || births.has(d.id) || (selected && inFocus);
         if (!always && k < 1.3) continue;
+        const rank =
+          d === selected ? 0
+          : d === hovered ? 1
+          : births.has(d.id) ? 2
+          : inFocus ? 3
+          : d.kind === 'index' ? 4
+          : d.kind === 'source' || d.kind === 'conversation' ? 5
+          : d.kind === 'missing' ? 7
+          : 6;
+        candidates.push({ d, inFocus, rank, degree: adjacency.get(d.id)?.size ?? 0, seen: labelsShown.has(d.id) });
+      }
+      // A igual prioridad, primero las que ya se veían (que no parpadeen al moverse) y las
+      // de los nodos con más conexiones.
+      candidates.sort((a, b) => a.rank - b.rank || b.seen - a.seen || b.degree - a.degree);
+      const taken = new Map(); // celda de 48 px → rectángulos ocupados
+      const cells = ([x, y, w, h], fn) => {
+        for (let cx = Math.floor(x / 48); cx <= Math.floor((x + w) / 48); cx++)
+          for (let cy = Math.floor(y / 48); cy <= Math.floor((y + h) / 48); cy++) fn(`${cx},${cy}`);
+      };
+      // `own`: la estrella del propio nodo, que no estorba a su etiqueta.
+      const free = (box, own) => {
+        let ok = true;
+        cells(box, (key) => {
+          if (ok) ok = !(taken.get(key) ?? []).some((o) => o !== own && box[0] < o[0] + o[2] && box[0] + box[2] > o[0] && box[1] < o[1] + o[3] && box[1] + box[3] > o[1]);
+        });
+        return ok;
+      };
+      const occupy = (box) => cells(box, (key) => (taken.get(key) ?? taken.set(key, []).get(key)).push(box));
+      const stars = new Map();
+      for (const d of nodes) {
+        if (!isVisible(d) || !onScreen(d)) continue;
+        const r = radius(d) * k + 2;
+        const star = [screenX(d.x) - r, screenY(d.y) - r, r * 2, r * 2];
+        stars.set(d, star);
+        occupy(star);
+      }
+      const shown = new Set();
+      ctx.textBaseline = 'middle';
+      let font = '';
+      for (const { d, inFocus, rank } of candidates) {
         const size = d === selected ? 15 : d.kind === 'index' ? 12.5 : 11;
         const next = `${d.kind === 'index' || d === selected ? 500 : 400} ${size}px ${FONT}`;
+        const w = labelWidth(next, d.label);
+        const h = size * 1.3;
+        const gap = (radius(d) + (d === selected ? 14 : 5)) * k;
+        const x = screenX(d.x);
+        const y = screenY(d.y);
+        const r = radius(d) * k + 3;
+        const spots = [
+          [x + gap - 2, y - h / 2, w + 4, h],
+          [x - gap - w - 2, y - h / 2, w + 4, h],
+          [x - w / 2 - 2, y - r - h, w + 4, h],
+          [x - w / 2 - 2, y + r, w + 4, h],
+        ];
+        const own = stars.get(d);
+        const box = spots.find((spot) => free(spot, own)) ?? (rank <= 1 ? spots[0] : null);
+        if (!box) continue;
+        occupy(box);
+        shown.add(d.id);
         if (next !== font) ctx.font = font = next;
         const strong = d.kind === 'index' || d.kind === 'source' || d.kind === 'conversation' || inFocus;
         ctx.fillStyle = d.kind === 'note' || d.kind === 'missing'
           ? WHITE(highlight && !inFocus ? 0.35 : strong ? 0.92 : 0.6)
           : rgba(colorFor(d), highlight && !inFocus ? 0.4 : 0.95);
-        ctx.fillText(d.label, screenX(d.x) + (radius(d) + (d === selected ? 14 : 5)) * k, screenY(d.y));
+        ctx.fillText(d.label, box[0] + 2, box[1] + h / 2);
       }
+      labelsShown = shown;
     }
     requestFx();
   }
@@ -452,6 +534,7 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
     .filter((event) => !event.button && event.type !== 'dblclick')
     .on('zoom', (event) => {
       transform = event.transform;
+      if (event.sourceEvent) following = false; // el usuario movió o acercó la vista
       requestDraw();
     });
   select(canvas).call(zoomBehavior);
@@ -499,10 +582,16 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
     requestDraw();
   }
   new ResizeObserver(resize).observe(canvas);
-  // El canvas no hereda el CSS: se repinta cuando Geist termina de cargar para que las
+  // El canvas no hereda el CSS: se repinta cuando Inter termina de cargar para que las
   // etiquetas no se queden con la fuente del sistema.
-  document.fonts.load(`500 12px ${FONT}`).finally(requestDraw);
-  document.fonts.addEventListener('loadingdone', requestDraw);
+  document.fonts.load(`500 12px ${FONT}`).finally(() => {
+    labelWidths.clear();
+    requestDraw();
+  });
+  document.fonts.addEventListener('loadingdone', () => {
+    labelWidths.clear();
+    requestDraw();
+  });
   resize();
 
   // Vista que encaja los nodos visibles dentro del hueco central (entre los paneles).
@@ -518,7 +607,18 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
   }
 
   function fit(duration = 600) {
+    following = false;
     select(canvas).transition().duration(duration).call(zoomBehavior.transform, fitTransform());
+  }
+
+  // Un paso hacia el encuadre (suave: la vista acompaña al grafo mientras se despliega).
+  function follow() {
+    const target = fitTransform();
+    const t = 0.12;
+    const next = zoomIdentity
+      .translate(transform.x + (target.x - transform.x) * t, transform.y + (target.y - transform.y) * t)
+      .scale(transform.k + (target.k - transform.k) * t);
+    select(canvas).call(zoomBehavior.transform, next);
   }
 
   return {
@@ -544,11 +644,11 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
       highlight = computeHighlight();
       simulation.alpha(fresh ? 1 : 0.2).restart();
       if (fresh && !previous.size) {
-        transform = zoomIdentity.translate(getViewport().cx, getViewport().cy);
-        select(canvas).call(zoomBehavior.transform, transform);
+        select(canvas).call(zoomBehavior.transform, fitTransform());
+        following = true;
         simulation.on('end.fit', () => {
           simulation.on('end.fit', null);
-          fit();
+          if (following) fit();
         });
       }
       requestDraw();
@@ -589,6 +689,7 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
     focus(id) {
       const d = nodes.find((n) => n.id === id);
       if (!d) return false;
+      following = false;
       setSelected(d);
       const view = getViewport();
       const next = zoomIdentity.translate(view.cx, view.cy).scale(Math.max(transform.k, 1.4)).translate(-d.x, -d.y);
@@ -600,6 +701,7 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
     // (la que tenía o, con `refit`, encajada). Se anima con el propio zoom: escalar el lienzo
     // con CSS obligaba a repintarlo entero en cada fotograma y descuadraba sus medidas.
     reveal({ refit = false, duration = 1000 } = {}) {
+      following = false;
       const target = refit ? fitTransform() : transform;
       const { cx, cy } = getViewport();
       const s = 0.55;

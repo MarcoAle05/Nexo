@@ -41,6 +41,24 @@ pub struct ClaudeCodeState {
 
 static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// Variables que Claude Code pone a lo que lanza (su terminal y sus herramientas). Si nexo se
+/// abre desde ahí (`npm run tauri dev` en una sesión de Claude Code) las hereda, y un Claude
+/// Code con `CLAUDE_CODE_CHILD_SESSION` se toma por sesión hija: no guarda su transcripción
+/// (el registro de agentes no la ve) ni el historial. Se quitan antes de lanzar `claude`.
+pub(crate) const INHERITED_ENV: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+    "AI_AGENT",
+];
+
 /// Busca el ejecutable `claude` en el PATH y en las rutas donde lo instala su instalador.
 pub fn find_claude(app: &AppHandle) -> Option<PathBuf> {
     let name = if cfg!(windows) {
@@ -271,6 +289,9 @@ pub fn claude_code_start(
         cmd.arg(config);
     }
     cmd.cwd(&cwd);
+    for key in INHERITED_ENV {
+        cmd.env_remove(key);
+    }
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
     let child = pty

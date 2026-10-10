@@ -33,17 +33,17 @@ export function formatUsd(usd) {
 export const totalTokens = (t) => (t ? t.input + t.output + t.cache_read + t.cache_write : 0);
 
 // Categorías de /context (los nombres que da Claude Code) → etiqueta y color de nexo.
-// Los colores son los neones suaves del grafo; la conversación, blanca.
+// Los colores son neones suaves; la conversación, blanca.
 export const CATEGORY = {
-  'System prompt': { label: 'Instrucciones del sistema', color: '#b69cff' },
-  'System tools': { label: 'Herramientas', color: '#7fe7ff' },
+  'System prompt': { label: 'Instrucciones del sistema', color: '#bfa3fe' },
+  'System tools': { label: 'Herramientas', color: '#60d9ff' },
   'MCP tools': { label: 'Herramientas MCP', color: '#8fa8ff' },
   'MCP server instructions': { label: 'Instrucciones MCP', color: '#9ff0ff' },
-  'Custom agents': { label: 'Agentes', color: '#ff8ad8' },
-  'Memory files': { label: 'Memoria', color: '#ffb0c8' },
-  Skills: { label: 'Skills', color: '#7dffcf' },
+  'Custom agents': { label: 'Agentes', color: '#fd80c9' },
+  'Memory files': { label: 'Memoria', color: '#ffdbe5' },
+  Skills: { label: 'Skills', color: '#6ef8d0' },
   'Initial context': { label: 'Al empezar', color: '#c9a8ff' },
-  Messages: { label: 'Conversación', color: '#f5f5f5' },
+  Messages: { label: 'Conversación', color: '#fdfdfe' },
   'Autocompact buffer': { label: 'Reserva para compactar' },
   'Compact buffer': { label: 'Reserva para compactar' },
   'Free space': { label: 'Libre' },
@@ -58,26 +58,22 @@ export function categoryLabel(name, kind = 'main') {
   return CATEGORY[name]?.label ?? DEFERRED[name] ?? name;
 }
 
-// Celdas de la retícula de /context: cada una es 1/n de la ventana de contexto. Toda
-// categoría usada tiene al menos una (la última puede ir a medias, `fill` < 1); la reserva
-// para compactar va al final y el resto es espacio libre.
-export function contextCells(categories, max, n = 100) {
-  const per = max / n;
-  const cells = [];
-  const used = (categories ?? []).filter((c) => c.kind === 'used' && c.tokens > 0);
-  for (const c of used) {
-    let left = c.tokens;
-    do {
-      const fill = Math.min(1, left / per);
-      cells.push({ name: c.name, kind: 'used', fill });
-      left -= per;
-    } while (left > per * 0.05 && cells.length < n);
-  }
-  const buffer = (categories ?? []).find((c) => c.kind === 'buffer');
-  const reserve = buffer ? Math.min(n - Math.min(cells.length, n), Math.round(buffer.tokens / per)) : 0;
-  while (cells.length < n - reserve) cells.push({ name: 'Free space', kind: 'free', fill: 1 });
-  while (cells.length < n) cells.push({ name: buffer.name, kind: 'buffer', fill: 1 });
-  return cells.slice(0, n);
+// Tramos de la barra del contexto, en % de la ventana: uno por categoría usada, a escala pero
+// con un mínimo para que se vea aunque sea diminuta, y la reserva para compactar al final
+// (solo lo que quede libre de ella). Si los mínimos no caben, los tramos usados se encogen
+// para que todo sume como mucho 100.
+export function contextSegments(categories, max, min = 1.2) {
+  const list = categories ?? [];
+  const pct = (tokens) => (max > 0 ? (tokens / max) * 100 : 0);
+  const used = list.filter((c) => c.kind === 'used' && c.tokens > 0);
+  const segments = used.map((c) => ({ name: c.name, kind: 'used', pct: Math.max(min, pct(c.tokens)) }));
+  const buffer = list.find((c) => c.kind === 'buffer' && c.tokens > 0);
+  const free = 100 - used.reduce((sum, c) => sum + pct(c.tokens), 0);
+  const reserve = buffer ? Math.max(0, Math.min(pct(buffer.tokens), free)) : 0;
+  const total = segments.reduce((sum, c) => sum + c.pct, 0);
+  if (total > 100 - reserve) for (const c of segments) c.pct *= (100 - reserve) / total;
+  if (reserve > 0) segments.push({ name: buffer.name, kind: 'buffer', pct: reserve });
+  return segments;
 }
 
 // Parte de la ventana de contexto: «12 %», «0,7 %», «< 0,1 %».
@@ -102,8 +98,11 @@ const CHEVRON =
   '<svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg>';
 const BACK =
   '<svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12 5-5 5 5 5"/></svg>';
+const DOWN =
+  '<svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg>';
 
 const POLL_MS = 5000;
+const REMEASURE_MS = 45000;
 
 export function createAgentLog({ invoke, fail }) {
   const $ = (id) => document.getElementById(id);
@@ -156,23 +155,33 @@ export function createAgentLog({ invoke, fail }) {
   function renderSession() {
     const used = log?.used;
     const win = log?.window;
-    $('log-used').textContent = used == null ? '—' : num(used, used < 10 ? 1 : 0);
+    const usedEl = $('log-used');
+    usedEl.textContent = used == null ? '—' : num(used, used < 10 ? 1 : 0);
+    // Claude da el porcentaje cada pocos minutos; entre lecturas se suma lo que gastaron los
+    // agentes de este equipo.
+    usedEl.title = log?.checked
+      ? `Claude lo dio a las ${clock(log.checked)}; desde entonces se suma lo que gastaron los agentes de este equipo.`
+      : '';
     $('log-used-unit').hidden = used == null;
     $('log-reset').textContent = win
-      ? `Se renueva a las ${clock(win.end)} · ${untilLabel(win.end)}`
-      : used == null
-        ? ''
-        : 'Sin sesión en curso';
+      ? `Se renueva ${win.exact ? 'a' : 'hacia'} las ${clock(win.end)} · ${untilLabel(win.end)}`
+      : log
+        ? 'Sin sesión en curso'
+        : '';
     const nexo = log?.nexo_share;
     const rest = used != null && nexo != null ? Math.max(0, used - nexo) : null;
-    $('log-nexo').textContent = formatShare(nexo);
-    $('log-rest').textContent = formatShare(rest);
+    $('log-nexo').textContent = nexo == null ? '—' : percent(nexo);
+    $('log-rest').textContent = rest == null ? '—' : percent(rest);
     $('log-bar-nexo').style.width = `${Math.min(100, nexo ?? 0)}%`;
     $('log-bar-rest').style.width = `${Math.min(100 - Math.min(100, nexo ?? 0), rest ?? 0)}%`;
     const note = $('log-note');
     note.textContent = log?.error
-      ? `No se pudo leer el uso del plan (${log.error}). Se muestran las últimas 5 h sin porcentaje.`
-      : '';
+      ? `No se pudo leer el uso del plan: ${log.error} Mientras, la sesión de 5 h se deduce de tus mensajes en este equipo, sin porcentaje.`
+      : log?.note
+        ? log.note
+        : win && !win.exact
+          ? 'Sesión deducida de tus mensajes en este equipo: el porcentaje llegará con la próxima lectura de Claude.'
+          : '';
     note.hidden = !note.textContent;
   }
 
@@ -224,7 +233,6 @@ export function createAgentLog({ invoke, fail }) {
     const agents = log?.agents ?? [];
     const running = agents.filter((a) => a.active);
     const past = agents.filter((a) => !a.active);
-    $('log-count').textContent = String(agents.length);
     const opts = {
       key: (a) => a.id,
       sig: (a) =>
@@ -233,8 +241,10 @@ export function createAgentLog({ invoke, fail }) {
     };
     reconcile($('log-active'), running, opts);
     reconcile($('log-past'), past, opts);
-    $('log-active-label').hidden = running.length === 0;
-    $('log-past-label').hidden = past.length === 0;
+    $('log-active-sec').hidden = running.length === 0;
+    $('log-past-sec').hidden = past.length === 0;
+    $('log-active-count').textContent = `· ${running.length}`;
+    $('log-past-count').textContent = `· ${past.length}`;
     const empty = $('log-empty');
     empty.hidden = agents.length > 0;
     if (!agents.length) {
@@ -271,43 +281,59 @@ export function createAgentLog({ invoke, fail }) {
     root.querySelector(`.log-row[data-key="${CSS.escape(id ?? '')}"] .log-main`)?.focus();
   }
 
-  async function measure(id) {
-    context = { id, loading: true };
-    renderContext();
+  // `quiet`: se vuelve a medir sin borrar lo que se ve (el agente avanzó o terminó).
+  async function measure(id, quiet = false) {
+    const agent = log?.agents?.find((a) => a.id === id);
+    const seen = { calls: agent?.calls, active: agent?.active, at: Date.now() };
+    if (quiet && context?.data) {
+      context = { ...context, ...seen, refreshing: true };
+      $('ld-remeasure')?.classList.add('loading');
+    } else {
+      context = { id, loading: true, ...seen };
+      renderContext();
+    }
     try {
       const data = await invoke('agent_context', { id });
-      if (openId === id) context = { id, data };
+      if (openId === id) context = { id, data, ...seen };
     } catch (error) {
-      if (openId === id) context = { id, error: String(error) };
+      if (openId === id && !quiet) context = { id, error: String(error), ...seen };
+      else if (openId === id) context = { ...context, refreshing: false };
     }
     if (openId === id) renderContext();
+  }
+
+  // El contexto que se ve es de cuando se midió: si el agente siguió (más llamadas) o
+  // terminó, se vuelve a medir, como mucho cada REMEASURE_MS mientras trabaja.
+  function stale(agent) {
+    if (!context?.data || context.refreshing || context.id !== agent.id) return false;
+    if (agent.calls === context.calls && agent.active === context.active) return false;
+    return !agent.active || Date.now() - context.at > REMEASURE_MS;
   }
 
   function renderDetail() {
     const agent = log?.agents?.find((a) => a.id === openId);
     if (!detail.firstChild) {
       detail.innerHTML = `
-        <button type="button" class="log-back" id="log-back">${BACK}<span>Registro</span></button>
         <header class="log-detail-head">
-          <span class="eyebrow" id="ld-kind"></span>
+          <button type="button" class="log-back" id="log-back">${BACK}<span>Registro</span></button>
           <h2 class="log-detail-name" id="ld-name"></h2>
-          <div class="agent-specs" id="ld-specs"></div>
+          <div class="log-chips" id="ld-specs"></div>
           <p class="log-detail-title" id="ld-title"></p>
         </header>
-        <section class="log-card" aria-labelledby="ld-ctx-h">
-          <div class="log-card-head">
-            <h3 class="log-card-title" id="ld-ctx-h">Contexto</h3>
-            <span class="log-card-aside" id="ld-ctx-total"></span>
+        <section class="log-sec" aria-labelledby="ld-ctx-h">
+          <div class="log-sec-head">
+            <h3 class="log-h" id="ld-ctx-h">Contexto</h3>
+            <span class="log-sec-aside mono" id="ld-ctx-total"></span>
             <button type="button" class="icon-btn log-remeasure" id="ld-remeasure" aria-label="Volver a medir" title="Volver a medir"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
           </div>
           <div class="log-context" id="ld-context"></div>
         </section>
-        <section class="log-card" aria-labelledby="ld-use-h">
-          <div class="log-card-head">
-            <h3 class="log-card-title" id="ld-use-h">En esta sesión de 5 h</h3>
-            <span class="log-card-aside" id="ld-share"></span>
+        <section class="log-sec" aria-labelledby="ld-use-h">
+          <div class="log-sec-head">
+            <h3 class="log-h" id="ld-use-h">En esta sesión de 5 h</h3>
+            <span class="log-sec-aside" id="ld-share"></span>
           </div>
-          <dl class="log-usage" id="ld-usage"></dl>
+          <dl class="log-stats" id="ld-usage"></dl>
           <div class="log-models" id="ld-models"></div>
           <p class="log-foot" id="ld-cost"></p>
         </section>
@@ -320,18 +346,18 @@ export function createAgentLog({ invoke, fail }) {
       if (log) closeDetail();
       return;
     }
-    $('ld-kind').textContent = agent.kind === 'main' ? 'Agente principal' : 'Subagente';
     $('ld-name').textContent = agent.name;
-    const spec = (text, extra) => {
+    $('ld-name').title = agent.kind === 'main' ? 'Agente principal' : 'Subagente';
+    const chip = (text, extra) => {
       const s = document.createElement('span');
-      s.className = `agent-spec ${extra ?? ''}`;
+      s.className = `log-chip ${extra ?? ''}`;
       s.textContent = text;
       return s;
     };
     $('ld-specs').replaceChildren(
-      spec(modelLabel(agent.model)),
-      ...(agent.kind === 'sub' ? [spec(effortLabel(agent.effort))] : []),
-      agent.active ? spec('Activo', 'log-spec-active') : spec('Terminado', 'log-spec-done'),
+      chip(modelLabel(agent.model)),
+      ...(agent.kind === 'sub' ? [chip(effortLabel(agent.effort))] : []),
+      agent.active ? chip('Activo', 'status on') : chip('Terminado', 'status'),
     );
     $('ld-title').textContent = [agent.title, timeLabel(agent)].filter(Boolean).join(' · ');
 
@@ -347,7 +373,7 @@ export function createAgentLog({ invoke, fail }) {
     $('ld-usage').replaceChildren(
       ...usage.map(([label, value, hint]) => {
         const div = document.createElement('div');
-        div.className = 'log-usage-item';
+        div.className = 'log-stat';
         div.title = hint;
         div.innerHTML = '<dt></dt><dd></dd>';
         div.querySelector('dt').textContent = label;
@@ -369,19 +395,23 @@ export function createAgentLog({ invoke, fail }) {
         }),
       );
     }
-    $('ld-cost').textContent = `${agent.calls} ${agent.calls === 1 ? 'llamada' : 'llamadas'} al modelo · en la API costaría ${formatUsd(agent.cost)}. Su parte de la sesión se calcula con ese coste frente al de todo Claude Code de este equipo.`;
+    const cost = $('ld-cost');
+    cost.textContent = `${agent.calls} ${agent.calls === 1 ? 'llamada' : 'llamadas'} al modelo · en la API costaría ${formatUsd(agent.cost)}`;
+    cost.title = 'Su parte de la sesión se calcula con este coste frente al de todo Claude Code de este equipo.';
     if (context?.id !== openId) renderContext();
+    else if (stale(agent)) measure(agent.id, true);
   }
 
-  function legendRow({ color, kind, label, tokens, max, hint }) {
+  function legendItem(c, kind, max) {
     const li = document.createElement('li');
-    li.className = `log-legend-row ${kind}`;
-    if (hint) li.title = hint;
-    li.innerHTML = '<span class="log-swatch" aria-hidden="true"></span><span class="log-legend-name"></span><span class="mono"></span><span class="mono dim"></span>';
-    if (color) li.firstChild.style.setProperty('--c', color);
+    li.className = 'log-ctx-item';
+    li.innerHTML = '<span class="log-swatch" aria-hidden="true"></span><span class="log-ctx-name"></span><span class="log-ctx-nums"><b></b><span class="mono"></span></span>';
+    li.firstChild.style.setProperty('--c', CATEGORY[c.name]?.color ?? '#f5f5f5');
+    const label = categoryLabel(c.name, kind);
     li.children[1].textContent = label;
-    li.children[2].textContent = formatTokens(tokens);
-    li.children[3].textContent = max ? percent((tokens / max) * 100) : '';
+    li.children[1].title = label;
+    li.querySelector('b').textContent = formatTokens(c.tokens);
+    li.querySelector('.mono').textContent = percent((c.tokens / max) * 100);
     return li;
   }
 
@@ -389,7 +419,9 @@ export function createAgentLog({ invoke, fail }) {
     const box = $('ld-context');
     if (!box) return;
     const total = $('ld-ctx-total');
-    $('ld-remeasure').disabled = !!context?.loading;
+    const remeasure = $('ld-remeasure');
+    remeasure.disabled = !!(context?.loading || context?.refreshing);
+    remeasure.classList.toggle('loading', !!context?.refreshing);
     if (!context || context.id !== openId || context.loading) {
       box.innerHTML = '<p class="log-measuring">Midiendo el contexto…</p>';
       total.textContent = '';
@@ -408,46 +440,48 @@ export function createAgentLog({ invoke, fail }) {
     total.textContent = `${formatTokens(data.totalTokens)} / ${formatTokens(max)} · ${num(data.percentage ?? (data.totalTokens / max) * 100, 0)} %`;
     const categories = data.categories ?? [];
 
-    const grid = document.createElement('div');
-    grid.className = 'log-grid';
-    grid.setAttribute('role', 'img');
-    grid.setAttribute('aria-label', `Contexto: ${formatTokens(data.totalTokens)} de ${formatTokens(max)} tokens`);
-    for (const cell of contextCells(categories, max)) {
-      const dot = document.createElement('span');
-      dot.className = `log-cell ${cell.kind}`;
-      if (cell.kind === 'used') {
-        dot.style.setProperty('--c', CATEGORY[cell.name]?.color ?? '#f5f5f5');
-        dot.style.setProperty('--f', String(Math.max(0.35, Math.sqrt(cell.fill))));
+    const bar = document.createElement('div');
+    bar.className = 'log-ctx-bar';
+    bar.setAttribute('role', 'img');
+    bar.setAttribute('aria-label', `Contexto: ${formatTokens(data.totalTokens)} de ${formatTokens(max)} tokens`);
+    const segments = contextSegments(categories, max);
+    for (const seg of segments) {
+      const span = document.createElement('span');
+      span.className = `log-seg ${seg.kind}`;
+      span.style.width = `${seg.pct}%`;
+      if (seg.kind === 'used') span.style.setProperty('--c', CATEGORY[seg.name]?.color ?? '#f5f5f5');
+      span.title = categoryLabel(seg.name, kind);
+      if (seg.kind === 'buffer') {
+        const free = document.createElement('span');
+        free.className = 'log-ctx-free';
+        bar.append(free);
       }
-      grid.append(dot);
+      bar.append(span);
     }
 
     const legend = document.createElement('ul');
-    legend.className = 'log-legend';
+    legend.className = 'log-ctx-legend';
+    for (const c of categories) if (c.kind === 'used' && c.tokens > 0) legend.append(legendItem(c, kind, max));
+
+    // Lo que no ocupa tramo de color: el espacio libre, la reserva y lo que se carga al usarlo.
+    const foot = document.createElement('p');
+    foot.className = 'log-ctx-foot';
+    const HINT = {
+      buffer: 'Espacio que Claude Code deja libre para poder resumir la conversación cuando se llene',
+      deferred: 'No ocupan contexto hasta que el modelo las pide',
+    };
     for (const c of categories) {
-      if (c.kind === 'deferred' || !c.tokens) continue;
-      legend.append(
-        legendRow({
-          color: c.kind === 'used' ? (CATEGORY[c.name]?.color ?? '#f5f5f5') : null,
-          kind: c.kind,
-          label: categoryLabel(c.name, kind),
-          tokens: c.tokens,
-          max,
-          hint: c.kind === 'buffer' ? 'Espacio que Claude Code deja libre para poder resumir la conversación cuando se llene' : null,
-        }),
-      );
-    }
-    const deferred = categories.filter((c) => c.kind === 'deferred' && c.tokens);
-    for (const c of deferred) {
-      legend.append(
-        legendRow({ kind: 'deferred', label: categoryLabel(c.name, kind), tokens: c.tokens, hint: 'No ocupan contexto hasta que el modelo las pide' }),
-      );
+      if (c.kind === 'used' || !c.tokens) continue;
+      const span = document.createElement('span');
+      span.innerHTML = '<span></span> <b></b>';
+      span.firstChild.textContent = categoryLabel(c.name, kind);
+      span.querySelector('b').textContent = formatTokens(c.tokens);
+      if (HINT[c.kind]) span.title = HINT[c.kind];
+      foot.append(span);
     }
 
-    const wrap = document.createElement('div');
-    wrap.className = 'log-context-body';
-    wrap.append(grid, legend);
-    const parts = [wrap];
+    const parts = [bar, legend];
+    if (foot.childElementCount) parts.push(foot);
     if (!data.exact) {
       const note = document.createElement('p');
       note.className = 'log-foot';
@@ -461,9 +495,10 @@ export function createAgentLog({ invoke, fail }) {
     renderMore(data);
   }
 
-  // Listas plegables bajo el contexto, como las de /context.
+  // Debajo, como en /context: la conversación por tipo y listas plegables.
   function renderMore(data) {
     const more = $('ld-more');
+    const parts = [];
     const groups = [];
     const breakdown = data.messageBreakdown;
     const messages = data.categories?.find((c) => c.name === 'Messages')?.tokens ?? 0;
@@ -479,54 +514,57 @@ export function createAgentLog({ invoke, fail }) {
       // conversación: se reparte ese total (exacto) en la misma proporción.
       const scale = messages / (rows.reduce((sum, [, v]) => sum + v, 0) || 1);
       const scaled = (list) => list.map(([name, v]) => [name, v * scale]);
-      const tools = (breakdown.toolCallsByType ?? []).map((t) => [t.name, (t.callTokens ?? 0) + (t.resultTokens ?? 0)]);
-      groups.push({
-        title: 'Conversación',
-        note: 'Reparto estimado por tipo',
-        rows: scaled(rows),
-        extra: tools.length ? { title: 'Por herramienta', rows: scaled(tools) } : null,
-        open: true,
-      });
+      const section = document.createElement('section');
+      section.className = 'log-sec';
+      section.innerHTML = '<div class="log-sec-head"><h3 class="log-h">Conversación</h3></div>';
+      section.querySelector('.log-h').title = 'Reparto estimado por tipo';
+      section.append(list(scaled(rows)));
+      parts.push(section);
       const attachments = (breakdown.attachmentsByType ?? []).map((a) => [a.name.replace(/_/g, ' '), a.tokens]);
-      if (attachments.length) groups.push({ title: 'Adjuntos', note: 'Estimado', rows: scaled(attachments) });
+      if (attachments.length) groups.push({ key: 'attachments', title: 'Adjuntos', note: 'Estimado', rows: scaled(attachments) });
+      const tools = (breakdown.toolCallsByType ?? []).map((t) => [t.name, (t.callTokens ?? 0) + (t.resultTokens ?? 0)]);
+      if (tools.length) groups.push({ key: 'tools', title: `Herramientas · ${tools.length}`, note: 'Estimado', rows: scaled(tools) });
     }
     const skills = data.skills?.skillFrontmatter ?? [];
-    if (skills.length) groups.push({ title: `Skills · ${data.skills.includedSkills ?? skills.length}`, rows: skills.map((s) => [s.name, s.tokens]) });
+    if (skills.length) groups.push({ key: 'skills', title: `Skills · ${data.skills.includedSkills ?? skills.length}`, rows: skills.map((s) => [s.name, s.tokens]) });
     const agents = data.agents ?? [];
-    if (agents.length) groups.push({ title: `Agentes · ${agents.length}`, rows: agents.map((a) => [a.agentType, a.tokens]) });
+    if (agents.length) groups.push({ key: 'agents', title: `Agentes · ${agents.length}`, rows: agents.map((a) => [a.agentType, a.tokens]) });
     const memory = data.memoryFiles ?? [];
-    if (memory.length) groups.push({ title: 'Memoria', rows: memory.map((m) => [m.path.replace(/^.*\/(\.claude|projects)\//, '…/'), m.tokens]) });
+    if (memory.length) groups.push({ key: 'memory', title: 'Memoria', rows: memory.map((m) => [m.path.replace(/^.*\/(\.claude|projects)\//, '…/'), m.tokens]) });
     const mcp = data.mcpTools ?? [];
-    if (mcp.length) groups.push({ title: `MCP · ${mcp.length}`, rows: mcp.map((t) => [t.name, t.tokens]) });
+    if (mcp.length) groups.push({ key: 'mcp', title: `MCP · ${mcp.length}`, rows: mcp.map((t) => [t.name, t.tokens]) });
 
-    more.replaceChildren(
-      ...groups.map((g) => {
-        const det = document.createElement('details');
-        det.className = 'log-group';
-        det.open = !!g.open;
-        const summary = document.createElement('summary');
-        summary.innerHTML = `<span></span><span class="mono dim"></span>${CHEVRON}`;
-        summary.children[0].textContent = g.title;
-        if (g.note) summary.title = g.note;
-        summary.children[1].textContent = `${g.note ? '≈ ' : ''}${formatTokens(g.rows.reduce((s, [, v]) => s + (v || 0), 0))}`;
-        det.append(summary, list(g.rows));
-        if (g.extra) {
-          const label = document.createElement('p');
-          label.className = 'log-group-label';
-          label.textContent = g.extra.title;
-          det.append(label, list(g.extra.rows));
-        }
-        return det;
-      }),
-    );
+    // Al volver a medir se conserva lo que el usuario abrió o cerró.
+    const wasOpen = new Map([...more.querySelectorAll('details')].map((d) => [d.dataset.key, d.open]));
+    if (groups.length) {
+      const box = document.createElement('div');
+      box.className = 'log-groups';
+      box.append(
+        ...groups.map((g) => {
+          const det = document.createElement('details');
+          det.className = 'log-group';
+          det.dataset.key = g.key;
+          det.open = wasOpen.get(g.key) ?? false;
+          const summary = document.createElement('summary');
+          summary.innerHTML = `<span></span><span class="log-group-total"></span>${DOWN}`;
+          summary.children[0].textContent = g.title;
+          if (g.note) summary.title = g.note;
+          summary.children[1].textContent = `${g.note ? '≈ ' : ''}${formatTokens(g.rows.reduce((s, [, v]) => s + (v || 0), 0))}`;
+          det.append(summary, list(g.rows));
+          return det;
+        }),
+      );
+      parts.push(box);
+    }
+    more.replaceChildren(...parts);
   }
 
   function list(rows) {
     const ul = document.createElement('ul');
-    ul.className = 'log-group-list';
+    ul.className = 'log-rows';
     for (const [name, tokens] of [...rows].sort((a, b) => (b[1] || 0) - (a[1] || 0))) {
       const li = document.createElement('li');
-      li.innerHTML = '<span></span><span class="mono"></span>';
+      li.innerHTML = '<span></span><span></span>';
       li.children[0].textContent = name;
       li.children[0].title = name;
       li.children[1].textContent = formatTokens(tokens);

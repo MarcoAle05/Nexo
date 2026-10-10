@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { categoryLabel, contextCells, formatShare, formatTokens, totalTokens, untilLabel } from '../src/registro.js';
+import { categoryLabel, contextSegments, formatShare, formatTokens, totalTokens, untilLabel } from '../src/registro.js';
 
 test('formatTokens abrevia con k y M a la española', () => {
   assert.equal(formatTokens(0), '0');
@@ -40,43 +40,52 @@ test('categoryLabel traduce las categorías de /context', () => {
   assert.equal(categoryLabel('Algo nuevo'), 'Algo nuevo');
 });
 
-test('contextCells reparte la ventana en 100 puntos como /context', () => {
-  const max = 1_000_000;
-  const cells = contextCells(
+test('contextSegments pone cada categoría a escala de la ventana', () => {
+  const segments = contextSegments(
     [
       { name: 'System prompt', tokens: 5_143, kind: 'used' },
       { name: 'System tools (deferred)', tokens: 21_767, kind: 'deferred' },
       { name: 'Skills', tokens: 7_272, kind: 'used' },
       { name: 'Messages', tokens: 106_424, kind: 'used' },
       { name: 'Autocompact buffer', tokens: 33_000, kind: 'buffer' },
-      { name: 'Free space', tokens: 844_141, kind: 'free' },
+      { name: 'Free space', tokens: 828_141, kind: 'free' },
     ],
-    max,
+    1_000_000,
   );
-  assert.equal(cells.length, 100);
-  const count = (name) => cells.filter((c) => c.name === name).length;
-  // Las categorías pequeñas tienen al menos un punto, a medias.
-  assert.equal(count('System prompt'), 1);
-  assert.ok(cells[0].fill > 0.5 && cells[0].fill < 0.52);
-  assert.equal(count('Skills'), 1);
-  // Lo diferido no ocupa contexto.
-  assert.equal(count('System tools (deferred)'), 0);
-  assert.equal(count('Messages'), 11);
-  assert.equal(count('Autocompact buffer'), 3);
-  assert.deepEqual(cells.at(-1), { name: 'Autocompact buffer', kind: 'buffer', fill: 1 });
-  assert.equal(count('Free space'), 100 - 1 - 1 - 11 - 3);
+  // Lo diferido y lo libre no tienen tramo; la reserva va al final.
+  assert.deepEqual(
+    segments.map((s) => s.name),
+    ['System prompt', 'Skills', 'Messages', 'Autocompact buffer'],
+  );
+  // Lo diminuto se ve igual (mínimo 1,2 %); lo demás va a escala.
+  assert.equal(segments[0].pct, 1.2);
+  assert.equal(segments[1].pct, 1.2);
+  assert.ok(Math.abs(segments[2].pct - 10.6424) < 1e-9);
+  assert.ok(Math.abs(segments[3].pct - 3.3) < 1e-9);
 });
 
-test('contextCells no se pasa de 100 aunque el contexto esté lleno', () => {
-  const cells = contextCells(
+test('contextSegments no se pasa de 100 aunque el contexto esté lleno', () => {
+  const full = contextSegments(
     [
+      { name: 'System prompt', tokens: 100, kind: 'used' },
       { name: 'Messages', tokens: 250_000, kind: 'used' },
       { name: 'Autocompact buffer', tokens: 33_000, kind: 'buffer' },
     ],
     200_000,
   );
-  assert.equal(cells.length, 100);
-  assert.ok(cells.every((c) => c.name === 'Messages'));
+  // Sin sitio libre no queda reserva, y los tramos se encogen para caber.
+  assert.deepEqual(full.map((s) => s.kind), ['used', 'used']);
+  assert.ok(Math.abs(full.reduce((sum, s) => sum + s.pct, 0) - 100) < 1e-9);
+  // La reserva solo ocupa lo que queda libre.
+  const tight = contextSegments(
+    [
+      { name: 'Messages', tokens: 180_000, kind: 'used' },
+      { name: 'Autocompact buffer', tokens: 33_000, kind: 'buffer' },
+    ],
+    200_000,
+  );
+  assert.ok(Math.abs(tight[1].pct - 10) < 1e-9);
+  assert.deepEqual(contextSegments(null, 1000), []);
 });
 
 test('percent da la parte de la ventana sin redondear a cero lo pequeño', async () => {

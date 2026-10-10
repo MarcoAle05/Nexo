@@ -33,7 +33,7 @@ export function createClaudeCode({ container, exitBox, exitText, onError }) {
       allowTransparency: true,
       cursorBlink: true,
       fontFamily: FONT_FAMILY,
-      fontSize: 12.5,
+      fontSize: 13,
       lineHeight: 1.25,
       scrollback: 5000,
       theme: {

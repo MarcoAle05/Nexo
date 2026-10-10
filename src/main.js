@@ -1,8 +1,13 @@
-import '@fontsource-variable/geist';
+import '@fontsource-variable/inter';
 import '@fontsource/geist-mono/400.css';
 import '@fontsource/geist-mono/500.css';
 import '@fontsource/geist-mono/700.css';
-import '@fontsource-variable/unbounded';
+import '@fontsource/poppins/latin-500.css';
+import '@fontsource/poppins/latin-ext-500.css';
+import '@fontsource/poppins/latin-600.css';
+import '@fontsource/poppins/latin-ext-600.css';
+import '@fontsource/poppins/latin-700.css';
+import '@fontsource/poppins/latin-ext-700.css';
 import './styles.css';
 
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
@@ -98,6 +103,21 @@ function renderExpanded() {
   // Con el grafo plegado no se puede usar su barra ni el enfoque.
   $('stage').inert = expanded.left || expanded.right;
 }
+
+// WebKitGTK deja rastros de 1 px (el borde de la carta en cada fotograma de la transición) en
+// la franja que una carta deja libre al minimizarse, expandirse o contraerse. Al acabar la
+// transición se repinta todo `.layout` cambiando su fondo, que no se ve (alfa casi cero).
+let repaintFrame = 0;
+let repaintFlip = false;
+$('layout').addEventListener('transitionend', (event) => {
+  if (!event.propertyName.startsWith('flex') || !event.target.matches('.panel, .stage') || repaintFrame) return;
+  // Varias cartas terminan a la vez: un solo cambio por fotograma, o se anularían entre sí.
+  repaintFrame = requestAnimationFrame(() => {
+    repaintFrame = 0;
+    repaintFlip = !repaintFlip;
+    $('layout').style.backgroundColor = repaintFlip ? 'rgba(0, 0, 0, 0.002)' : '';
+  });
+});
 
 document.querySelectorAll('[data-expand]').forEach((b) =>
   b.addEventListener('click', () => {
@@ -573,6 +593,7 @@ function sourceRow(source, index) {
 
   const check = document.createElement('input');
   check.type = 'checkbox';
+  check.className = 'source-check';
   check.checked = !excluded.has(source.path);
   check.setAttribute('aria-label', `Usar ${source.name} en el contexto`);
   check.addEventListener('change', () => {
@@ -850,6 +871,9 @@ function addUsage(li, name, service) {
   } else if (!info?.data) {
     panel.append(Object.assign(document.createElement('p'), { className: 'usage-note', textContent: 'Consultando…' }));
   } else {
+    if (info.data.note) {
+      panel.append(Object.assign(document.createElement('p'), { className: 'usage-note', textContent: info.data.note }));
+    }
     for (const group of info.data.groups) {
       const head = document.createElement('div');
       head.className = 'usage-group';
@@ -1561,6 +1585,12 @@ try {
 let scene = ''; // lo que se ve en el centro: 'galaxia', 'grafo', 'escritorio' o 'registro'
 let graphFramed = false;
 const galaxy = createGalaxy($('galaxy-canvas'), { stage, onOpen: () => openGraph() });
+// La luz de fondo sale del centro de la galaxia (el hueco entre las cartas), no del de la ventana.
+const backdrop = document.querySelector('.backdrop');
+galaxy.onFrame(({ cx, cy }) => {
+  backdrop.style.setProperty('--glow-x', `${Math.round(cx)}px`);
+  backdrop.style.setProperty('--glow-y', `${Math.round(cy)}px`);
+});
 
 function renderScene() {
   const next = view === 'notas' ? 'escritorio' : view === 'agentes' ? 'registro' : plane;

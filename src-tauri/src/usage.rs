@@ -14,16 +14,15 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tauri::{AppHandle, Manager, State};
 
 use crate::agy;
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Limit {
     /// `session`, `weekly_all`…: lo usa el registro de agentes para encontrar la de 5 h.
-    #[serde(skip)]
     kind: String,
     label: String,
     /// Porcentaje usado (0–100).
@@ -32,7 +31,7 @@ pub struct Limit {
     resets_at: Option<String>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Group {
     name: String,
     /// Modelos que comparten estos límites.
@@ -40,21 +39,57 @@ pub struct Group {
     limits: Vec<Limit>,
 }
 
-#[derive(Serialize, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Usage {
     groups: Vec<Group>,
     checked_at: String,
+    /// Aviso cuando los datos no son de ahora (Claude no dejó volver a preguntar).
+    #[serde(default)]
+    note: Option<String>,
+}
+
+/// Lo último que respondió Claude y, tras un fallo, cuándo se puede volver a preguntar.
+#[derive(Default)]
+struct ClaudeCache {
+    /// Última lectura buena. Se guarda en disco (`CLAUDE_FILE`): si al abrir nexo Claude no
+    /// responde, el registro de agentes sigue sabiendo dónde acabó la última sesión de 5 h.
+    last: Option<Usage>,
+    /// Cuándo se leyó en esta apertura (la del disco no cuenta como reciente).
+    fetched: Option<Instant>,
+    loaded: bool,
+    retry_at: Option<Instant>,
+    /// Fallos seguidos: cada uno duplica la espera.
+    failures: u32,
+    error: String,
 }
 
 /// Última lectura de cada servicio, para no repetir la consulta en cada apertura del menú.
 #[derive(Default)]
 pub struct UsageState {
-    claude: tokio::sync::Mutex<Option<(Instant, Usage)>>,
+    claude: tokio::sync::Mutex<ClaudeCache>,
     agy: tokio::sync::Mutex<Option<(Instant, Usage)>>,
 }
 
 const CLAUDE_TTL: Duration = Duration::from_secs(60);
+/// El registro de agentes estima el porcentaje entre lecturas: le basta una cada 5 min.
+const SESSION_TTL: Duration = Duration::from_secs(5 * 60);
+/// Aunque se pida comprobar de nuevo, no más de una consulta cada 30 s.
+const MIN_GAP: Duration = Duration::from_secs(30);
 const AGY_TTL: Duration = Duration::from_secs(120);
+const CLAUDE_FILE: &str = "uso-claude.json";
+
+/// Espera tras `failures` fallos seguidos: 1, 2, 4… hasta 30 min. El endpoint de uso responde
+/// 429 si se le pregunta a menudo (también lo consulta cada Claude Code abierto) y su
+/// `Retry-After` llega a 0, así que la espera la pone nexo.
+fn backoff(failures: u32) -> Duration {
+    Duration::from_secs(60 << failures.saturating_sub(1).min(5)).min(Duration::from_secs(30 * 60))
+}
+
+fn clock(at: Instant) -> String {
+    let wait = at.saturating_duration_since(Instant::now());
+    let when = chrono::Local::now() + chrono::Duration::from_std(wait).unwrap_or_default();
+    when.format("%H:%M").to_string()
+}
 
 fn now() -> String {
     chrono::Local::now().to_rfc3339()
@@ -109,6 +144,7 @@ fn parse_claude(data: &Value, plan: &str) -> Usage {
             limits,
         }],
         checked_at: now(),
+        note: None,
     }
 }
 
@@ -151,6 +187,7 @@ async fn fetch_claude(app: &AppHandle) -> Result<Usage, String> {
                     .into(),
             );
         }
+        429 => return Err("Claude limita las consultas de uso (429)".into()),
         code => return Err(format!("Claude respondió {code} al pedir el uso")),
     }
     let data: Value = response.json().await.map_err(|e| e.to_string())?;
@@ -171,7 +208,8 @@ pub async fn usage_claude(
     state: State<'_, UsageState>,
     force: bool,
 ) -> Result<Usage, String> {
-    claude_usage(&app, &state, force).await
+    let max_age = if force { MIN_GAP } else { CLAUDE_TTL };
+    claude_usage(&app, &state, max_age).await
 }
 
 /// La sesión de 5 h del plan de claude.ai: porcentaje usado y cuándo se renueva (`None` en
@@ -179,11 +217,21 @@ pub async fn usage_claude(
 pub struct SessionLimit {
     pub used: f64,
     pub resets_at: Option<String>,
+    /// Cuándo se leyó (ms desde 1970): puede ser de hace unos minutos.
+    pub checked: i64,
+    pub note: Option<String>,
 }
 
 pub async fn claude_session(app: &AppHandle, force: bool) -> Result<Option<SessionLimit>, String> {
     let state = app.state::<UsageState>();
-    let usage = claude_usage(app, &state, force).await?;
+    let max_age = if force { MIN_GAP } else { SESSION_TTL };
+    let usage = claude_usage(app, &state, max_age).await?;
+    let Some(checked) = chrono::DateTime::parse_from_rfc3339(&usage.checked_at)
+        .ok()
+        .map(|d| d.timestamp_millis())
+    else {
+        return Ok(None);
+    };
     Ok(usage
         .groups
         .iter()
@@ -192,20 +240,90 @@ pub async fn claude_session(app: &AppHandle, force: bool) -> Result<Option<Sessi
         .map(|l| SessionLimit {
             used: l.used,
             resets_at: l.resets_at.clone(),
+            checked,
+            note: usage.note.clone(),
         }))
 }
 
-async fn claude_usage(app: &AppHandle, state: &UsageState, force: bool) -> Result<Usage, String> {
+/// «21:40», o «7/10 21:40» si no es de hoy.
+fn when(rfc3339: &str) -> String {
+    let Ok(at) = chrono::DateTime::parse_from_rfc3339(rfc3339) else {
+        return String::new();
+    };
+    let at = at.with_timezone(&chrono::Local);
+    if at.date_naive() == chrono::Local::now().date_naive() {
+        at.format("%H:%M").to_string()
+    } else {
+        at.format("%-d/%-m %H:%M").to_string()
+    }
+}
+
+/// El uso de Claude. Si Claude falla (o hay que esperar tras un fallo), devuelve la última
+/// lectura buena con un aviso; sin ninguna, el error.
+async fn claude_usage(
+    app: &AppHandle,
+    state: &UsageState,
+    max_age: Duration,
+) -> Result<Usage, String> {
+    let file = app
+        .path()
+        .app_cache_dir()
+        .ok()
+        .map(|dir| dir.join(CLAUDE_FILE));
     let mut cache = state.claude.lock().await;
-    if let Some((at, usage)) = cache.as_ref()
-        && !force
-        && at.elapsed() < CLAUDE_TTL
+    if !cache.loaded {
+        cache.loaded = true;
+        cache.last = file
+            .as_ref()
+            .and_then(|f| std::fs::read_to_string(f).ok())
+            .and_then(|t| serde_json::from_str(&t).ok());
+    }
+    if let (Some(usage), Some(at)) = (&cache.last, cache.fetched)
+        && at.elapsed() < max_age
     {
         return Ok(usage.clone());
     }
-    let usage = fetch_claude(app).await?;
-    *cache = Some((Instant::now(), usage.clone()));
-    Ok(usage)
+    let waiting = cache.retry_at.is_some_and(|t| Instant::now() < t);
+    if !waiting {
+        match fetch_claude(app).await {
+            Ok(usage) => {
+                if let Some(file) = &file
+                    && let Ok(text) = serde_json::to_string(&usage)
+                {
+                    let _ = std::fs::create_dir_all(file.parent().unwrap_or(file));
+                    let _ = std::fs::write(file, text);
+                }
+                *cache = ClaudeCache {
+                    last: Some(usage.clone()),
+                    fetched: Some(Instant::now()),
+                    loaded: true,
+                    ..ClaudeCache::default()
+                };
+                return Ok(usage);
+            }
+            Err(e) => {
+                cache.failures += 1;
+                cache.retry_at = Some(Instant::now() + backoff(cache.failures));
+                cache.error = e;
+            }
+        }
+    }
+    let retry = cache.retry_at.map(clock).unwrap_or_default();
+    match &cache.last {
+        Some(usage) => {
+            let mut usage = usage.clone();
+            usage.note = Some(format!(
+                "{}: datos de las {}, vuelvo a preguntar a las {retry}.",
+                cache.error,
+                when(&usage.checked_at)
+            ));
+            Ok(usage)
+        }
+        None => Err(format!(
+            "{}; vuelvo a preguntar a las {retry}.",
+            cache.error
+        )),
+    }
 }
 
 // ---------------------------------------------------------------- Antigravity
@@ -437,6 +555,7 @@ pub async fn usage_agy(
     let usage = Usage {
         groups,
         checked_at: now(),
+        note: None,
     };
     *cache = Some((Instant::now(), usage.clone()));
     Ok(usage)
@@ -475,6 +594,12 @@ mod tests {
             strip_ansi("\x1b[1mHola\x1b[0m\r\x1b]0;título\x07 mundo"),
             "Hola\n mundo"
         );
+    }
+
+    #[test]
+    fn espera_cada_vez_mas_tras_un_fallo() {
+        let mins = |n| backoff(n).as_secs() / 60;
+        assert_eq!([1, 2, 3, 4, 5, 6, 20].map(mins), [1, 2, 4, 8, 16, 30, 30]);
     }
 
     #[test]

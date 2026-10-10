@@ -284,9 +284,9 @@
 
           <div class="notes-scroll" id="notes-scroll">
             <p class="notes-description" id="notes-description" hidden></p>
-            <h4 class="notes-section-label" id="notes-topics-label">Temas</h4>
+            <h3 class="notes-section-label" id="notes-topics-label">Temas</h3>
             <ul class="notes-list" id="notes-topics"></ul>
-            <h4 class="notes-section-label" id="notes-notes-label">Notas</h4>
+            <h3 class="notes-section-label" id="notes-notes-label">Notas</h3>
             <ul class="notes-list" id="notes-notes"></ul>
             <div class="empty notes-empty" id="notes-empty" hidden>
               <span class="empty-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 2.5h7l3 3v12H5z"/><path d="M7.5 9h5M7.5 12h5M7.5 15h3"/></svg></span>
@@ -340,7 +340,7 @@
           </form>
 
           <div class="notes-scroll" id="skills-scroll">
-            <h4 class="notes-section-label" id="skills-label">Skills</h4>
+            <h3 class="notes-section-label" id="skills-label">Skills</h3>
             <ul class="notes-list" id="skills-list"></ul>
             <div class="empty notes-empty" id="skills-empty" hidden>
               <span class="empty-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="4.5"/><path d="M10 6.5v7M6.5 10h7"/></svg></span>
@@ -388,7 +388,7 @@
             </form>
 
             <div class="notes-scroll" id="agents-scroll">
-              <h4 class="notes-section-label" id="agents-label">Agentes</h4>
+              <h3 class="notes-section-label" id="agents-label">Agentes</h3>
               <ul class="notes-list agents-list" id="agents-list"></ul>
               <div class="empty notes-empty" id="agents-empty" hidden>
                 <span class="empty-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7.5" r="3"/><path d="M4.5 16.5c.9-2.8 3-4.3 5.5-4.3s4.6 1.5 5.5 4.3"/></svg></span>
@@ -443,12 +443,12 @@
           <span class="divider" aria-hidden="true"></span>
           <div class="stepper" role="group" aria-label="Profundidad">
             <button type="button" class="icon-btn" aria-label="Menos profundidad" id="depth-down"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M4 10h12"/></svg></button>
-            <span>Profundidad <span class="mono" id="depth-value">2</span></span>
+            <span><span class="tb-word">Profundidad </span><span class="mono" id="depth-value">2</span></span>
             <button type="button" class="icon-btn" aria-label="Más profundidad" id="depth-up"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></button>
           </div>
           <span class="divider" aria-hidden="true"></span>
           <button type="button" class="switch-btn" role="switch" aria-checked="true" data-switch id="labels-switch">
-            Etiquetas <span class="switch" aria-hidden="true"><span></span></span>
+            <span class="tb-word">Etiquetas</span> <span class="switch" aria-hidden="true"><span></span></span>
           </button>
           <span class="divider" aria-hidden="true"></span>
           <button type="button" class="icon-btn filled" aria-label="Centrar el grafo" id="graph-fit"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="10" cy="10" r="5.5"/><path d="M10 1.5v4M10 14.5v4M1.5 10h4M14.5 10h4"/></svg></button>
@@ -477,31 +477,31 @@
         <!-- Registro de agentes (vista «Agentes»): tokens y parte de la sesión de 5 h -->
         <div class="agent-log" id="agent-log" hidden>
           <div class="log-scroll">
-            <div class="log-list-view" id="log-list-view">
-              <header class="log-head">
-                <div class="panel-title">
-                  <span class="eyebrow">Registro</span>
-                  <h2>Agentes <span class="dim" id="log-count">0</span></h2>
-                </div>
-                <button type="button" class="icon-btn outline log-refresh" id="log-refresh" aria-label="Actualizar el registro" title="Actualizar"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
-              </header>
-              <section class="log-session" aria-label="Sesión de 5 h de Claude">
-                <div class="log-session-row">
-                  <span class="log-label">Sesión de 5 h</span>
-                  <span class="log-reset" id="log-reset"></span>
-                </div>
+            <section class="log-session" aria-label="Sesión de 5 h de Claude">
+              <div class="log-session-top">
+                <h2 class="log-label">Sesión de 5 h</h2>
+                <button type="button" class="icon-btn log-refresh" id="log-refresh" aria-label="Actualizar el registro" title="Actualizar"><svg width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
+              </div>
+              <div class="log-session-row">
                 <p class="log-used"><span id="log-used">—</span><span class="log-used-unit" id="log-used-unit">%</span></p>
-                <div class="log-bar" aria-hidden="true"><span class="log-bar-nexo" id="log-bar-nexo"></span><span class="log-bar-rest" id="log-bar-rest"></span></div>
-                <div class="log-split">
-                  <span class="log-key nexo" title="Lo que gastaron Claude Code y sus agentes en este vault">Agentes de nexo <b id="log-nexo">—</b></span>
-                  <span class="log-key rest" title="Lo demás que gastó tu cuenta en esta sesión: Claude Code en otras carpetas, claude.ai u otros equipos">Resto de Claude <b id="log-rest">—</b></span>
-                </div>
-                <p class="log-note" id="log-note" hidden></p>
+                <span class="log-reset" id="log-reset"></span>
+              </div>
+              <div class="log-bar" aria-hidden="true"><span class="log-bar-nexo" id="log-bar-nexo"></span><span class="log-bar-rest" id="log-bar-rest"></span></div>
+              <div class="log-split">
+                <span class="log-key nexo" title="Lo que gastaron Claude Code y sus agentes en este vault">Agentes de nexo <b id="log-nexo">—</b></span>
+                <span class="log-key rest" title="Lo demás que gastó tu cuenta en esta sesión: Claude Code en otras carpetas, claude.ai u otros equipos">Resto de Claude <b id="log-rest">—</b></span>
+              </div>
+              <p class="log-note" id="log-note" hidden></p>
+            </section>
+            <div class="log-list-view" id="log-list-view">
+              <section class="log-sec" id="log-active-sec" aria-labelledby="log-active-h" hidden>
+                <div class="log-sec-head"><h3 class="log-h" id="log-active-h">Activos <span class="log-h-count" id="log-active-count"></span></h3></div>
+                <ul class="log-list" id="log-active"></ul>
               </section>
-              <p class="log-section-label" id="log-active-label" hidden>Activos</p>
-              <ul class="log-list" id="log-active" aria-label="Agentes activos"></ul>
-              <p class="log-section-label" id="log-past-label" hidden>Terminados</p>
-              <ul class="log-list" id="log-past" aria-label="Agentes terminados"></ul>
+              <section class="log-sec" id="log-past-sec" aria-labelledby="log-past-h" hidden>
+                <div class="log-sec-head"><h3 class="log-h" id="log-past-h">Terminados <span class="log-h-count" id="log-past-count"></span></h3></div>
+                <ul class="log-list" id="log-past"></ul>
+              </section>
               <div class="log-empty" id="log-empty" hidden>
                 <svg width="40" height="40" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7.5" r="3"/><path d="M4.5 16.5c.9-2.8 3-4.3 5.5-4.3s4.6 1.5 5.5 4.3"/></svg>
                 <p class="desk-empty-title" id="log-empty-title"></p>
@@ -539,7 +539,7 @@
           <div class="terminal-tools">
             <button type="button" class="activity-btn" id="activity-button" aria-pressed="false" aria-controls="activity-view">
               <span class="activity-dot" id="activity-dot" aria-hidden="true"></span>
-              Actividad Antigravity
+              <span class="activity-label">Actividad Antigravity</span>
               <span class="activity-count" id="activity-count" hidden>0</span>
             </button>
             <button type="button" class="save-btn" id="cc-save" hidden title="Claude Code escribe las conclusiones en wiki/conversaciones/ y aparecen como nodo en el grafo">

@@ -115,9 +115,13 @@ export function galaxyExtent(points, look = LOOK) {
   return { x, y };
 }
 
-// Tamaño y centro de la galaxia dentro del hueco del escenario (px CSS de la ventana).
+// Tamaño y centro de la galaxia dentro del hueco del escenario (px CSS de la ventana). El ancho
+// manda casi siempre: deja sitio a los lados para la órbita de las skills (`ORBIT` en skills.js).
+// En huecos estrechos (< ~600 px) los recuadros de los lados chocan con el borde del escenario,
+// así que la galaxia encoge lo justo para que no pisen el anillo.
 export function frameFor(rect) {
-  const scale = Math.min(420, Math.max(80, Math.min(rect.width / 3.1, rect.height / 2.35)));
+  const fit = Math.min(rect.width / 2.85, rect.height / 2.3, (rect.width - 300) / 1.45);
+  const scale = Math.min(420, Math.max(80, fit));
   return { cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2 + 6, scale, rect };
 }
 

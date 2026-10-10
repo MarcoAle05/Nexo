@@ -6,8 +6,8 @@ import { reconcile } from './dom.js';
 // Órbita de los recuadros, en unidades de la galaxia (como LOOK en galaxy.js): elipse un
 // poco girada, por fuera del aro para no tapar la galaxia.
 export const ORBIT = {
-  rx: 1.34, // semieje horizontal
-  ry: 0.86, // semieje vertical
+  rx: 1.24, // semieje horizontal (más ceñido: la galaxia ocupa más del hueco central)
+  ry: 0.92, // semieje vertical
   angle: -10, // grados
   start: -2.25, // ángulo (radianes) del primer recuadro: arriba a la izquierda
   gap: 10, // px mínimos entre recuadros

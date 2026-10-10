@@ -40,6 +40,10 @@ const WINDOW_MS: i64 = 5 * 60 * 60 * 1000;
 const STALE_MS: i64 = 15 * 60 * 1000;
 /// Una sesión que no es la de esta apertura de nexo cuenta como activa si escribió hace menos.
 const RECENT_MS: i64 = 90 * 1000;
+/// Sin datos de Claude, la sesión se deduce de las transcripciones del último día.
+const LOOKBACK_MS: i64 = 24 * 60 * 60 * 1000;
+/// Claude redondea el inicio de la sesión de 5 h a múltiplos de 10 min.
+const ROUND_MS: i64 = 10 * 60 * 1000;
 /// Caracteres por token de salida (medido en las sesiones de nexo: texto en español,
 /// Markdown y entradas JSON de herramientas).
 const CHARS_PER_TOKEN: f64 = 2.5;
@@ -249,6 +253,8 @@ struct Transcript {
     offset: u64,
     calls: HashMap<String, Call>,
     title: Option<String>,
+    /// Subagentes que avisaron de que pararon (terminado, fallo o detenido) → cuándo.
+    stopped: HashMap<String, i64>,
 }
 
 impl Transcript {
@@ -290,8 +296,39 @@ impl Transcript {
             && let Some(title) = v["customTitle"].as_str()
         {
             self.title = Some(title.to_string());
+        } else if memmem::find(line, b"<task-notification>").is_some() {
+            // Cada vez que un subagente para, su sesión recibe un aviso con su id:
+            // `<task-notification>\n<task-id>…</task-id>…<status>completed|failed|killed…`.
+            let Some(ts) = serde_json::from_slice::<Value>(line)
+                .ok()
+                .and_then(|v| v["timestamp"].as_str().and_then(parse_ts))
+            else {
+                return;
+            };
+            for id in task_ids(line) {
+                let at = self.stopped.entry(id).or_default();
+                *at = (*at).max(ts);
+            }
         }
     }
+}
+
+/// Los `<task-id>` de los avisos de una línea.
+fn task_ids(line: &[u8]) -> Vec<String> {
+    const OPEN: &[u8] = b"<task-id>";
+    let mut ids = Vec::new();
+    let mut rest = line;
+    while let Some(i) = memmem::find(rest, OPEN) {
+        rest = &rest[i + OPEN.len()..];
+        let end = rest.iter().position(|&b| b == b'<').unwrap_or(rest.len());
+        if let Ok(id) = std::str::from_utf8(&rest[..end])
+            && safe_id(id)
+        {
+            ids.push(id.to_string());
+        }
+        rest = &rest[end..];
+    }
+    ids
 }
 
 /// Un archivo de transcripción que tocó la ventana.
@@ -340,22 +377,35 @@ fn find_transcripts(projects: &Path, vault_dir: &Path, since: i64) -> Vec<Found>
             let name = entry.file_name().to_string_lossy().into_owned();
             if let Some(session) = name.strip_suffix(".jsonl") {
                 push(&mut out, entry.path(), session, None, vault);
-            } else if entry.file_type().is_ok_and(|t| t.is_dir())
-                && let Ok(subs) = fs::read_dir(entry.path().join("subagents"))
-            {
-                for sub in subs.flatten() {
-                    let file = sub.file_name().to_string_lossy().into_owned();
-                    if let Some(agent) = file
-                        .strip_prefix("agent-")
-                        .and_then(|f| f.strip_suffix(".jsonl"))
-                    {
-                        push(&mut out, sub.path(), &name, Some(agent), vault);
-                    }
+            } else if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                let mut agents = Vec::new();
+                find_agents(&entry.path().join("subagents"), 3, &mut agents);
+                for (path, agent) in agents {
+                    push(&mut out, path, &name, Some(&agent), vault);
                 }
             }
         }
     }
     out
+}
+
+/// `agent-<id>.jsonl` de una carpeta `subagents` (y de sus subcarpetas, por si Claude Code
+/// agrupa ahí los de un mismo trabajo).
+fn find_agents(dir: &Path, depth: u32, out: &mut Vec<(PathBuf, String)>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(agent) = name
+            .strip_prefix("agent-")
+            .and_then(|f| f.strip_suffix(".jsonl"))
+        {
+            out.push((entry.path(), agent.to_string()));
+        } else if depth > 1 && entry.file_type().is_ok_and(|t| t.is_dir()) {
+            find_agents(&entry.path(), depth - 1, out);
+        }
+    }
 }
 
 /// `agent-<id>.meta.json`: tipo de agente (`subagent_type`) y la descripción de la tarea.
@@ -431,23 +481,40 @@ pub struct AgentUse {
     models: Vec<ModelUse>,
 }
 
-#[derive(Serialize, Clone, Copy, Debug)]
+#[derive(Serialize, Clone, Copy, Debug, PartialEq)]
 pub struct Window {
     start: i64,
     end: i64,
+    /// La dio Claude (`resets_at`); si no, se dedujo de las transcripciones de este equipo.
+    exact: bool,
 }
 
 #[derive(Serialize, Debug)]
 pub struct AgentLog {
     /// Sesión de 5 h en curso; `None` si no hay (el registro sale vacío).
     window: Option<Window>,
-    /// Porcentaje usado de la sesión de 5 h (toda la cuenta).
+    /// Porcentaje usado de la sesión de 5 h (toda la cuenta): el que dio Claude más lo que
+    /// gastó este equipo desde entonces.
     used: Option<f64>,
+    /// Cuándo dio Claude ese porcentaje (ms).
+    checked: Option<i64>,
+    /// Sin datos de Claude: por qué.
     error: Option<String>,
+    /// Datos de Claude de hace un rato (no deja volver a preguntar todavía).
+    note: Option<String>,
     machine_cost: f64,
     nexo_cost: f64,
     nexo_share: Option<f64>,
     agents: Vec<AgentUse>,
+}
+
+/// Lo que dijo Claude de la sesión de 5 h, quizá hace unos minutos.
+#[derive(Clone, Copy, Debug)]
+struct Snapshot {
+    used: f64,
+    /// `resets_at`; `None` si entonces no había sesión en curso.
+    end: Option<i64>,
+    checked: i64,
 }
 
 /// Quién está en marcha: la sesión de esta apertura de nexo y si Claude Code está abierto.
@@ -457,6 +524,7 @@ fn agent_use(
     found: &Found,
     title: Option<&str>,
     calls: &[&Call],
+    stopped: Option<&HashMap<String, i64>>,
     current: &Current,
     efforts: &HashMap<String, Option<String>>,
     now: i64,
@@ -506,7 +574,12 @@ fn agent_use(
         }
         Some(agent) => {
             let (agent_type, description) = read_meta(&found.path);
-            let finished = last.handback || (!last.tool_use && last.chars > 0);
+            // Terminó si entregó su informe, si acabó con texto o si su sesión recibió el
+            // aviso de que paró (también al fallar o detenerlo) después de su última llamada.
+            let notified = stopped
+                .and_then(|s| s.get(agent))
+                .is_some_and(|&at| at >= last.ts);
+            let finished = notified || last.handback || (!last.tool_use && last.chars > 0);
             // Si la sesión de nexo que lo lanzó se cerró, el subagente terminó con ella.
             let orphan = ours.is_some_and(|(_, running)| !running);
             let active = !finished && !orphan && quiet < STALE_MS;
@@ -542,64 +615,178 @@ fn agent_use(
     }
 }
 
-/// Lee (lo nuevo de) las transcripciones de la ventana y devuelve el coste de todo Claude
-/// Code del equipo y los agentes del vault, activos primero y luego del más reciente.
+/// Sesión de 5 h que abre una llamada: Claude redondea el inicio (sus `resets_at` caen en
+/// múltiplos de 10 min).
+fn window_from(first: i64) -> Window {
+    let start = first - first.rem_euclid(ROUND_MS);
+    Window {
+        start,
+        end: start + WINDOW_MS,
+        exact: false,
+    }
+}
+
+/// La sesión de 5 h en curso. La da Claude (`resets_at`); si la que dio ya terminó, si no
+/// había o si no hay datos, se deduce de las llamadas de este equipo (`times`, ordenadas):
+/// cada sesión empieza con la primera llamada después de que acabe la anterior. Sin ningún
+/// dato de Claude, la cadena empieza tras el último hueco de 5 h sin llamadas (ahí empezó una
+/// sesión seguro) o, si no lo hay, con la primera llamada.
+fn resolve_window(snap: Option<&Snapshot>, times: &[i64], now: i64) -> Option<Window> {
+    let first_from = |from: i64| times.iter().copied().find(|&t| t >= from);
+    let mut next = match snap {
+        Some(Snapshot { end: Some(end), .. }) if *end > now => {
+            return Some(Window {
+                start: end - WINDOW_MS,
+                end: *end,
+                exact: true,
+            });
+        }
+        Some(Snapshot { end: Some(end), .. }) => first_from(*end),
+        Some(Snapshot {
+            end: None, checked, ..
+        }) => first_from(*checked),
+        None => times
+            .windows(2)
+            .rev()
+            .find(|pair| pair[1] - pair[0] >= WINDOW_MS)
+            .map(|pair| pair[1])
+            .or(times.first().copied()),
+    };
+    while let Some(first) = next {
+        let window = window_from(first);
+        if window.end > now {
+            return Some(window);
+        }
+        next = first_from(window.end);
+    }
+    None
+}
+
+/// Lo que sale de las transcripciones.
+struct Built {
+    window: Option<Window>,
+    /// Coste de todo Claude Code del equipo en la sesión de 5 h…
+    machine: f64,
+    /// …y hasta que Claude dio el porcentaje.
+    machine_at: f64,
+    agents: Vec<AgentUse>,
+}
+
+/// Lee (lo nuevo de) las transcripciones, sitúa la sesión de 5 h y devuelve el coste de todo
+/// Claude Code del equipo en ella y los agentes del vault, activos primero y luego del más
+/// reciente.
 fn build(
     cache: &mut HashMap<PathBuf, Transcript>,
     projects: &Path,
     vault_dir: &Path,
-    since: i64,
+    snap: Option<&Snapshot>,
     current: &Current,
     efforts: &HashMap<String, Option<String>>,
     now: i64,
-) -> (f64, Vec<AgentUse>) {
+) -> Built {
+    let since = now - LOOKBACK_MS;
     let mut found = find_transcripts(projects, vault_dir, since);
     // Las del vault primero: si una respuesta está en dos archivos (una sesión bifurcada
     // copia su historia), cuenta una vez y para nexo.
     found.sort_by_key(|f| (!f.vault, f.modified));
     let keep: HashSet<&PathBuf> = found.iter().map(|f| &f.path).collect();
     cache.retain(|path, _| keep.contains(path));
-    let mut seen: HashSet<String> = HashSet::new();
-    let mut machine = 0.0;
-    let mut agents = Vec::new();
-    for f in &found {
+    found.retain(|f| {
         let transcript = cache.entry(f.path.clone()).or_default();
-        if let Err(e) = transcript.update(&f.path, f.len) {
+        let read = transcript.update(&f.path, f.len);
+        if let Err(e) = &read {
             log::warn!("No se pudo leer {}: {e}", f.path.display());
-            continue;
         }
-        let mut calls: Vec<&Call> = transcript
-            .calls
-            .iter()
-            .filter(|(id, call)| call.ts >= since && seen.insert((*id).clone()))
-            .map(|(_, call)| call)
-            .collect();
-        machine += calls.iter().map(|c| c.cost()).sum::<f64>();
+        read.is_ok()
+    });
+    let cache = &*cache;
+    let mut seen: HashSet<&str> = HashSet::new();
+    let owned: Vec<Vec<&Call>> = found
+        .iter()
+        .map(|f| {
+            let mut calls: Vec<&Call> = cache[&f.path]
+                .calls
+                .iter()
+                .filter(|(id, call)| call.ts >= since && seen.insert(id.as_str()))
+                .map(|(_, call)| call)
+                .collect();
+            calls.sort_by_key(|c| c.ts);
+            calls
+        })
+        .collect();
+    let mut times: Vec<i64> = owned.iter().flatten().map(|c| c.ts).collect();
+    times.sort_unstable();
+    let window = resolve_window(snap, &times, now);
+    let mut built = Built {
+        window,
+        machine: 0.0,
+        machine_at: 0.0,
+        agents: Vec::new(),
+    };
+    let Some(window) = window else {
+        return built;
+    };
+    let checked = snap.map_or(i64::MIN, |s| s.checked);
+    for (f, calls) in found.iter().zip(owned) {
+        let calls: Vec<&Call> = calls.into_iter().filter(|c| c.ts >= window.start).collect();
+        for call in &calls {
+            let cost = call.cost();
+            built.machine += cost;
+            if call.ts <= checked {
+                built.machine_at += cost;
+            }
+        }
         if !f.vault || calls.is_empty() {
             continue;
         }
-        calls.sort_by_key(|c| c.ts);
-        agents.push(agent_use(
+        let transcript = &cache[&f.path];
+        let parent = f
+            .agent
+            .as_ref()
+            .and_then(|_| cache.get(&vault_dir.join(format!("{}.jsonl", f.session))));
+        built.agents.push(agent_use(
             f,
             transcript.title.as_deref(),
             &calls,
+            parent.map(|p| &p.stopped),
             current,
             efforts,
             now,
         ));
     }
-    agents.sort_by(|a, b| b.active.cmp(&a.active).then(b.last.cmp(&a.last)));
-    (machine, agents)
+    built
+        .agents
+        .sort_by(|a, b| b.active.cmp(&a.active).then(b.last.cmp(&a.last)));
+    built
 }
 
-/// Reparte el porcentaje usado de la sesión según el coste de cada agente.
-fn assign_shares(agents: &mut [AgentUse], machine: f64, used: Option<f64>) -> Option<f64> {
-    let used = used?;
-    let rate = if machine > 0.0 { used / machine } else { 0.0 };
+/// Reparte el porcentaje de la sesión según el coste de cada agente y lo pone al día: Claude
+/// lo dio cuando este equipo llevaba gastado `machine_at`; lo gastado después se suma con la
+/// misma proporción (porcentaje por dólar). Devuelve el porcentaje de ahora y la parte de nexo.
+fn assign_shares(
+    agents: &mut [AgentUse],
+    built_machine: f64,
+    machine_at: f64,
+    used: Option<f64>,
+) -> (Option<f64>, Option<f64>) {
+    let Some(used) = used else {
+        return (None, None);
+    };
+    let (rate, now_used) = if machine_at > 0.0 {
+        let rate = used / machine_at;
+        let now_used = used + (built_machine - machine_at).max(0.0) * rate;
+        (rate, now_used.min(100.0))
+    } else if built_machine > 0.0 {
+        // Cuando Claude respondió, este equipo aún no había gastado nada en la sesión.
+        (used / built_machine, used)
+    } else {
+        (0.0, used)
+    };
     for agent in agents.iter_mut() {
         agent.share = Some(agent.cost * rate);
     }
-    Some(agents.iter().map(|a| a.cost).sum::<f64>() * rate)
+    let nexo = agents.iter().map(|a| a.cost).sum::<f64>() * rate;
+    (Some(now_used), Some(nexo.min(now_used)))
 }
 
 #[derive(Default)]
@@ -614,48 +801,22 @@ pub async fn agent_log(app: AppHandle, force: bool) -> Result<AgentLog, String> 
     let root = vault_root(&app)?;
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
     let now = now_ms();
-    let (window, used, error) = match crate::usage::claude_session(&app, force).await {
-        // Sin `resets_at` (o ya pasado) no hay sesión de 5 h en curso: el registro se vacía.
-        Ok(Some(limit)) => {
-            let end = limit
-                .resets_at
-                .as_deref()
-                .and_then(parse_ts)
-                .filter(|&end| end > now);
-            let window = end.map(|end| Window {
-                start: end - WINDOW_MS,
-                end,
-            });
-            (window, Some(limit.used), None)
-        }
-        // Sin el dato del plan, las últimas 5 h y sin porcentaje.
-        Ok(None) => (
-            Some(Window {
-                start: now - WINDOW_MS,
-                end: now,
+    let (snap, note, error) = match crate::usage::claude_session(&app, force).await {
+        Ok(Some(limit)) => (
+            Some(Snapshot {
+                used: limit.used,
+                end: limit.resets_at.as_deref().and_then(parse_ts),
+                checked: limit.checked,
             }),
+            limit.note,
+            None,
+        ),
+        Ok(None) => (
+            None,
             None,
             Some("Claude no informó de la sesión de 5 h.".to_string()),
         ),
-        Err(e) => (
-            Some(Window {
-                start: now - WINDOW_MS,
-                end: now,
-            }),
-            None,
-            Some(e),
-        ),
-    };
-    let Some(span) = window else {
-        return Ok(AgentLog {
-            window,
-            used,
-            error,
-            machine_cost: 0.0,
-            nexo_cost: 0.0,
-            nexo_share: used.map(|_| 0.0),
-            agents: Vec::new(),
-        });
+        Err(e) => (None, None, Some(e)),
     };
     let current = crate::claude_code::current_session(&app);
     let efforts: HashMap<String, Option<String>> = crate::agents::list(&root)
@@ -665,24 +826,39 @@ pub async fn agent_log(app: AppHandle, force: bool) -> Result<AgentLog, String> 
     let projects = home.join(".claude/projects");
     let vault_dir = projects.join(project_dir_name(&root));
     let handle = app.clone();
-    let (machine, mut agents) = tauri::async_runtime::spawn_blocking(move || {
+    let mut built = tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<RegistroState>();
         let mut cache = state.transcripts.lock().map_err(|e| e.to_string())?;
         Ok::<_, String>(build(
-            &mut cache, &projects, &vault_dir, span.start, &current, &efforts, now,
+            &mut cache,
+            &projects,
+            &vault_dir,
+            snap.as_ref(),
+            &current,
+            &efforts,
+            now,
         ))
     })
     .await
     .map_err(|e| e.to_string())??;
-    let nexo_share = assign_shares(&mut agents, machine, used);
+    // El porcentaje de Claude solo vale para la sesión que dio él.
+    let snap = snap.filter(|_| built.window.is_some_and(|w| w.exact));
+    let (used, nexo_share) = assign_shares(
+        &mut built.agents,
+        built.machine,
+        built.machine_at,
+        snap.map(|s| s.used),
+    );
     Ok(AgentLog {
-        window,
+        window: built.window,
         used,
+        checked: snap.map(|s| s.checked),
         error,
-        machine_cost: machine,
-        nexo_cost: agents.iter().map(|a| a.cost).sum(),
+        note: note.filter(|_| snap.is_some()),
+        machine_cost: built.machine,
+        nexo_cost: built.agents.iter().map(|a| a.cost).sum(),
         nexo_share,
-        agents,
+        agents: built.agents,
     })
 }
 
@@ -691,7 +867,11 @@ pub async fn agent_log(app: AppHandle, force: bool) -> Result<AgentLog, String> 
 /// Pide a Claude Code el desglose del contexto (`get_context_usage`) sin hablar con el
 /// modelo: lo responde con la transcripción y estimaciones locales.
 fn probe(claude: &Path, cwd: &Path, args: &[String]) -> Result<Value, String> {
-    let mut child = Command::new(claude)
+    let mut command = Command::new(claude);
+    for key in crate::claude_code::INHERITED_ENV {
+        command.env_remove(key);
+    }
+    let mut child = command
         .args([
             "-p",
             "--input-format",
@@ -893,10 +1073,15 @@ pub async fn agent_context(
         if !safe_id(session) || !safe_id(agent) {
             return Err("Agente no válido.".into());
         }
-        let file = vault_dir
-            .join(session)
-            .join("subagents")
-            .join(format!("agent-{agent}.jsonl"));
+        let subagents = vault_dir.join(session).join("subagents");
+        let mut file = subagents.join(format!("agent-{agent}.jsonl"));
+        if !file.is_file() {
+            let mut all = Vec::new();
+            find_agents(&subagents, 3, &mut all);
+            if let Some((path, _)) = all.into_iter().find(|(_, id)| id == agent) {
+                file = path;
+            }
+        }
         let mut transcript = Transcript::default();
         let len = fs::metadata(&file)
             .map(|m| m.len())
@@ -1098,7 +1283,27 @@ mod tests {
                     usage(10, 100, 12_000, 1_000),
                     json!({"type": "tool_use", "name": "Agent", "input": {}}),
                 ),
+                // Aviso de que el subagente `ghi` paró (lo detuvieron a medio trabajo).
+                json!({
+                    "type": "queue-operation",
+                    "operation": "enqueue",
+                    "timestamp": iso(now - 8_000),
+                    "content": "<task-notification>\n<task-id>ghi</task-id>\n<status>killed</status>\n</task-notification>"
+                })
+                .to_string(),
             ],
+        );
+        // Lo detuvieron con una herramienta a medias: sin el aviso parecería activo. Está en
+        // una subcarpeta de `subagents`.
+        write_lines(
+            &vault_dir.join("s1/subagents/trabajo/agent-ghi.jsonl"),
+            &[line(
+                "d1",
+                now - 9_000,
+                "claude-sonnet-5-5",
+                usage(1, 1, 1_000, 100),
+                json!({"type": "tool_use", "name": "Bash", "input": {}}),
+            )],
         );
         // Su subagente terminó entregando el informe.
         let sub = vault_dir.join("s1/subagents/agent-abc.jsonl");
@@ -1160,11 +1365,26 @@ mod tests {
         let efforts =
             HashMap::from([("revisor-classroom".to_string(), Some("medium".to_string()))]);
         let current = Some(("s1".to_string(), true));
+        // Claude dio el 40 % ahora mismo; la sesión acaba dentro de una hora.
+        let snap = Snapshot {
+            used: 40.0,
+            end: Some(now + 3_600_000),
+            checked: now,
+        };
         let mut cache = HashMap::new();
-        let (machine, mut agents) = build(
-            &mut cache, &projects, &vault_dir, since, &current, &efforts, now,
+        let built = build(
+            &mut cache,
+            &projects,
+            &vault_dir,
+            Some(&snap),
+            &current,
+            &efforts,
+            now,
         );
-        assert_eq!(agents.len(), 3);
+        let window = built.window.unwrap();
+        assert!(window.exact && window.start == now + 3_600_000 - WINDOW_MS);
+        let mut agents = built.agents;
+        assert_eq!(agents.len(), 4);
         let by = |id: &str| agents.iter().find(|a| a.id == id).unwrap();
         let main = by("s:s1");
         assert_eq!(main.name, "Orquestador");
@@ -1177,8 +1397,9 @@ mod tests {
         assert_eq!(done.effort.as_deref(), Some("medium"));
         assert!(!done.active);
         assert!(by("a:s1/def").active);
+        assert!(!by("a:s1/ghi").active);
         // Activos primero.
-        assert!(agents[0].active && agents[1].active && !agents[2].active);
+        assert!(agents[0].active && agents[1].active && !agents[2].active && !agents[3].active);
         let ours: f64 = agents.iter().map(|a| a.cost).sum();
         let other = Call {
             model: opus.into(),
@@ -1189,30 +1410,190 @@ mod tests {
             ..Call::default()
         }
         .cost();
+        let machine = built.machine;
         assert!((machine - ours - other).abs() < 1e-9);
-        let nexo = assign_shares(&mut agents, machine, Some(40.0)).unwrap();
+        assert!((built.machine_at - machine).abs() < 1e-9);
+        let (used, nexo) = assign_shares(&mut agents, machine, built.machine_at, Some(40.0));
+        let nexo = nexo.unwrap();
+        assert_eq!(used, Some(40.0));
         assert!((nexo - 40.0 * ours / machine).abs() < 1e-9);
         let sum: f64 = agents.iter().map(|a| a.share.unwrap()).sum();
         assert!((sum - nexo).abs() < 1e-9);
 
         // Si la sesión de nexo se cierra, sus subagentes ya no cuentan como activos.
         let closed = Some(("s1".to_string(), false));
-        let (_, agents) = build(
-            &mut cache, &projects, &vault_dir, since, &closed, &efforts, now,
-        );
-        assert!(agents.iter().all(|a| !a.active));
-        // Una ventana nueva deja fuera todo lo anterior.
-        let (machine, agents) = build(
+        let built = build(
             &mut cache,
             &projects,
             &vault_dir,
-            now + 1,
+            Some(&snap),
+            &closed,
+            &efforts,
+            now,
+        );
+        assert!(built.agents.iter().all(|a| !a.active));
+        // La sesión que dio Claude ya terminó y nadie ha escrito después: registro vacío.
+        let ended = Snapshot {
+            end: Some(now - 1),
+            ..snap
+        };
+        let built = build(
+            &mut cache,
+            &projects,
+            &vault_dir,
+            Some(&ended),
             &current,
             &efforts,
             now,
         );
-        assert!(agents.is_empty() && machine == 0.0);
+        assert!(built.window.is_none() && built.agents.is_empty() && built.machine == 0.0);
+        // Sin datos de Claude, la sesión se deduce de las llamadas: la de antes de la ventana
+        // abrió una que ya acabó; la siguiente empieza con a1.
+        let built = build(
+            &mut cache, &projects, &vault_dir, None, &current, &efforts, now,
+        );
+        let window = built.window.unwrap();
+        assert!(!window.exact);
+        assert_eq!(window, window_from(now - 50_000));
+        assert_eq!(built.agents.len(), 4);
         fs::remove_dir_all(projects).unwrap();
+    }
+
+    #[test]
+    fn situa_la_sesion_de_5_h() {
+        let h = 3_600_000;
+        // Una hora en punto: los redondeos no la mueven.
+        let t0 = 1_791_500_400_000 - 1_791_500_400_000 % ROUND_MS;
+        let times = [t0, t0 + h, t0 + 6 * h, t0 + 7 * h];
+        let now = t0 + 7 * h + 60_000;
+        // Claude da la sesión: se usa tal cual.
+        let snap = Snapshot {
+            used: 10.0,
+            end: Some(now + h),
+            checked: now - 60_000,
+        };
+        assert_eq!(
+            resolve_window(Some(&snap), &times, now),
+            Some(Window {
+                start: now + h - WINDOW_MS,
+                end: now + h,
+                exact: true
+            })
+        );
+        // Sin Claude: t0 abrió una sesión que acabó a t0 + 5 h; la siguiente llamada abre otra.
+        let w = resolve_window(None, &times, now).unwrap();
+        assert_eq!((w.start, w.end, w.exact), (t0 + 6 * h, t0 + 11 * h, false));
+        // Tras un hueco de 5 h empieza una sesión aunque la cadena desde el principio dijera
+        // otra cosa: t0 + 2 h abre la de t0 + 7,5 h, no t0 + 5 h.
+        let gap = [t0, t0 + 2 * h, t0 + 7 * h + h / 2, t0 + 10 * h];
+        let after_gap = resolve_window(None, &gap, t0 + 10 * h + 1).unwrap();
+        assert_eq!(after_gap.start, t0 + 7 * h + h / 2);
+        // La de Claude terminó a t0 + 5 h: lo mismo.
+        let old = Snapshot {
+            end: Some(t0 + 5 * h),
+            ..snap
+        };
+        assert_eq!(resolve_window(Some(&old), &times, now), Some(w));
+        // Claude no veía sesión a t0 + 6,5 h: empieza con la llamada de t0 + 7 h.
+        let none = Snapshot {
+            end: None,
+            checked: t0 + 6 * h + h / 2,
+            ..snap
+        };
+        let w = resolve_window(Some(&none), &times, now).unwrap();
+        assert_eq!(w.start, t0 + 7 * h);
+        // Nadie escribió desde que acabó: no hay sesión.
+        assert_eq!(resolve_window(Some(&old), &times[..2], now), None);
+        // El inicio se redondea a 10 min.
+        assert_eq!(window_from(t0 + 7 * 60_000).start, t0);
+    }
+
+    #[test]
+    fn estima_el_porcentaje_desde_la_ultima_lectura() {
+        let agent = |cost: f64| AgentUse {
+            id: String::new(),
+            kind: "sub",
+            session: String::new(),
+            name: String::new(),
+            title: None,
+            model: None,
+            effort: None,
+            active: false,
+            started: 0,
+            last: 0,
+            calls: 1,
+            tokens: Tokens::default(),
+            cost,
+            share: None,
+            context: 0,
+            models: Vec::new(),
+        };
+        // Claude dio el 20 % con 2 US$ gastados aquí (10 % por dólar); después se gastó 1 más.
+        let mut agents = vec![agent(1.5), agent(0.5)];
+        let (used, nexo) = assign_shares(&mut agents, 3.0, 2.0, Some(20.0));
+        assert_eq!(used, Some(30.0));
+        assert!((agents[0].share.unwrap() - 15.0).abs() < 1e-9);
+        assert!((nexo.unwrap() - 20.0).abs() < 1e-9);
+        // Sin porcentaje de Claude no se reparte nada.
+        assert_eq!(assign_shares(&mut agents, 3.0, 2.0, None), (None, None));
+        // Nunca pasa del 100 %.
+        let (used, _) = assign_shares(&mut agents, 30.0, 2.0, Some(90.0));
+        assert_eq!(used, Some(100.0));
+    }
+
+    /// Con las transcripciones de verdad de este equipo y sin preguntar a Claude.
+    #[test]
+    #[ignore]
+    fn registro_real() {
+        let home = PathBuf::from(std::env::var("HOME").unwrap());
+        let projects = home.join(".claude/projects");
+        let vault_dir = projects.join(project_dir_name(&home.join("mi_vault")));
+        let now = now_ms();
+        let started = Instant::now();
+        let built = build(
+            &mut HashMap::new(),
+            &projects,
+            &vault_dir,
+            None,
+            &None,
+            &HashMap::new(),
+            now,
+        );
+        let clock = |ms: i64| {
+            chrono::DateTime::from_timestamp_millis(ms)
+                .unwrap()
+                .with_timezone(&chrono::Local)
+                .format("%H:%M")
+                .to_string()
+        };
+        let w = built.window.unwrap();
+        println!(
+            "sesión {}–{} · equipo {:.2} US$ · leído en {:?}",
+            clock(w.start),
+            clock(w.end),
+            built.machine,
+            started.elapsed()
+        );
+        for a in &built.agents {
+            println!(
+                "{} {} {} · {} llamadas · {:.2} US$ · {}–{}",
+                if a.active { "●" } else { "○" },
+                a.name,
+                a.title.as_deref().unwrap_or(""),
+                a.calls,
+                a.cost,
+                clock(a.started),
+                clock(a.last)
+            );
+        }
+    }
+
+    #[test]
+    fn lee_los_avisos_de_subagentes() {
+        let line = br#"{"content":"<task-notification>
+<task-id>abc123</task-id>
+<status>completed</status>","x":"<task-id>../x</task-id><task-id>def</task-id>"}"#;
+        assert_eq!(task_ids(line), ["abc123", "def"]);
     }
 
     #[test]
