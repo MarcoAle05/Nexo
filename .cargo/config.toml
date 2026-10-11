@@ -1,0 +1,5 @@
+# El workspace vive en la raíz del repo, pero la carpeta de compilación se queda donde
+# estaba: Vite ya ignora `src-tauri/**` (una `target/` en la raíz la vigilaría entera) y
+# la caché del CI y el `.gitignore` siguen valiendo sin tocarlos.
+[build]
+target-dir = "src-tauri/target"
