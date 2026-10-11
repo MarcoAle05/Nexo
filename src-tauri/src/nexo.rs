@@ -569,6 +569,7 @@ pub async fn compile(
 ) -> Result<usize, String> {
     let claude = Claude::new(&app)?;
     let root = vault_root(&app)?;
+    let auto_commit = !read_config(&app).auto_commit_off;
     let raw = root.join("raw");
     let manifest_file = manifest_path(&root);
     let mut manifest: Manifest = fs::read_to_string(&manifest_file)
@@ -600,7 +601,9 @@ pub async fn compile(
     );
 
     // Lo que hubiera sin guardar en wiki/ queda en git antes de que el modelo escriba encima.
-    git_step(&root, &channel, VaultGit::snapshot).await;
+    if auto_commit {
+        git_step(&root, &channel, VaultGit::snapshot).await;
+    }
 
     // Primero, conversión local a Markdown con MarkItDown (sin IA): Claude recibe texto
     // en lugar del PDF completo, lo que gasta mucho menos.
@@ -676,8 +679,10 @@ pub async fn compile(
                 );
                 done += 1;
                 // Un commit por fuente: las notas que escribió y el manifiesto, nada más.
-                written.push(MANIFEST.into());
-                git_step(&root, &channel, move |git| git.commit(&written, &message)).await;
+                if auto_commit {
+                    written.push(MANIFEST.into());
+                    git_step(&root, &channel, move |git| git.commit(&written, &message)).await;
+                }
             }
             Err(error) => emit(&channel, "step", format!("error: {error}")),
         }
