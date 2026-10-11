@@ -10,8 +10,9 @@ junto con el caso dorado correspondiente (ver «Cómo cambiar una regla»).
   `el_grafo_cumple_los_casos_dorados` (en `graph.rs`) construye cada `vault/` y compara el resultado
   con `expected.json` como conjuntos de nodos y aristas. `el_orden_de_los_nodos_es_estable` comprueba G14.
 
-Las reglas marcadas **(D1)**, **(D2)** o **(D3)** son decisiones que cambian el comportamiento anterior
+Las reglas marcadas **(D1)** a **(D5)** son decisiones que cambian el comportamiento anterior
 al documento; el resto describe lo que el código ya hacía y ahora queda fijado por un caso.
+Hay 17 casos en total.
 
 ## Reglas
 
@@ -34,7 +35,11 @@ Cuentan estos dos tipos de enlace:
 
 No cuentan: destinos vacíos, enlaces con `://` y enlaces markdown cuyo destino no termina en `.md`
 (imágenes, PDF…). Un prefijo `./` se ignora al resolver.
-Casos: `basico`, `codigo_y_externos`.
+**(D4)** No cuentan tampoco los wikilinks cuyo destino contiene `://` ni los que apuntan a adjuntos
+(extensiones, sin distinguir mayúsculas: `png`, `jpg`, `jpeg`, `gif`, `svg`, `webp`, `bmp`, `pdf`, `mp3`, `wav`,
+`ogg`, `m4a`, `mp4`, `webm`, `mov`, `mkv`), sean o no incrustados (`![[...]]`). Un destino con otra extensión
+(`[[Node.js]]`) sigue siendo un enlace.
+Casos: `basico`, `codigo_y_externos`, `enlaces_no_notas`.
 
 ### G4. Zonas donde los enlaces no cuentan
 - Bloques de código cercados: desde una línea que, tras los espacios iniciales, empieza por ```` ``` ```` hasta la siguiente línea igual.
@@ -95,8 +100,8 @@ Casos: `etiquetas`, `fichas`, `frontmatter`.
 
 ### G13. Frontmatter
 Hay frontmatter solo si el texto empieza por `---` + salto de línea (LF o CRLF) y existe más adelante un cierre (`\n---`). Sin cierre, se trata la nota como si no tuviera frontmatter.
-Cada línea `clave: valor` se separa en el primer `:`; el valor se recorta y se le quitan las comillas dobles de los extremos. Se descartan las líneas sin `:` y las claves que empiezan por `-`, espacio o `#` (elementos de lista, anidados, comentarios).
-Casos: `frontmatter`, `etiquetas`.
+Cada línea `clave: valor` se separa en el primer `:`; el valor se recorta y se le quitan las comillas dobles de los extremos. Se descartan las líneas sin `:` y las líneas que empiezan por espacio, tabulador, `-` o `#` (elementos de lista, claves anidadas, comentarios). **(D5)**
+Casos: `frontmatter`, `etiquetas`, `frontmatter_anidado`.
 
 ### G14. Orden de salida **(D1)**
 El resultado no depende del sistema de archivos. Los nodos van primero las notas ordenadas por `id` (orden de bytes) y después los fantasmas ordenados por `id`. Las aristas van ordenadas.
@@ -121,10 +126,13 @@ Test: `el_orden_de_los_nodos_es_estable` (recorre todos los casos).
 | `frontmatter` | G13 |
 | `ocultos_y_extensiones` | G1, G7 |
 | `unicode_y_espacios` | G3, G5 |
+| `enlaces_no_notas` | G3 (D4) |
+| `frontmatter_anidado` | G13 (D5) |
 
-## Qué falla antes de aplicar D1–D3
+## Qué falla antes de aplicar D1–D5
 
-Comprobado ejecutando la lógica de `graph.rs` tal cual estaba en `main` (commit `8fe789d`) sobre estos casos:
+Comprobado ejecutando la lógica de `graph.rs` tal cual estaba en `main` (commit `8fe789d`) sobre los 15 casos de
+la primera ronda, y con D1–D3 ya aplicadas (commit `ab5b962`) sobre los dos de la segunda:
 
 | Caso | Fallo | Decisión |
 |---|---|---|
@@ -132,8 +140,11 @@ Comprobado ejecutando la lógica de `graph.rs` tal cual estaba en `main` (commit
 | `tipos` | `notas/mi_index.md` sale `index`; `conversaciones/mi_index.md` sale `index` | D3 |
 | `duplicados_ambiguos` | enlaza a `b/tema.md`; según el sistema de archivos podría ser `a/` o `c/` | D1 |
 | `el_orden_de_los_nodos_es_estable` | los nodos salen en el orden de `read_dir` | D1 |
+| `enlaces_no_notas` | 3 fantasmas falsos (`?https://ejemplo.com`, `?foto.png`, `?informe.PDF`) | D4 |
+| `frontmatter_anidado` | `anidada.md` sale con la etiqueta `Interno`; `mixta.md` sale con `Sangrado` | D5 |
 
-Los otros 12 casos describen comportamiento que ya era correcto y pasan sin tocar nada.
+De los 17 casos, 5 fallaban antes de su decisión: 3 de los 15 de la primera ronda y los 2 de la segunda.
+Los otros 12 describen comportamiento que ya era correcto y pasan sin tocar nada.
 
 ## Fuera de alcance (comportamiento actual, sin caso)
 
