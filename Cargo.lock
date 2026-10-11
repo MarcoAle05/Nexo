@@ -74,6 +74,7 @@ dependencies = [
  "libc",
  "log",
  "memchr",
+ "nexo-core",
  "portable-pty",
  "reqwest",
  "serde",

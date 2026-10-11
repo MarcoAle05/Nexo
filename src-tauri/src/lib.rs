@@ -17,7 +17,6 @@ mod skills;
 mod sources;
 mod usage;
 mod vault;
-mod vaultgit;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

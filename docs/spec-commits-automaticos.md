@@ -1,7 +1,7 @@
 # Especificación de los commits automáticos del vault
 
 Objetivo: que lo que escribe la compilación de nexo quede en git, para poder revisarlo (`git show`) y
-deshacerlo (`git revert`). Es la fuente de verdad; las pruebas de `src-tauri/src/vaultgit.rs` fijan cada regla.
+deshacerlo (`git revert`). Es la fuente de verdad; las pruebas de `crates/nexo-core/src/vaultgit.rs` fijan cada regla.
 
 **Fuera de alcance (a propósito):** lo que escriben Claude Code, el editor de notas o Antigravity fuera de una
 compilación; empujar a un remoto; crear el repositorio; cambiar la identidad o la configuración de git del usuario.
