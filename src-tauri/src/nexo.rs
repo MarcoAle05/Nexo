@@ -18,6 +18,7 @@ use tokio::sync::Mutex;
 use crate::claude::{self, Claude, refusal, text_of};
 use crate::markitdown;
 use crate::vault::{read_config, resolve_inside, vault_root, write_config};
+use crate::vaultgit::{self, Outcome, VaultGit};
 
 /// Presupuesto de caracteres de la wiki que se envía como contexto (~350 mil tokens).
 const WIKI_BUDGET: usize = 1_400_000;
@@ -296,8 +297,11 @@ pub async fn ask(
 
 type Manifest = HashMap<String, String>;
 
+/// El manifiesto de fuentes compiladas, relativo al vault.
+const MANIFEST: &str = ".nexo/compiled.json";
+
 fn manifest_path(root: &Path) -> PathBuf {
-    root.join(".nexo/compiled.json")
+    root.join(MANIFEST)
 }
 
 fn fingerprint(path: &Path) -> String {
@@ -401,10 +405,13 @@ fn tools() -> Value {
     ])
 }
 
+/// Ejecuta una herramienta de `compile`. Cada nota que `write_note` escribe bien se apunta en
+/// `written` como ruta relativa al vault (`wiki/tema/nota.md`).
 fn run_tool(
     wiki: &Path,
     name: &str,
     input: &Value,
+    written: &mut Vec<String>,
     channel: &Channel<Event>,
 ) -> Result<String, String> {
     let path = input["path"].as_str().unwrap_or("");
@@ -428,6 +435,8 @@ fn run_tool(
             }
             let verb = if file.exists() { "actualiza" } else { "crea" };
             fs::write(&file, content).map_err(|e| e.to_string())?;
+            // Se parte del archivo resuelto y no de `path`: el modelo a veces antepone `wiki/`.
+            written.push(format!("wiki/{}", rel(wiki, &file)));
             emit(channel, "step", format!("{verb} {path}"));
             Ok(format!("Guardada {path}"))
         }
@@ -476,6 +485,7 @@ async fn compile_one(
     root: &Path,
     source: &str,
     blocks: Vec<Value>,
+    written: &mut Vec<String>,
     channel: &Channel<Event>,
 ) -> Result<String, String> {
     let wiki = root.join("wiki");
@@ -511,7 +521,7 @@ async fn compile_one(
                     .filter(|b| b["type"] == "tool_use")
                     .map(|b| {
                         let name = b["name"].as_str().unwrap_or("");
-                        match run_tool(&wiki, name, &b["input"], channel) {
+                        match run_tool(&wiki, name, &b["input"], written, channel) {
                             Ok(out) => json!({"type": "tool_result", "tool_use_id": b["id"], "content": out}),
                             Err(err) => json!({"type": "tool_result", "tool_use_id": b["id"], "content": err, "is_error": true}),
                         }
@@ -533,6 +543,23 @@ async fn compile_one(
     ))
 }
 
+/// Un paso de los commits automáticos del vault (`docs/spec-commits-automaticos.md`). Git
+/// bloquea, así que va fuera del hilo asíncrono. Pase lo que pase solo deja, como mucho, una
+/// línea en la terminal: nada de git cambia el resultado de la compilación.
+async fn git_step(
+    root: &Path,
+    channel: &Channel<Event>,
+    step: impl FnOnce(&VaultGit) -> Outcome + Send + 'static,
+) {
+    let git = VaultGit::new(root);
+    let outcome = tauri::async_runtime::spawn_blocking(move || step(&git))
+        .await
+        .unwrap_or_else(|error| Outcome::Failed(error.to_string()));
+    if let Some(message) = outcome.message() {
+        emit(channel, "step", message);
+    }
+}
+
 /// Integra en la wiki las fuentes indicadas (rutas relativas a `raw/`) que sean nuevas o hayan cambiado.
 #[tauri::command]
 pub async fn compile(
@@ -542,6 +569,7 @@ pub async fn compile(
 ) -> Result<usize, String> {
     let claude = Claude::new(&app)?;
     let root = vault_root(&app)?;
+    let auto_commit = !read_config(&app).auto_commit_off;
     let raw = root.join("raw");
     let manifest_file = manifest_path(&root);
     let mut manifest: Manifest = fs::read_to_string(&manifest_file)
@@ -571,6 +599,11 @@ pub async fn compile(
             claude::MODEL
         ),
     );
+
+    // Lo que hubiera sin guardar en wiki/ queda en git antes de que el modelo escriba encima.
+    if auto_commit {
+        git_step(&root, &channel, VaultGit::snapshot).await;
+    }
 
     // Primero, conversión local a Markdown con MarkItDown (sin IA): Claude recibe texto
     // en lugar del PDF completo, lo que gasta mucho menos.
@@ -629,11 +662,13 @@ pub async fn compile(
                 continue;
             }
         };
-        match compile_one(&claude, &root, &source, blocks, &channel).await {
+        let mut written = Vec::new();
+        match compile_one(&claude, &root, &source, blocks, &mut written, &channel).await {
             Ok(summary) => {
                 if !summary.is_empty() {
                     emit(&channel, "step", summary);
                 }
+                let message = vaultgit::source_message(&source);
                 manifest.insert(source, fingerprint(&file));
                 if let Some(dir) = manifest_file.parent() {
                     let _ = fs::create_dir_all(dir);
@@ -643,6 +678,11 @@ pub async fn compile(
                     serde_json::to_string_pretty(&manifest).unwrap_or_default(),
                 );
                 done += 1;
+                // Un commit por fuente: las notas que escribió y el manifiesto, nada más.
+                if auto_commit {
+                    written.push(MANIFEST.into());
+                    git_step(&root, &channel, move |git| git.commit(&written, &message)).await;
+                }
             }
             Err(error) => emit(&channel, "step", format!("error: {error}")),
         }
@@ -681,7 +721,13 @@ mod tests {
 
     #[cfg(unix)]
     fn tool(wiki: &Path, name: &str, input: Value) -> Result<String, String> {
-        run_tool(wiki, name, &input, &Channel::new(|_| Ok(())))
+        run_tool(
+            wiki,
+            name,
+            &input,
+            &mut Vec::new(),
+            &Channel::new(|_| Ok(())),
+        )
     }
 
     #[cfg(unix)]
@@ -751,5 +797,39 @@ mod tests {
             let result = tool(&wiki, "read_note", json!({"path": path}));
             assert!(result.is_err(), "read_note devolvió {path}: {result:?}");
         }
+    }
+
+    #[test]
+    fn write_note_apunta_la_ruta_que_escribio() {
+        let root =
+            std::env::temp_dir().join(format!("nexo-herramientas-apunta-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let wiki = root.join("wiki");
+        fs::create_dir_all(&wiki).unwrap();
+        let channel = Channel::new(|_| Ok(()));
+        let mut written = Vec::new();
+
+        let nota = json!({"path": "redes/tcp.md", "content": "# TCP"});
+        assert!(run_tool(&wiki, "write_note", &nota, &mut written, &channel).is_ok());
+        // El prefijo `wiki/` que a veces antepone el modelo no se duplica.
+        let otra = json!({"path": "wiki/redes/udp.md", "content": "# UDP"});
+        assert!(run_tool(&wiki, "write_note", &otra, &mut written, &channel).is_ok());
+        assert_eq!(written, ["wiki/redes/tcp.md", "wiki/redes/udp.md"]);
+
+        // Leer y listar no apuntan nada.
+        let leer = json!({"path": "redes/tcp.md"});
+        assert!(run_tool(&wiki, "read_note", &leer, &mut written, &channel).is_ok());
+        assert!(run_tool(&wiki, "list_wiki", &json!({}), &mut written, &channel).is_ok());
+        // Un `write_note` rechazado tampoco.
+        for rechazada in [
+            json!({"path": "../fuera.md", "content": "x"}),
+            json!({"path": "fuentes/ficha.md", "content": "x"}),
+            json!({"path": "redes/nota.txt", "content": "x"}),
+            json!({"path": "redes/sin-contenido.md"}),
+        ] {
+            let result = run_tool(&wiki, "write_note", &rechazada, &mut written, &channel);
+            assert!(result.is_err(), "write_note aceptó {rechazada}");
+        }
+        assert_eq!(written, ["wiki/redes/tcp.md", "wiki/redes/udp.md"]);
     }
 }

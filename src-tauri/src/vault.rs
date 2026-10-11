@@ -17,6 +17,14 @@ pub struct Config {
     /// Clave de la API de Anthropic guardada desde la app (la variable de entorno tiene prioridad).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Apaga los commits automáticos del vault al compilar (`vaultgit`). Es una bandera
+    /// negativa para que un `config.json` sin el campo los deje encendidos.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub auto_commit_off: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 #[derive(Serialize)]
@@ -280,5 +288,22 @@ mod tests {
         );
         // El que apunta dentro vale, y devuelve la ruta real.
         assert_eq!(resolve_inside(&base, "alias"), Ok(real.join("sub")));
+    }
+
+    #[test]
+    fn los_commits_automaticos_solo_se_apagan_a_proposito() {
+        let sin_campo: Config = serde_json::from_str(r#"{"vault": "/v"}"#).unwrap();
+        assert!(
+            !sin_campo.auto_commit_off,
+            "sin el campo deben estar encendidos"
+        );
+        let apagado: Config =
+            serde_json::from_str(r#"{"vault": "/v", "auto_commit_off": true}"#).unwrap();
+        assert!(apagado.auto_commit_off);
+
+        // Encendido no se escribe en el archivo; apagado sí, para que sobreviva a un guardado.
+        let json = |config: &Config| serde_json::to_string(config).unwrap();
+        assert!(!json(&sin_campo).contains("auto_commit_off"));
+        assert!(json(&apagado).contains(r#""auto_commit_off":true"#));
     }
 }
