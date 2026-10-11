@@ -83,7 +83,7 @@ fn extract_links(text: &str) -> Vec<String> {
                 .next()
                 .unwrap_or("")
                 .trim();
-            if !target.is_empty() {
+            if !target.is_empty() && !target.contains("://") && !is_attachment(target) {
                 links.push(target.to_string());
             }
             rest = &after[end + 2..];
@@ -102,6 +102,17 @@ fn extract_links(text: &str) -> Vec<String> {
     links
 }
 
+/// Destino que apunta a un adjunto (imagen, audio, vídeo, PDF), no a una nota.
+fn is_attachment(target: &str) -> bool {
+    const EXTENSIONS: [&str; 16] = [
+        "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "pdf", "mp3", "wav", "ogg", "m4a",
+        "mp4", "webm", "mov", "mkv",
+    ];
+    target
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
+}
+
 /// La línea sin los tramos entre acentos graves (código en línea). Un acento sin pareja
 /// es texto normal, como en CommonMark.
 fn strip_inline_code(line: &str) -> String {
@@ -110,7 +121,7 @@ fn strip_inline_code(line: &str) -> String {
     parts
         .iter()
         .enumerate()
-        .filter(|(i, _)| i % 2 == 0 || (n % 2 == 0 && *i == n - 1))
+        .filter(|(i, _)| i % 2 == 0 || (n.is_multiple_of(2) && *i == n - 1))
         .map(|(_, p)| *p)
         .collect::<Vec<_>>()
         .join(" ")
@@ -429,6 +440,11 @@ fn split_frontmatter(text: &str) -> (Vec<(String, String)>, &str) {
     let meta = rest[..end]
         .lines()
         .filter_map(|line| {
+            // Elementos de lista, claves anidadas y comentarios: se mira la línea tal cual,
+            // antes de recortar la clave.
+            if line.starts_with([' ', '\t', '-', '#']) {
+                return None;
+            }
             let (key, value) = line.split_once(':')?;
             let key = key.trim();
             (!key.is_empty() && !key.starts_with(['-', ' ', '#']))
