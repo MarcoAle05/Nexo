@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {"id": "fuentes/_oculta.md", "label": "_oculta", "group": "fuentes", "kind": "note"},
+    {"id": "fuentes/mal.md", "label": "mal", "group": "fuentes", "kind": "note"},
+    {"id": "fuentes/ok.md", "label": "b", "group": "fuentes", "kind": "source", "source": "a/b.txt"},
+    {"id": "fuentes/otra.md", "label": "c", "group": "fuentes", "kind": "source", "source": "c.txt"},
+    {"id": "fuentes/sub/anidada.md", "label": "anidada", "group": "fuentes", "kind": "note"},
+    {"id": "notas/cita.md", "label": "cita", "group": "notas", "kind": "note"}
+  ],
+  "edges": [
+    ["fuentes/ok.md", "fuentes/otra.md"],
+    ["fuentes/ok.md", "notas/cita.md"]
+  ]
+}

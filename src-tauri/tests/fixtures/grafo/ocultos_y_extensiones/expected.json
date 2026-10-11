@@ -1,0 +1,11 @@
+{
+  "nodes": [
+    {"id": "?workspace", "label": "workspace", "group": "", "kind": "missing"},
+    {"id": "Mayus.MD", "label": "Mayus", "group": "", "kind": "note"},
+    {"id": "visible.md", "label": "visible", "group": "", "kind": "note"}
+  ],
+  "edges": [
+    ["?workspace", "visible.md"],
+    ["Mayus.MD", "visible.md"]
+  ]
+}

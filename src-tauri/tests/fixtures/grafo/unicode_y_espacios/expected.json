@@ -1,0 +1,15 @@
+{
+  "nodes": [
+    {"id": "Café con leche.md", "label": "Café con leche", "group": "", "kind": "note"},
+    {"id": "Mi nota.md", "label": "Mi nota", "group": "", "kind": "note"},
+    {"id": "Mis temas/Idea.md", "label": "Idea", "group": "Mis temas", "kind": "note"},
+    {"id": "hub.md", "label": "hub", "group": "", "kind": "note"},
+    {"id": "ñandú.md", "label": "ñandú", "group": "", "kind": "note"}
+  ],
+  "edges": [
+    ["Café con leche.md", "hub.md"],
+    ["Mi nota.md", "hub.md"],
+    ["Mis temas/Idea.md", "hub.md"],
+    ["hub.md", "ñandú.md"]
+  ]
+}

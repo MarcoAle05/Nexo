@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    {"id": "_index.md", "label": "Índice", "group": "", "kind": "index"},
+    {"id": "_master-index.md", "label": "Índice maestro", "group": "", "kind": "index"},
+    {"id": "a.md", "label": "Mi título", "group": "", "kind": "note"},
+    {"id": "b.md", "label": "b", "group": "", "kind": "note"},
+    {"id": "c.md", "label": "Con: dos puntos", "group": "", "kind": "note"},
+    {"id": "d/_index.md", "label": "Tema D", "group": "d", "kind": "index"},
+    {"id": "e/_index.md", "label": "e", "group": "e", "kind": "index"},
+    {"id": "g.md", "label": "g", "group": "", "kind": "note"}
+  ],
+  "edges": []
+}

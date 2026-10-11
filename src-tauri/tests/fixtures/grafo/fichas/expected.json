@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    {"id": "fuentes/_index.md", "label": "fuentes", "group": "fuentes", "kind": "index"},
+    {"id": "fuentes/informe.md", "label": "informe", "group": "fuentes", "kind": "source", "source": "docs/informe.pdf"},
+    {"id": "fuentes/sin_source.md", "label": "sin_source", "group": "fuentes", "kind": "note"},
+    {"id": "notas/ajena.md", "label": "ajena", "group": "notas", "kind": "note"},
+    {"id": "notas/resumen.md", "label": "resumen", "group": "notas", "kind": "note"}
+  ],
+  "edges": [
+    ["fuentes/_index.md", "fuentes/informe.md"],
+    ["fuentes/informe.md", "notas/resumen.md"]
+  ]
+}

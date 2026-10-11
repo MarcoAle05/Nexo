@@ -1,0 +1,23 @@
+{
+  "nodes": [
+    {"id": "a.md", "label": "a", "group": "", "kind": "note"},
+    {"id": "b.md", "label": "b", "group": "", "kind": "note"},
+    {"id": "c.md", "label": "c", "group": "", "kind": "note"},
+    {"id": "d.md", "label": "d", "group": "", "kind": "note"},
+    {"id": "e.md", "label": "e", "group": "", "kind": "note"},
+    {"id": "f.md", "label": "f", "group": "", "kind": "note"},
+    {"id": "g.md", "label": "g", "group": "", "kind": "note"},
+    {"id": "h i.md", "label": "h i", "group": "", "kind": "note"},
+    {"id": "j.md", "label": "j", "group": "", "kind": "note"}
+  ],
+  "edges": [
+    ["a.md", "b.md"],
+    ["a.md", "c.md"],
+    ["a.md", "d.md"],
+    ["a.md", "e.md"],
+    ["a.md", "f.md"],
+    ["a.md", "g.md"],
+    ["a.md", "h i.md"],
+    ["a.md", "j.md"]
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "nodes": [
+    {"id": "_master-index.md", "label": "Índice maestro", "group": "", "kind": "index"},
+    {"id": "conversaciones/2026-01-01-charla.md", "label": "2026-01-01-charla", "group": "conversaciones", "kind": "conversation"},
+    {"id": "conversaciones/_index.md", "label": "conversaciones", "group": "conversaciones", "kind": "index"},
+    {"id": "conversaciones/mi_index.md", "label": "mi_index", "group": "conversaciones", "kind": "conversation"},
+    {"id": "conversaciones/sub/_index.md", "label": "sub", "group": "conversaciones", "kind": "index"},
+    {"id": "notas/mi_index.md", "label": "mi_index", "group": "notas", "kind": "note"},
+    {"id": "notas/normal.md", "label": "normal", "group": "notas", "kind": "note"},
+    {"id": "temas/_index.md", "label": "temas", "group": "temas", "kind": "index"}
+  ],
+  "edges": []
+}
