@@ -9,7 +9,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::vault::{resolve_inside, vault_dir};
+use crate::vault::{resolve_inside, vault_dir, vault_root};
 
 #[derive(Serialize)]
 pub struct Node {
@@ -253,7 +253,13 @@ pub fn watch(app: AppHandle) {
 
 #[tauri::command]
 pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
-    let wiki = vault_dir(&app, "wiki")?;
+    build_graph(&vault_root(&app)?)
+}
+
+/// Construye el grafo del vault en `root` (`root/wiki/**/*.md`). No necesita `AppHandle`,
+/// así que se puede probar sin abrir Tauri.
+pub fn build_graph(root: &Path) -> Result<Graph, String> {
+    let wiki = root.join("wiki");
     let mut files = Vec::new();
     collect_notes(&wiki, &mut files);
     let ids: Vec<String> = files.iter().map(|p| rel_id(&wiki, p)).collect();
@@ -269,8 +275,7 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
     }
 
     // Fichas de fuente: ruta de la fuente → índice del nodo.
-    let root = wiki.parent().map(Path::to_path_buf).unwrap_or_default();
-    let fichas: HashMap<String, usize> = crate::fichas::all(&root)
+    let fichas: HashMap<String, usize> = crate::fichas::all(root)
         .into_iter()
         .filter_map(|(rel, path)| files.iter().position(|f| *f == path).map(|i| (rel, i)))
         .collect();
