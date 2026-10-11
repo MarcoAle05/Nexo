@@ -83,7 +83,7 @@ fn extract_links(text: &str) -> Vec<String> {
                 .next()
                 .unwrap_or("")
                 .trim();
-            if !target.is_empty() {
+            if !target.is_empty() && !target.contains("://") && !is_attachment(target) {
                 links.push(target.to_string());
             }
             rest = &after[end + 2..];
@@ -100,6 +100,17 @@ fn extract_links(text: &str) -> Vec<String> {
         }
     }
     links
+}
+
+/// Destino que apunta a un adjunto (imagen, audio, vídeo, PDF), no a una nota.
+fn is_attachment(target: &str) -> bool {
+    const EXTENSIONS: [&str; 16] = [
+        "png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "pdf", "mp3", "wav", "ogg", "m4a",
+        "mp4", "webm", "mov", "mkv",
+    ];
+    target
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
 /// La línea sin los tramos entre acentos graves (código en línea). Un acento sin pareja
