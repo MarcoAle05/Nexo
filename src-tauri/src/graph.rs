@@ -262,6 +262,8 @@ pub fn build_graph(root: &Path) -> Result<Graph, String> {
     let wiki = root.join("wiki");
     let mut files = Vec::new();
     collect_notes(&wiki, &mut files);
+    // G14: el orden del sistema de archivos no es estable; se ordena por id.
+    files.sort_by_key(|p| rel_id(&wiki, p));
     let ids: Vec<String> = files.iter().map(|p| rel_id(&wiki, p)).collect();
 
     // Obsidian resuelve por nombre de nota o por ruta; indexamos ambos en minúsculas.
