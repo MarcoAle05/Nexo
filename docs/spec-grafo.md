@@ -1,13 +1,13 @@
 # Especificación del grafo de la wiki
 
-Esta es la fuente de verdad de cómo `graph::build_graph` convierte `wiki/` en nodos y aristas.
+Esta es la fuente de verdad de cómo `graph::build_graph` (crate `nexo-core`) convierte `wiki/` en nodos y aristas.
 Si el código y este documento discrepan, uno de los dos tiene un error: se decide cuál y se arregla
 junto con el caso dorado correspondiente (ver «Cómo cambiar una regla»).
 
 - **Entrada:** la raíz del vault (`root`); solo se lee `root/wiki/**` y `root/wiki/fuentes/*.md` (fichas).
 - **Salida:** `Graph { nodes, edges }`, la misma estructura que recibe la interfaz (`read_graph`).
-- **Casos dorados:** `src-tauri/tests/fixtures/grafo/<caso>/{vault/, expected.json}`. El test
-  `el_grafo_cumple_los_casos_dorados` (en `graph.rs`) construye cada `vault/` y compara el resultado
+- **Casos dorados:** `crates/nexo-core/tests/fixtures/grafo/<caso>/{vault/, expected.json}`. El test
+  `el_grafo_cumple_los_casos_dorados` (en `crates/nexo-core/src/graph.rs`) construye cada `vault/` y compara el resultado
   con `expected.json` como conjuntos de nodos y aristas. `el_orden_de_los_nodos_es_estable` comprueba G14.
 
 Las reglas marcadas **(D1)** a **(D5)** son decisiones que cambian el comportamiento anterior
@@ -161,10 +161,10 @@ No se prueba ni se garantiza todavía; si algún día importa, se escribe primer
 ## Cómo cambiar una regla
 
 1. Edita la regla en este documento.
-2. Cambia o añade el caso: carpeta nueva en `tests/fixtures/grafo/<nombre>/` con `vault/wiki/...` y un `expected.json` escrito **a mano** a partir de la regla (no copiando la salida del programa).
-3. Ejecuta `cargo test graph` y comprueba que falla por el motivo esperado.
+2. Cambia o añade el caso: carpeta nueva en `crates/nexo-core/tests/fixtures/grafo/<nombre>/` con `vault/wiki/...` y un `expected.json` escrito **a mano** a partir de la regla (no copiando la salida del programa).
+3. Ejecuta `cargo test -p nexo-core graph` y comprueba que falla por el motivo esperado.
 4. Cambia el código hasta que pase. Un commit por regla.
 
 Formato de `expected.json`: `{"nodes": [{id, label, group, kind, source?}], "edges": [[a, b]]}`; `source` solo en las fichas. El orden dentro de cada lista da igual para este test.
 
-Los fixtures se leen byte a byte (`crlf.md` usa CRLF): `tests/fixtures/grafo/.gitattributes` desactiva la conversión de saltos de línea de git.
+Los fixtures se leen byte a byte (`crlf.md` usa CRLF): `crates/nexo-core/tests/fixtures/grafo/.gitattributes` desactiva la conversión de saltos de línea de git.
