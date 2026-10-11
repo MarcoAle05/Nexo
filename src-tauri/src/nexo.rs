@@ -401,10 +401,13 @@ fn tools() -> Value {
     ])
 }
 
+/// Ejecuta una herramienta de `compile`. Cada nota que `write_note` escribe bien se apunta en
+/// `written` como ruta relativa al vault (`wiki/tema/nota.md`).
 fn run_tool(
     wiki: &Path,
     name: &str,
     input: &Value,
+    written: &mut Vec<String>,
     channel: &Channel<Event>,
 ) -> Result<String, String> {
     let path = input["path"].as_str().unwrap_or("");
@@ -428,6 +431,8 @@ fn run_tool(
             }
             let verb = if file.exists() { "actualiza" } else { "crea" };
             fs::write(&file, content).map_err(|e| e.to_string())?;
+            // Se parte del archivo resuelto y no de `path`: el modelo a veces antepone `wiki/`.
+            written.push(format!("wiki/{}", rel(wiki, &file)));
             emit(channel, "step", format!("{verb} {path}"));
             Ok(format!("Guardada {path}"))
         }
@@ -476,6 +481,7 @@ async fn compile_one(
     root: &Path,
     source: &str,
     blocks: Vec<Value>,
+    written: &mut Vec<String>,
     channel: &Channel<Event>,
 ) -> Result<String, String> {
     let wiki = root.join("wiki");
@@ -511,7 +517,7 @@ async fn compile_one(
                     .filter(|b| b["type"] == "tool_use")
                     .map(|b| {
                         let name = b["name"].as_str().unwrap_or("");
-                        match run_tool(&wiki, name, &b["input"], channel) {
+                        match run_tool(&wiki, name, &b["input"], written, channel) {
                             Ok(out) => json!({"type": "tool_result", "tool_use_id": b["id"], "content": out}),
                             Err(err) => json!({"type": "tool_result", "tool_use_id": b["id"], "content": err, "is_error": true}),
                         }
@@ -629,7 +635,8 @@ pub async fn compile(
                 continue;
             }
         };
-        match compile_one(&claude, &root, &source, blocks, &channel).await {
+        let mut written = Vec::new();
+        match compile_one(&claude, &root, &source, blocks, &mut written, &channel).await {
             Ok(summary) => {
                 if !summary.is_empty() {
                     emit(&channel, "step", summary);
@@ -681,7 +688,13 @@ mod tests {
 
     #[cfg(unix)]
     fn tool(wiki: &Path, name: &str, input: Value) -> Result<String, String> {
-        run_tool(wiki, name, &input, &Channel::new(|_| Ok(())))
+        run_tool(
+            wiki,
+            name,
+            &input,
+            &mut Vec::new(),
+            &Channel::new(|_| Ok(())),
+        )
     }
 
     #[cfg(unix)]
@@ -751,5 +764,39 @@ mod tests {
             let result = tool(&wiki, "read_note", json!({"path": path}));
             assert!(result.is_err(), "read_note devolvió {path}: {result:?}");
         }
+    }
+
+    #[test]
+    fn write_note_apunta_la_ruta_que_escribio() {
+        let root =
+            std::env::temp_dir().join(format!("nexo-herramientas-apunta-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let wiki = root.join("wiki");
+        fs::create_dir_all(&wiki).unwrap();
+        let channel = Channel::new(|_| Ok(()));
+        let mut written = Vec::new();
+
+        let nota = json!({"path": "redes/tcp.md", "content": "# TCP"});
+        assert!(run_tool(&wiki, "write_note", &nota, &mut written, &channel).is_ok());
+        // El prefijo `wiki/` que a veces antepone el modelo no se duplica.
+        let otra = json!({"path": "wiki/redes/udp.md", "content": "# UDP"});
+        assert!(run_tool(&wiki, "write_note", &otra, &mut written, &channel).is_ok());
+        assert_eq!(written, ["wiki/redes/tcp.md", "wiki/redes/udp.md"]);
+
+        // Leer y listar no apuntan nada.
+        let leer = json!({"path": "redes/tcp.md"});
+        assert!(run_tool(&wiki, "read_note", &leer, &mut written, &channel).is_ok());
+        assert!(run_tool(&wiki, "list_wiki", &json!({}), &mut written, &channel).is_ok());
+        // Un `write_note` rechazado tampoco.
+        for rechazada in [
+            json!({"path": "../fuera.md", "content": "x"}),
+            json!({"path": "fuentes/ficha.md", "content": "x"}),
+            json!({"path": "redes/nota.txt", "content": "x"}),
+            json!({"path": "redes/sin-contenido.md"}),
+        ] {
+            let result = run_tool(&wiki, "write_note", &rechazada, &mut written, &channel);
+            assert!(result.is_err(), "write_note aceptó {rechazada}");
+        }
+        assert_eq!(written, ["wiki/redes/tcp.md", "wiki/redes/udp.md"]);
     }
 }
