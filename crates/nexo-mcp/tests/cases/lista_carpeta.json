@@ -1,0 +1,36 @@
+{
+  "arguments": {
+    "folder": "redes"
+  },
+  "expected": {
+    "notes": [
+      {
+        "group": "redes",
+        "id": "redes/_index.md",
+        "kind": "index",
+        "label": "Redes"
+      },
+      {
+        "group": "redes",
+        "id": "redes/modelo-osi.md",
+        "kind": "note",
+        "label": "Modelo OSI"
+      },
+      {
+        "group": "redes",
+        "id": "redes/tcp.md",
+        "kind": "note",
+        "label": "TCP"
+      },
+      {
+        "group": "redes",
+        "id": "redes/udp.md",
+        "kind": "note",
+        "label": "udp"
+      }
+    ],
+    "total": 4,
+    "truncated": false
+  },
+  "tool": "list_notes"
+}

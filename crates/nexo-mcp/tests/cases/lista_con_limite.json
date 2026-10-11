@@ -1,0 +1,24 @@
+{
+  "arguments": {
+    "limit": 2
+  },
+  "expected": {
+    "notes": [
+      {
+        "group": "",
+        "id": "_master-index.md",
+        "kind": "index",
+        "label": "Índice maestro"
+      },
+      {
+        "group": "conversaciones",
+        "id": "conversaciones/2026-10-01-dudas-tcp.md",
+        "kind": "conversation",
+        "label": "2026-10-01-dudas-tcp"
+      }
+    ],
+    "total": 9,
+    "truncated": true
+  },
+  "tool": "list_notes"
+}

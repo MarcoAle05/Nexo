@@ -1,0 +1,47 @@
+{
+  "arguments": {
+    "limit": 2,
+    "query": "TCP"
+  },
+  "expected": {
+    "hits": [
+      {
+        "id": "redes/tcp.md",
+        "in_label": true,
+        "label": "TCP",
+        "matches": 3,
+        "snippets": [
+          {
+            "line": 2,
+            "text": "title: TCP"
+          },
+          {
+            "line": 5,
+            "text": "# TCP"
+          },
+          {
+            "line": 6,
+            "text": "TCP es un protocolo orientado a conexión y fiable. Abre la conexión con el [[handshake-tres-vias]]."
+          }
+        ]
+      },
+      {
+        "id": "conversaciones/2026-10-01-dudas-tcp.md",
+        "in_label": true,
+        "label": "2026-10-01-dudas-tcp",
+        "matches": 2,
+        "snippets": [
+          {
+            "line": 1,
+            "text": "# Dudas sobre TCP"
+          },
+          {
+            "line": 2,
+            "text": "Conclusión: [[tcp]] reenvía lo que no recibe confirmación."
+          }
+        ]
+      }
+    ]
+  },
+  "tool": "search_notes"
+}

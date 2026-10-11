@@ -1,0 +1,47 @@
+{
+  "arguments": {
+    "id": "redes/tcp.md"
+  },
+  "expected": {
+    "id": "redes/tcp.md",
+    "neighbors": [
+      {
+        "distance": 1,
+        "id": "?handshake-tres-vias",
+        "kind": "missing",
+        "label": "handshake-tres-vias"
+      },
+      {
+        "distance": 1,
+        "id": "conversaciones/2026-10-01-dudas-tcp.md",
+        "kind": "conversation",
+        "label": "2026-10-01-dudas-tcp"
+      },
+      {
+        "distance": 1,
+        "id": "fuentes/redes.md",
+        "kind": "source",
+        "label": "redes"
+      },
+      {
+        "distance": 1,
+        "id": "redes/_index.md",
+        "kind": "index",
+        "label": "Redes"
+      },
+      {
+        "distance": 1,
+        "id": "redes/modelo-osi.md",
+        "kind": "note",
+        "label": "Modelo OSI"
+      },
+      {
+        "distance": 1,
+        "id": "redes/udp.md",
+        "kind": "note",
+        "label": "udp"
+      }
+    ]
+  },
+  "tool": "get_neighbors"
+}

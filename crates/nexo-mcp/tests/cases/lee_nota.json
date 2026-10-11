@@ -1,0 +1,23 @@
+{
+  "arguments": {
+    "id": "redes/tcp.md"
+  },
+  "expected": {
+    "body": "# TCP\nTCP es un protocolo orientado a conexión y fiable. Abre la conexión con el [[handshake-tres-vias]].\nGarantiza el orden de los paquetes, a diferencia de [[udp]]. Pertenece a la capa de transporte del [[modelo-osi]].\nFuente: raw/docs/redes.pdf\n",
+    "id": "redes/tcp.md",
+    "kind": "note",
+    "label": "TCP",
+    "meta": [
+      [
+        "title",
+        "TCP"
+      ],
+      [
+        "tags",
+        "redes"
+      ]
+    ],
+    "truncated": false
+  },
+  "tool": "read_note"
+}

@@ -1,0 +1,13 @@
+{
+  "arguments": {},
+  "expected": {
+    "sources": [
+      {
+        "ficha": "fuentes/redes.md",
+        "label": "redes",
+        "source": "docs/redes.pdf"
+      }
+    ]
+  },
+  "tool": "list_sources"
+}

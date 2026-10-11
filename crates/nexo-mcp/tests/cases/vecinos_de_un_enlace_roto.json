@@ -1,0 +1,17 @@
+{
+  "arguments": {
+    "id": "?handshake-tres-vias"
+  },
+  "expected": {
+    "id": "?handshake-tres-vias",
+    "neighbors": [
+      {
+        "distance": 1,
+        "id": "redes/tcp.md",
+        "kind": "note",
+        "label": "TCP"
+      }
+    ]
+  },
+  "tool": "get_neighbors"
+}

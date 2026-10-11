@@ -1,0 +1,34 @@
+{
+  "arguments": {
+    "query": "conexión"
+  },
+  "expected": {
+    "hits": [
+      {
+        "id": "redes/tcp.md",
+        "in_label": false,
+        "label": "TCP",
+        "matches": 2,
+        "snippets": [
+          {
+            "line": 6,
+            "text": "TCP es un protocolo orientado a conexión y fiable. Abre la conexión con el [[handshake-tres-vias]]."
+          }
+        ]
+      },
+      {
+        "id": "redes/udp.md",
+        "in_label": false,
+        "label": "udp",
+        "matches": 1,
+        "snippets": [
+          {
+            "line": 2,
+            "text": "UDP no establece conexión y no garantiza entrega. Es más ligero que [[tcp]], por eso se usa en vídeo y DNS."
+          }
+        ]
+      }
+    ]
+  },
+  "tool": "search_notes"
+}
