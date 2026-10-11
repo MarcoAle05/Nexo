@@ -365,6 +365,7 @@ pub fn build_graph(root: &Path) -> Result<Graph, String> {
         .enumerate()
         .map(|(i, id)| {
             let source = source_of.get(&i).map(|rel| rel.to_string());
+            let name = id.rsplit('/').next().unwrap_or(id);
             Node {
                 id: id.clone(),
                 label: source
@@ -378,9 +379,9 @@ pub fn build_graph(root: &Path) -> Result<Graph, String> {
                     .unwrap_or_default(),
                 kind: if source.is_some() {
                     "source"
-                } else if id.starts_with("conversaciones/") && !id.ends_with("_index.md") {
+                } else if id.starts_with("conversaciones/") && name != "_index.md" {
                     "conversation"
-                } else if id.ends_with("_index.md") || id.ends_with("_master-index.md") {
+                } else if name == "_index.md" || name == "_master-index.md" {
                     "index"
                 } else {
                     "note"
