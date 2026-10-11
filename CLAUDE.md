@@ -21,10 +21,11 @@ cargo test --no-default-features                     # pruebas unitarias de la a
 cargo test --no-default-features <nombre>            # una prueba
 cargo test --no-default-features -- --ignored        # pruebas de integración (usan markitdown-mcp y ~/.claude reales)
 cargo test -p nexo-core                              # pruebas de la lógica sin Tauri (grafo, vaultgit, guardianes de rutas)
+cargo test -p nexo-mcp                               # pruebas de protocolo del servidor MCP (lanzan el binario)
 cargo fmt --all                                      # formatea los dos crates
 ```
 
-El CI (`.github/workflows/ci.yml`) corre en cada PR y en `main`: `npm test`, `npm run build`, `cargo fmt --check` y `cargo test --no-default-features` (instala antes las dependencias de sistema de Tauri). El job `core` compila, prueba, formatea y pasa clippy a `nexo-core` en un runner **sin** esas dependencias.
+El CI (`.github/workflows/ci.yml`) corre en cada PR y en `main`: `npm test`, `npm run build`, `cargo fmt --check` y `cargo test --no-default-features` (instala antes las dependencias de sistema de Tauri). El job `core` compila, prueba, formatea y pasa clippy a `nexo-core` en un runner **sin** esas dependencias, y el job `mcp` hace lo mismo (sin clippy) con `nexo-mcp`.
 
 El grafo se prueba con casos dorados: cada carpeta de `crates/nexo-core/tests/fixtures/grafo/` trae un `vault/` y su `expected.json`, y `graph::build_graph` tiene que dar exactamente eso (`cargo test -p nexo-core graph`). Las reglas (G1–G14) están en `docs/spec-grafo.md` y se cambian siguiendo su apartado «Cómo cambiar una regla»: primero la regla y el caso, con el `expected.json` escrito a mano, y después el código.
 
@@ -51,7 +52,9 @@ Toda ruta que llega desde la interfaz o desde herramientas del modelo pasa por u
 
 ## Arquitectura
 
-**Dos crates en un workspace de Cargo** (raíz del repo). `crates/nexo-core` tiene la lógica del vault que no depende de Tauri: `graph` (`build_graph` y los casos dorados), `vaultgit`, la lectura de fichas (`fichas::all`…) y los guardianes de rutas (`vault::resolve_inside`, `wiki::wiki_path`). Solo usa `serde` y `serde_json` y **nunca** `tauri`, para poder construir otros binarios (un servidor MCP) sin WebKitGTK; el job `core` del CI lo comprueba. `src-tauri` (crate `app`) depende de él y reexporta lo movido, así que el resto del código lo llama igual (`crate::vault::resolve_inside`, `crate::fichas::all`…); los `#[tauri::command]` se quedan en `app`. La carpeta de compilación sigue en `src-tauri/target` (`.cargo/config.toml`): una `target/` en la raíz la vigilaría Vite.
+**Tres crates en un workspace de Cargo** (raíz del repo). `crates/nexo-core` tiene la lógica del vault que no depende de Tauri: `graph` (`build_graph` y los casos dorados), `vaultgit`, la lectura de fichas (`fichas::all`…) y los guardianes de rutas (`vault::resolve_inside`, `wiki::wiki_path`). Solo usa `serde` y `serde_json` y **nunca** `tauri`, para poder construir otros binarios (un servidor MCP) sin WebKitGTK; el job `core` del CI lo comprueba. `src-tauri` (crate `app`) depende de él y reexporta lo movido, así que el resto del código lo llama igual (`crate::vault::resolve_inside`, `crate::fichas::all`…); los `#[tauri::command]` se quedan en `app`. La carpeta de compilación sigue en `src-tauri/target` (`.cargo/config.toml`): una `target/` en la raíz la vigilaría Vite.
+
+`crates/nexo-mcp` es un servidor MCP por stdio, **de solo lectura**, sobre un vault (`nexo-mcp --vault <ruta>` o `NEXO_VAULT`): seis herramientas (`list_notes`, `read_note`, `search_notes`, `get_graph`, `get_neighbors`, `list_sources`) que son una capa fina de `rmcp` sobre `nexo_core::query`. Ninguna escribe en el vault y solo leen dentro de `wiki/`. Las reglas (M1–M11) están en `docs/spec-mcp.md`; las pruebas (`crates/nexo-mcp/tests/protocol.rs`) lanzan el binario real contra `tests/vault-demo/` y los casos de `tests/cases/`. No se registra solo en ningún cliente.
 
 **Backend (`src-tauri/src/`)**, todo expuesto como `#[tauri::command]` registrados en `lib.rs`:
 
