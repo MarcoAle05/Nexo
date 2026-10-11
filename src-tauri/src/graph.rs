@@ -121,7 +121,7 @@ fn strip_inline_code(line: &str) -> String {
     parts
         .iter()
         .enumerate()
-        .filter(|(i, _)| i % 2 == 0 || (n % 2 == 0 && *i == n - 1))
+        .filter(|(i, _)| i % 2 == 0 || (n.is_multiple_of(2) && *i == n - 1))
         .map(|(_, p)| *p)
         .collect::<Vec<_>>()
         .join(" ")
