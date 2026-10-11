@@ -55,3 +55,22 @@ jobs:
         run: mkdir -p ../dist
       - name: Tests
         run: cargo test --no-default-features
+
+  core:
+    name: nexo-core (sin las dependencias de Tauri)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      # A propósito, este job NO instala las dependencias de sistema de Tauri: que compile
+      # y pase aquí es la prueba de que nexo-core no depende de Tauri ni de WebKitGTK.
+      - name: Compilación
+        run: cargo build -p nexo-core
+      - name: Tests
+        run: cargo test -p nexo-core
+      - name: Formato
+        run: cargo fmt -p nexo-core --check
+      - name: Clippy
+        run: cargo clippy -p nexo-core -- -D warnings
