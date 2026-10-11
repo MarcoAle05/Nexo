@@ -72,6 +72,8 @@ fn extract_links(text: &str) -> Vec<String> {
         if in_code {
             continue;
         }
+        let line = strip_inline_code(line);
+        let line = line.as_str();
         let mut rest = line;
         while let Some(start) = rest.find("[[") {
             let after = &rest[start + 2..];
@@ -98,6 +100,20 @@ fn extract_links(text: &str) -> Vec<String> {
         }
     }
     links
+}
+
+/// La línea sin los tramos entre acentos graves (código en línea). Un acento sin pareja
+/// es texto normal, como en CommonMark.
+fn strip_inline_code(line: &str) -> String {
+    let parts: Vec<&str> = line.split('`').collect();
+    let n = parts.len();
+    parts
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 0 || (n % 2 == 0 && *i == n - 1))
+        .map(|(_, p)| *p)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn strip_md(s: &str) -> &str {
