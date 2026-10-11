@@ -1,0 +1,7 @@
+{
+  "nodes": [
+    {"id": "anidada.md", "label": "anidada", "group": "", "kind": "note"},
+    {"id": "mixta.md", "label": "Real", "group": "", "kind": "note"}
+  ],
+  "edges": []
+}
