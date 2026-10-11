@@ -440,6 +440,11 @@ fn split_frontmatter(text: &str) -> (Vec<(String, String)>, &str) {
     let meta = rest[..end]
         .lines()
         .filter_map(|line| {
+            // Elementos de lista, claves anidadas y comentarios: se mira la línea tal cual,
+            // antes de recortar la clave.
+            if line.starts_with([' ', '\t', '-', '#']) {
+                return None;
+            }
             let (key, value) = line.split_once(':')?;
             let key = key.trim();
             (!key.is_empty() && !key.starts_with(['-', ' ', '#']))
