@@ -76,3 +76,20 @@ jobs:
         run: cargo fmt -p nexo-core --check
       - name: Clippy
         run: cargo clippy -p nexo-core -- -D warnings
+
+  mcp:
+    name: nexo-mcp (sin las dependencias de Tauri)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # Tampoco instala las dependencias de sistema de Tauri: el servidor MCP tiene que
+      # poder compilarse y correr en cualquier máquina o servidor.
+      - name: Compilación (release)
+        run: cargo build -p nexo-mcp --release
+      - name: Tests
+        run: cargo test -p nexo-mcp
+      - name: Formato
+        run: cargo fmt -p nexo-mcp --check

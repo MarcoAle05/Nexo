@@ -46,6 +46,7 @@ Pruebas:
 ```bash
 npm test                                         # interfaz
 cargo test -p nexo-core                          # lógica sin Tauri (grafo, commits del vault, rutas)
+cargo test -p nexo-mcp                           # servidor MCP (lanza el binario de verdad)
 cd src-tauri
 cargo test --no-default-features                 # backend
 cargo test --no-default-features -- --ignored    # integración (usan markitdown-mcp y ~/.claude reales)
@@ -55,6 +56,17 @@ cargo fmt --check
 El grafo de la wiki se prueba con casos dorados (`crates/nexo-core/tests/fixtures/grafo/`); sus reglas están en [docs/spec-grafo.md](docs/spec-grafo.md).
 
 Solo se ha probado en Linux (WebKitGTK sobre Wayland). La arquitectura y las decisiones que no se ven a simple vista están en [CLAUDE.md](CLAUDE.md).
+
+## Usar Nexo desde otros agentes (MCP)
+
+`nexo-mcp` es un servidor MCP de solo lectura sobre tu vault: cualquier cliente (Claude Code, Antigravity u otro) puede listar, leer y buscar notas y recorrer el grafo sin abrir la app. No necesita las dependencias de Tauri.
+
+```bash
+cargo build --release -p nexo-mcp
+claude mcp add nexo -- /ruta/a/nexo-mcp --vault /ruta/a/tu/vault
+```
+
+El binario queda en `src-tauri/target/release/nexo-mcp`. Las seis herramientas y sus reglas están en [docs/spec-mcp.md](docs/spec-mcp.md).
 
 ## Licencia
 

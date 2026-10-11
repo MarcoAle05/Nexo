@@ -1,0 +1,19 @@
+{
+  "arguments": {
+    "kind": "source"
+  },
+  "expected": {
+    "notes": [
+      {
+        "group": "fuentes",
+        "id": "fuentes/redes.md",
+        "kind": "source",
+        "label": "redes",
+        "source": "docs/redes.pdf"
+      }
+    ],
+    "total": 1,
+    "truncated": false
+  },
+  "tool": "list_notes"
+}

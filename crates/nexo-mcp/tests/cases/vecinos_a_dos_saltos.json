@@ -1,0 +1,54 @@
+{
+  "arguments": {
+    "depth": 2,
+    "id": "redes/udp.md"
+  },
+  "expected": {
+    "id": "redes/udp.md",
+    "neighbors": [
+      {
+        "distance": 1,
+        "id": "redes/_index.md",
+        "kind": "index",
+        "label": "Redes"
+      },
+      {
+        "distance": 1,
+        "id": "redes/tcp.md",
+        "kind": "note",
+        "label": "TCP"
+      },
+      {
+        "distance": 2,
+        "id": "?handshake-tres-vias",
+        "kind": "missing",
+        "label": "handshake-tres-vias"
+      },
+      {
+        "distance": 2,
+        "id": "_master-index.md",
+        "kind": "index",
+        "label": "Índice maestro"
+      },
+      {
+        "distance": 2,
+        "id": "conversaciones/2026-10-01-dudas-tcp.md",
+        "kind": "conversation",
+        "label": "2026-10-01-dudas-tcp"
+      },
+      {
+        "distance": 2,
+        "id": "fuentes/redes.md",
+        "kind": "source",
+        "label": "redes"
+      },
+      {
+        "distance": 2,
+        "id": "redes/modelo-osi.md",
+        "kind": "note",
+        "label": "Modelo OSI"
+      }
+    ]
+  },
+  "tool": "get_neighbors"
+}

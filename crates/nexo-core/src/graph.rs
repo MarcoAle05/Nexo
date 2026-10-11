@@ -10,21 +10,21 @@ use serde::Serialize;
 #[derive(Serialize)]
 pub(crate) struct Node {
     /// Ruta relativa a `wiki/` (o `?destino` para enlaces a notas que no existen).
-    id: String,
-    label: String,
+    pub(crate) id: String,
+    pub(crate) label: String,
     /// Carpeta de primer nivel dentro de `wiki/` (el tema); vacío en la raíz.
-    group: String,
+    pub(crate) group: String,
     /// `note`, `index`, `source` (ficha de una fuente), `conversation` (conclusiones guardadas) o `missing`.
-    kind: &'static str,
+    pub(crate) kind: &'static str,
     /// Para las fichas: la fuente, relativa a `raw/`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    source: Option<String>,
+    pub(crate) source: Option<String>,
 }
 
 #[derive(Serialize)]
 pub struct Graph {
-    nodes: Vec<Node>,
-    edges: Vec<(String, String)>,
+    pub(crate) nodes: Vec<Node>,
+    pub(crate) edges: Vec<(String, String)>,
 }
 
 pub fn rel_id(wiki: &Path, path: &Path) -> String {
@@ -131,7 +131,7 @@ fn strip_md(s: &str) -> &str {
     }
 }
 
-fn label_for(id: &str) -> String {
+pub(crate) fn label_for(id: &str) -> String {
     let stem = strip_md(id.rsplit('/').next().unwrap_or(id));
     match stem {
         "_master-index" => "Índice maestro".into(),

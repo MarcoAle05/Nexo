@@ -1,0 +1,56 @@
+{
+  "arguments": {
+    "group": "redes"
+  },
+  "expected": {
+    "edges": [
+      [
+        "redes/_index.md",
+        "redes/modelo-osi.md"
+      ],
+      [
+        "redes/_index.md",
+        "redes/tcp.md"
+      ],
+      [
+        "redes/_index.md",
+        "redes/udp.md"
+      ],
+      [
+        "redes/modelo-osi.md",
+        "redes/tcp.md"
+      ],
+      [
+        "redes/tcp.md",
+        "redes/udp.md"
+      ]
+    ],
+    "nodes": [
+      {
+        "group": "redes",
+        "id": "redes/_index.md",
+        "kind": "index",
+        "label": "Redes"
+      },
+      {
+        "group": "redes",
+        "id": "redes/modelo-osi.md",
+        "kind": "note",
+        "label": "Modelo OSI"
+      },
+      {
+        "group": "redes",
+        "id": "redes/tcp.md",
+        "kind": "note",
+        "label": "TCP"
+      },
+      {
+        "group": "redes",
+        "id": "redes/udp.md",
+        "kind": "note",
+        "label": "udp"
+      }
+    ]
+  },
+  "tool": "get_graph"
+}

@@ -1,0 +1,123 @@
+{
+  "arguments": {},
+  "expected": {
+    "edges": [
+      [
+        "?handshake-tres-vias",
+        "redes/tcp.md"
+      ],
+      [
+        "_master-index.md",
+        "conversaciones/_index.md"
+      ],
+      [
+        "_master-index.md",
+        "fuentes/_index.md"
+      ],
+      [
+        "_master-index.md",
+        "redes/_index.md"
+      ],
+      [
+        "conversaciones/2026-10-01-dudas-tcp.md",
+        "conversaciones/_index.md"
+      ],
+      [
+        "conversaciones/2026-10-01-dudas-tcp.md",
+        "redes/tcp.md"
+      ],
+      [
+        "fuentes/_index.md",
+        "fuentes/redes.md"
+      ],
+      [
+        "fuentes/redes.md",
+        "redes/tcp.md"
+      ],
+      [
+        "redes/_index.md",
+        "redes/modelo-osi.md"
+      ],
+      [
+        "redes/_index.md",
+        "redes/tcp.md"
+      ],
+      [
+        "redes/_index.md",
+        "redes/udp.md"
+      ],
+      [
+        "redes/modelo-osi.md",
+        "redes/tcp.md"
+      ],
+      [
+        "redes/tcp.md",
+        "redes/udp.md"
+      ]
+    ],
+    "nodes": [
+      {
+        "group": "",
+        "id": "_master-index.md",
+        "kind": "index",
+        "label": "Índice maestro"
+      },
+      {
+        "group": "conversaciones",
+        "id": "conversaciones/2026-10-01-dudas-tcp.md",
+        "kind": "conversation",
+        "label": "2026-10-01-dudas-tcp"
+      },
+      {
+        "group": "conversaciones",
+        "id": "conversaciones/_index.md",
+        "kind": "index",
+        "label": "conversaciones"
+      },
+      {
+        "group": "fuentes",
+        "id": "fuentes/_index.md",
+        "kind": "index",
+        "label": "fuentes"
+      },
+      {
+        "group": "fuentes",
+        "id": "fuentes/redes.md",
+        "kind": "source",
+        "label": "redes",
+        "source": "docs/redes.pdf"
+      },
+      {
+        "group": "redes",
+        "id": "redes/_index.md",
+        "kind": "index",
+        "label": "Redes"
+      },
+      {
+        "group": "redes",
+        "id": "redes/modelo-osi.md",
+        "kind": "note",
+        "label": "Modelo OSI"
+      },
+      {
+        "group": "redes",
+        "id": "redes/tcp.md",
+        "kind": "note",
+        "label": "TCP"
+      },
+      {
+        "group": "redes",
+        "id": "redes/udp.md",
+        "kind": "note",
+        "label": "udp"
+      },
+      {
+        "group": "",
+        "id": "?handshake-tres-vias",
+        "kind": "missing",
+        "label": "handshake-tres-vias"
+      }
+    ]
+  },
+  "tool": "get_graph"
+}
