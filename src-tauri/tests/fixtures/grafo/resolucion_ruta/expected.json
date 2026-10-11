@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {"id": "index.md", "label": "index", "group": "", "kind": "note"},
+    {"id": "temas/chunking.md", "label": "chunking", "group": "temas", "kind": "note"},
+    {"id": "temas/rag.md", "label": "rag", "group": "temas", "kind": "note"},
+    {"id": "temas/sub/deep.md", "label": "deep", "group": "temas", "kind": "note"}
+  ],
+  "edges": [
+    ["index.md", "temas/chunking.md"],
+    ["index.md", "temas/rag.md"],
+    ["temas/chunking.md", "temas/rag.md"],
+    ["temas/rag.md", "temas/sub/deep.md"]
+  ]
+}

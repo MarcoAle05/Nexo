@@ -1,0 +1,9 @@
+{
+  "nodes": [
+    {"id": "a.md", "label": "a", "group": "", "kind": "note"},
+    {"id": "b.md", "label": "b", "group": "", "kind": "note"}
+  ],
+  "edges": [
+    ["a.md", "b.md"]
+  ]
+}

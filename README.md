@@ -51,6 +51,8 @@ cargo test --no-default-features -- --ignored    # integración (usan markitdown
 cargo fmt --check
 ```
 
+El grafo de la wiki se prueba con casos dorados (`src-tauri/tests/fixtures/grafo/`); sus reglas están en [docs/spec-grafo.md](docs/spec-grafo.md).
+
 Solo se ha probado en Linux (WebKitGTK sobre Wayland). La arquitectura y las decisiones que no se ven a simple vista están en [CLAUDE.md](CLAUDE.md).
 
 ## Licencia

@@ -1,0 +1,11 @@
+{
+  "nodes": [
+    {"id": "a/tema.md", "label": "tema", "group": "a", "kind": "note"},
+    {"id": "b/tema.md", "label": "tema", "group": "b", "kind": "note"},
+    {"id": "c/tema.md", "label": "tema", "group": "c", "kind": "note"},
+    {"id": "inicio.md", "label": "inicio", "group": "", "kind": "note"}
+  ],
+  "edges": [
+    ["a/tema.md", "inicio.md"]
+  ]
+}

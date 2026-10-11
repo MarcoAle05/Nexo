@@ -1,0 +1,9 @@
+{
+  "nodes": [
+    {"id": "comillas.md", "label": "Entre comillas", "group": "", "kind": "note"},
+    {"id": "crlf.md", "label": "Con CRLF", "group": "", "kind": "note"},
+    {"id": "lista.md", "label": "Tras lista", "group": "", "kind": "note"},
+    {"id": "sin_cierre.md", "label": "sin_cierre", "group": "", "kind": "note"}
+  ],
+  "edges": []
+}

@@ -9,7 +9,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::vault::{resolve_inside, vault_dir};
+use crate::vault::{resolve_inside, vault_dir, vault_root};
 
 #[derive(Serialize)]
 pub struct Node {
@@ -72,6 +72,8 @@ fn extract_links(text: &str) -> Vec<String> {
         if in_code {
             continue;
         }
+        let line = strip_inline_code(line);
+        let line = line.as_str();
         let mut rest = line;
         while let Some(start) = rest.find("[[") {
             let after = &rest[start + 2..];
@@ -98,6 +100,20 @@ fn extract_links(text: &str) -> Vec<String> {
         }
     }
     links
+}
+
+/// La línea sin los tramos entre acentos graves (código en línea). Un acento sin pareja
+/// es texto normal, como en CommonMark.
+fn strip_inline_code(line: &str) -> String {
+    let parts: Vec<&str> = line.split('`').collect();
+    let n = parts.len();
+    parts
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| i % 2 == 0 || (n % 2 == 0 && *i == n - 1))
+        .map(|(_, p)| *p)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn strip_md(s: &str) -> &str {
@@ -253,9 +269,17 @@ pub fn watch(app: AppHandle) {
 
 #[tauri::command]
 pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
-    let wiki = vault_dir(&app, "wiki")?;
+    build_graph(&vault_root(&app)?)
+}
+
+/// Construye el grafo del vault en `root` (`root/wiki/**/*.md`). Es la función que cubren
+/// los casos dorados de `tests/fixtures/grafo`; las reglas están en `docs/spec-grafo.md`.
+pub fn build_graph(root: &Path) -> Result<Graph, String> {
+    let wiki = root.join("wiki");
     let mut files = Vec::new();
     collect_notes(&wiki, &mut files);
+    // G14: el orden del sistema de archivos no es estable; se ordena por id.
+    files.sort_by_key(|p| rel_id(&wiki, p));
     let ids: Vec<String> = files.iter().map(|p| rel_id(&wiki, p)).collect();
 
     // Obsidian resuelve por nombre de nota o por ruta; indexamos ambos en minúsculas.
@@ -269,8 +293,7 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
     }
 
     // Fichas de fuente: ruta de la fuente → índice del nodo.
-    let root = wiki.parent().map(Path::to_path_buf).unwrap_or_default();
-    let fichas: HashMap<String, usize> = crate::fichas::all(&root)
+    let fichas: HashMap<String, usize> = crate::fichas::all(root)
         .into_iter()
         .filter_map(|(rel, path)| files.iter().position(|f| *f == path).map(|i| (rel, i)))
         .collect();
@@ -342,6 +365,7 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
         .enumerate()
         .map(|(i, id)| {
             let source = source_of.get(&i).map(|rel| rel.to_string());
+            let name = id.rsplit('/').next().unwrap_or(id);
             Node {
                 id: id.clone(),
                 label: source
@@ -355,9 +379,9 @@ pub fn read_graph(app: AppHandle) -> Result<Graph, String> {
                     .unwrap_or_default(),
                 kind: if source.is_some() {
                     "source"
-                } else if id.starts_with("conversaciones/") && !id.ends_with("_index.md") {
+                } else if id.starts_with("conversaciones/") && name != "_index.md" {
                     "conversation"
-                } else if id.ends_with("_index.md") || id.ends_with("_master-index.md") {
+                } else if name == "_index.md" || name == "_master-index.md" {
                     "index"
                 } else {
                     "note"
@@ -484,5 +508,124 @@ mod tests {
             label_for("rag/chunking-strategies.md"),
             "chunking-strategies"
         );
+    }
+
+    // ── Casos dorados del grafo (ver docs/spec-grafo.md) ──────────────────────────
+
+    use serde_json::Value;
+
+    fn fixtures_dir() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/grafo")
+    }
+
+    fn casos() -> Vec<PathBuf> {
+        let mut casos: Vec<PathBuf> = fs::read_dir(fixtures_dir())
+            .expect("falta src-tauri/tests/fixtures/grafo")
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        casos.sort();
+        casos
+    }
+
+    fn grafo_de(caso: &Path) -> Value {
+        serde_json::to_value(build_graph(&caso.join("vault")).unwrap()).unwrap()
+    }
+
+    /// Nodos y aristas como textos ordenados: lo que importa de cada caso es el conjunto.
+    fn conjuntos(g: &Value) -> (Vec<String>, Vec<String>) {
+        let lista = |clave: &str| {
+            let mut v: Vec<String> = g[clave]
+                .as_array()
+                .unwrap_or(&Vec::new())
+                .iter()
+                .map(Value::to_string)
+                .collect();
+            v.sort();
+            v
+        };
+        (lista("nodes"), lista("edges"))
+    }
+
+    #[test]
+    fn el_grafo_cumple_los_casos_dorados() {
+        let casos = casos();
+        assert!(casos.len() >= 15, "faltan casos dorados: {}", casos.len());
+        let mut fallos = Vec::new();
+        for caso in &casos {
+            let nombre = caso.file_name().unwrap().to_string_lossy().into_owned();
+            let esperado: Value =
+                serde_json::from_str(&fs::read_to_string(caso.join("expected.json")).unwrap())
+                    .unwrap_or_else(|e| panic!("{nombre}/expected.json no es JSON válido: {e}"));
+            let (n_esp, e_esp) = conjuntos(&esperado);
+            let (n_real, e_real) = conjuntos(&grafo_de(caso));
+            let solo = |a: &[String], b: &[String]| -> Vec<String> {
+                a.iter().filter(|x| !b.contains(x)).cloned().collect()
+            };
+            let partes = [
+                ("nodos que faltan", solo(&n_esp, &n_real)),
+                ("nodos que sobran", solo(&n_real, &n_esp)),
+                ("aristas que faltan", solo(&e_esp, &e_real)),
+                ("aristas que sobran", solo(&e_real, &e_esp)),
+            ];
+            let detalle: Vec<String> = partes
+                .iter()
+                .filter(|(_, v)| !v.is_empty())
+                .map(|(t, v)| format!("    {t}: {}", v.join("  ")))
+                .collect();
+            if !detalle.is_empty() {
+                fallos.push(format!("  {nombre}\n{}", detalle.join("\n")));
+            }
+        }
+        assert!(
+            fallos.is_empty(),
+            "{} de {} casos no coinciden con su expected.json:\n{}",
+            fallos.len(),
+            casos.len(),
+            fallos.join("\n")
+        );
+    }
+
+    /// G14: el orden de salida no depende del sistema de archivos: notas por id y,
+    /// al final, los fantasmas por id.
+    #[test]
+    fn el_orden_de_los_nodos_es_estable() {
+        for caso in casos() {
+            let g = grafo_de(&caso);
+            let ids = |missing: bool| -> Vec<String> {
+                g["nodes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|n| (n["kind"] == "missing") == missing)
+                    .map(|n| n["id"].as_str().unwrap().to_string())
+                    .collect()
+            };
+            let todos: Vec<String> = g["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n["id"].as_str().unwrap().to_string())
+                .collect();
+            let (notas, fantasmas) = (ids(false), ids(true));
+            let mut ordenadas = notas.clone();
+            ordenadas.sort();
+            let mut fant_ord = fantasmas.clone();
+            fant_ord.sort();
+            assert_eq!(notas, ordenadas, "{}: notas sin ordenar", caso.display());
+            assert_eq!(
+                fantasmas,
+                fant_ord,
+                "{}: fantasmas sin ordenar",
+                caso.display()
+            );
+            assert_eq!(
+                todos,
+                [notas, fantasmas].concat(),
+                "{}: los fantasmas van al final",
+                caso.display()
+            );
+        }
     }
 }

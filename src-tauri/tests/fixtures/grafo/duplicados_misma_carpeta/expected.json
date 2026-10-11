@@ -1,0 +1,16 @@
+{
+  "nodes": [
+    {"id": "a/_index.md", "label": "a", "group": "a", "kind": "index"},
+    {"id": "a/nota.md", "label": "nota", "group": "a", "kind": "note"},
+    {"id": "a/x.md", "label": "x", "group": "a", "kind": "note"},
+    {"id": "b/_index.md", "label": "b", "group": "b", "kind": "index"},
+    {"id": "b/nota.md", "label": "nota", "group": "b", "kind": "note"},
+    {"id": "z/nota.md", "label": "nota", "group": "z", "kind": "note"},
+    {"id": "z/sub/x.md", "label": "x", "group": "z", "kind": "note"}
+  ],
+  "edges": [
+    ["a/_index.md", "a/nota.md"],
+    ["b/_index.md", "b/nota.md"],
+    ["z/nota.md", "z/sub/x.md"]
+  ]
+}

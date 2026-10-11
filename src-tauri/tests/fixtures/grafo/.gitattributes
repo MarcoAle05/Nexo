@@ -1,0 +1,2 @@
+# Los fixtures se leen byte a byte (hay casos con CRLF): git no debe tocarlos.
+* -text

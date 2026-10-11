@@ -1,0 +1,14 @@
+{
+  "nodes": [
+    {"id": "?Falta", "label": "Falta", "group": "", "kind": "missing"},
+    {"id": "?pendiente.md", "label": "pendiente.md", "group": "", "kind": "missing"},
+    {"id": "dos.md", "label": "dos", "group": "", "kind": "note"},
+    {"id": "uno.md", "label": "uno", "group": "", "kind": "note"}
+  ],
+  "edges": [
+    ["?Falta", "dos.md"],
+    ["?Falta", "uno.md"],
+    ["?pendiente.md", "uno.md"],
+    ["dos.md", "uno.md"]
+  ]
+}
