@@ -25,6 +25,8 @@ cargo fmt
 
 El CI (`.github/workflows/ci.yml`) corre en cada PR y en `main`: `npm test`, `npm run build`, `cargo fmt --check` y `cargo test --no-default-features` (instala antes las dependencias de sistema de Tauri).
 
+El grafo se prueba con casos dorados: cada carpeta de `src-tauri/tests/fixtures/grafo/` trae un `vault/` y su `expected.json`, y `graph::build_graph` tiene que dar exactamente eso (`cargo test --no-default-features graph`). Las reglas (G1–G14) están en `docs/spec-grafo.md` y se cambian siguiendo su apartado «Cómo cambiar una regla»: primero la regla y el caso, con el `expected.json` escrito a mano, y después el código.
+
 Si `cargo` no está en el PATH de la sesión: `source ~/.cargo/env`.
 
 Dependencias externas en tiempo de ejecución: `markitdown-mcp` (instalado con `uv tool install --python 3.12 markitdown-mcp`, en `~/.local/bin`), `playwright-mcp` (`npm install -g --prefix ~/.local @playwright/mcp`; usa el Google Chrome instalado), `claude` (Claude Code CLI) y `agy` (Antigravity CLI). En Linux, `main.rs` llama a `render::configure()` antes de crear nada: elige cómo pinta WebKitGTK (ver `render.rs`); no quitarlo.
