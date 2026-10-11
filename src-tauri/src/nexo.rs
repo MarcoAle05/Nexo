@@ -18,6 +18,7 @@ use tokio::sync::Mutex;
 use crate::claude::{self, Claude, refusal, text_of};
 use crate::markitdown;
 use crate::vault::{read_config, resolve_inside, vault_root, write_config};
+use crate::vaultgit::{self, Outcome, VaultGit};
 
 /// Presupuesto de caracteres de la wiki que se envía como contexto (~350 mil tokens).
 const WIKI_BUDGET: usize = 1_400_000;
@@ -296,8 +297,11 @@ pub async fn ask(
 
 type Manifest = HashMap<String, String>;
 
+/// El manifiesto de fuentes compiladas, relativo al vault.
+const MANIFEST: &str = ".nexo/compiled.json";
+
 fn manifest_path(root: &Path) -> PathBuf {
-    root.join(".nexo/compiled.json")
+    root.join(MANIFEST)
 }
 
 fn fingerprint(path: &Path) -> String {
@@ -539,6 +543,23 @@ async fn compile_one(
     ))
 }
 
+/// Un paso de los commits automáticos del vault (`docs/spec-commits-automaticos.md`). Git
+/// bloquea, así que va fuera del hilo asíncrono. Pase lo que pase solo deja, como mucho, una
+/// línea en la terminal: nada de git cambia el resultado de la compilación.
+async fn git_step(
+    root: &Path,
+    channel: &Channel<Event>,
+    step: impl FnOnce(&VaultGit) -> Outcome + Send + 'static,
+) {
+    let git = VaultGit::new(root);
+    let outcome = tauri::async_runtime::spawn_blocking(move || step(&git))
+        .await
+        .unwrap_or_else(|error| Outcome::Failed(error.to_string()));
+    if let Some(message) = outcome.message() {
+        emit(channel, "step", message);
+    }
+}
+
 /// Integra en la wiki las fuentes indicadas (rutas relativas a `raw/`) que sean nuevas o hayan cambiado.
 #[tauri::command]
 pub async fn compile(
@@ -577,6 +598,9 @@ pub async fn compile(
             claude::MODEL
         ),
     );
+
+    // Lo que hubiera sin guardar en wiki/ queda en git antes de que el modelo escriba encima.
+    git_step(&root, &channel, VaultGit::snapshot).await;
 
     // Primero, conversión local a Markdown con MarkItDown (sin IA): Claude recibe texto
     // en lugar del PDF completo, lo que gasta mucho menos.
@@ -641,6 +665,7 @@ pub async fn compile(
                 if !summary.is_empty() {
                     emit(&channel, "step", summary);
                 }
+                let message = vaultgit::source_message(&source);
                 manifest.insert(source, fingerprint(&file));
                 if let Some(dir) = manifest_file.parent() {
                     let _ = fs::create_dir_all(dir);
@@ -650,6 +675,9 @@ pub async fn compile(
                     serde_json::to_string_pretty(&manifest).unwrap_or_default(),
                 );
                 done += 1;
+                // Un commit por fuente: las notas que escribió y el manifiesto, nada más.
+                written.push(MANIFEST.into());
+                git_step(&root, &channel, move |git| git.commit(&written, &message)).await;
             }
             Err(error) => emit(&channel, "step", format!("error: {error}")),
         }
