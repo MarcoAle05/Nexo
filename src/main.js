@@ -16,7 +16,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { ask, open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
-import { createClaudeCode } from './claude-code.js';
+import { createChat } from './chat.js';
 import { reconcile } from './dom.js';
 import { createAgents } from './agents.js';
 import { createGalaxy } from './galaxy.js';
@@ -77,7 +77,7 @@ let syncGraphActive = () => {};
 
 function renderExpanded() {
   const layout = $('layout');
-  // Minimizada, la terminal no puede estar expandida.
+  // Minimizado, el chat no puede estar expandido.
   if (minimized) expanded.right = false;
   syncGraphActive();
   layout.classList.toggle('expand-left', expanded.left);
@@ -90,7 +90,7 @@ function renderExpanded() {
     const on = expanded[b.dataset.expand];
     const what =
       b.dataset.expand === 'right'
-        ? 'la terminal'
+        ? 'el chat'
         : b.closest('#notes-core')
           ? 'la carta de notas'
           : b.closest('#agents-core')
@@ -132,11 +132,10 @@ document.querySelectorAll('[data-expand]').forEach((b) =>
 );
 renderExpanded();
 
-// Lleva el teclado al chat de la carta derecha: la terminal de Claude Code o el campo de Nexo.
+// Lleva el teclado al chat de la carta derecha.
 function focusChat() {
   if (minimized || activityOpen) return;
-  if (mode !== 'claude-code') $('prompt-input').focus();
-  else if (vault && desktop) claudeCode.focus();
+  chat.focus();
 }
 
 function setMinimized(value) {
@@ -147,229 +146,124 @@ function setMinimized(value) {
     localStorage.setItem('nexo.expanded', JSON.stringify(expanded));
   } catch {}
   if (minimized) return;
-  // xterm deja de dibujar mientras está oculto: al volver se repinta y recupera el foco.
-  if (mode === 'claude-code' && vault && desktop && !activityOpen) requestAnimationFrame(() => claudeCode.show());
-  else focusChat();
+  // El escritorio de notas se estrecha: las cartas que ya no caben se acomodan.
+  notes.fitAfterResize();
+  // Al volver, la conversación baja hasta el final y el teclado va al campo.
+  if (!activityOpen) requestAnimationFrame(() => chat.show());
 }
 $('term-minimize').addEventListener('click', () => setMinimized(true));
 $('term-restore').addEventListener('click', () => setMinimized(false));
-document.querySelectorAll('[data-rail-mode]').forEach((b) =>
-  b.addEventListener('click', () => {
-    setMinimized(false);
-    document.querySelector(`[data-mode="${b.dataset.railMode}"]`)?.click();
-  }),
-);
+$('rail-chat').addEventListener('click', () => setMinimized(false));
 
-// ---------------------------------------------------------------- terminal
-const output = $('output');
-
+// ---------------------------------------------------------------- chat con Claude
+// La carta derecha: Claude Code con la suscripción del usuario, pintado como un chat
+// (chat.js). Lo que la app tiene que decir (avisos y errores de las fuentes, de las
+// conversiones, de Antigravity…) sale como notas dentro de la conversación.
 function printLine(text, kind) {
-  const line = document.createElement('div');
-  line.className = kind ? `line ${kind}` : 'line';
-  if (!kind) {
-    const caret = document.createElement('span');
-    caret.className = 'caret';
-    caret.textContent = '❯';
-    line.append(caret);
-  }
-  const body = document.createElement('span');
-  body.textContent = text;
-  line.append(body);
-  output.append(line);
-  output.scrollTop = output.scrollHeight;
+  chat.notice(text, kind === 'error' ? 'error' : 'info');
 }
 
-const fail = (error) => printLine(`error: ${error}`, 'error');
+const fail = (error) => printLine(String(error), 'error');
 
-// ---------------------------------------------------------------- Nexo (Claude)
-let mode = 'api';
-let busy = false;
+// Órdenes de nexo que salen en el menú «/» del chat, junto a las de Claude Code. Las tres
+// primeras van por la API de Anthropic (nexo.rs), no por Claude Code.
+const LOCAL_COMMANDS = [
+  { name: 'compilar', description: 'Integra en wiki/ las fuentes marcadas que sean nuevas (API de Anthropic)', run: compileSources },
+  { name: 'preguntar', argumentHint: '<pregunta>', description: 'Responde con tu wiki por la API y lo guarda en output/query-results.md', run: askWiki },
+  { name: 'clave', argumentHint: '<sk-ant-…>', description: 'Guarda tu clave de la API de Anthropic', run: saveKey },
+  { name: 'convertir', description: 'Pasa a Markdown los PDF y documentos pendientes (MarkItDown, sin IA)', run: convertPending },
+  { name: 'resumir', description: 'Antigravity resume las fuentes que aún no tienen resumen', run: summarizePending },
+  { name: 'guardar', description: 'Claude guarda las conclusiones de la conversación en el grafo', run: saveConversation },
+  { name: 'nueva', description: 'Empieza una conversación nueva con Claude', run: () => chat.reset() },
+];
 
-const HELP = `Escribe cualquier cosa para hablar con Nexo sobre tu wiki, o usa un comando
-(el prefijo "nexo" es opcional):
-  compile             integra en wiki/ las fuentes marcadas que sean nuevas
-  ask <pregunta>      responde con tu wiki y lo guarda en output/query-results.md
-  convertir           pasa a Markdown los PDF pendientes (MarkItDown, sin IA)
-  web <enlace>        lee la página (con Antigravity o Playwright, según el selector) y la guarda en raw/web/
-  resumir             Antigravity resume las fuentes que aún no tienen resumen
-  nueva               empieza una conversación nueva con Nexo
-  clave <sk-ant-…>    guarda tu clave de la API de Anthropic
-  limpiar             vacía la terminal
-La pestaña Claude Code abre Claude Code dentro de tu vault.`;
-const COMMANDS = new Set(['ayuda', 'help', 'limpiar', 'clear', 'nueva', 'clave', 'key', 'compile', 'compilar', 'ask', 'pregunta', 'convertir', 'convert', 'web', 'url', 'resumir']);
+const chat = createChat({
+  invoke,
+  Channel,
+  desktop,
+  getVault: () => vault,
+  async pickFiles() {
+    const picked = await open({ multiple: true, title: 'Adjuntar archivos al mensaje' });
+    return picked ? [picked].flat() : [];
+  },
+  onLink: (link) => followLink(link, ''),
+  localCommands: () => LOCAL_COMMANDS,
+});
 
-function setBusy(value) {
-  busy = value;
-  $('prompt').classList.toggle('busy', value);
-  $('prompt-input').disabled = value;
-  if (!value) $('prompt-input').focus();
-}
+// ---------------------------------------------------------------- Nexo por la API
+// Lo que va por la API de Anthropic no ha cambiado (nexo.rs): compilar las fuentes marcadas
+// (con los commits automáticos del vault), preguntar a la wiki y guardar la clave. Ya no tiene
+// pestaña propia: se lanza desde el menú «/» del chat y su progreso sale en la conversación.
+let apiBusy = false;
 
-// Bloque de respuesta de Nexo que se va llenando con el streaming.
-function startReply() {
-  const reply = document.createElement('div');
-  reply.className = 'reply pending';
-  const name = document.createElement('span');
-  name.className = 'reply-name';
-  name.textContent = 'Nexo';
-  const body = document.createElement('div');
-  body.className = 'reply-body';
-  reply.append(name, body);
-  output.append(reply);
-  output.scrollTop = output.scrollHeight;
-  return {
-    push(text) {
-      reply.classList.remove('pending');
-      reply.classList.add('streaming');
-      body.textContent += text;
-      output.scrollTop = output.scrollHeight;
-    },
-    end() {
-      reply.classList.remove('pending', 'streaming');
-      if (!body.textContent) reply.remove();
-    },
-  };
-}
-
-function nexoChannel(reply) {
-  const channel = new Channel();
-  channel.onmessage = ({ kind, text }) => {
-    if (kind === 'text') reply?.push(text);
-    else printLine(text, kind);
-  };
-  return channel;
-}
-
-async function runNexo(command, args, withReply) {
-  if (!desktop) return printLine('Nexo solo funciona en la app de escritorio.', 'error');
+async function runNexo(command, args, reply) {
+  if (!desktop) return printLine('Nexo por la API solo funciona en la app de escritorio.', 'error');
   if (!vault) return printLine('Primero elige un vault.', 'error');
-  setBusy(true);
-  const reply = withReply ? startReply() : null;
+  if (apiBusy) return printLine('Nexo sigue con lo anterior: espera a que termine.', 'info');
+  apiBusy = true;
+  const channel = new Channel();
+  channel.onmessage = ({ kind, text }) => (kind === 'text' ? reply?.push(text) : printLine(text, kind === 'error' ? 'error' : 'info'));
   try {
-    return await invoke(command, { ...args, channel: nexoChannel(reply) });
+    return await invoke(command, { ...args, channel });
   } catch (error) {
     fail(error);
   } finally {
     reply?.end();
-    setBusy(false);
+    apiBusy = false;
   }
 }
 
-async function runCommand(text) {
-  const [head, ...rest] = text.replace(/^nexo\s+/i, '').split(/\s+/);
-  const arg = rest.join(' ').trim();
-  switch (head.toLowerCase()) {
-    case 'ayuda':
-    case 'help':
-      return printLine(HELP, 'help');
-    case 'limpiar':
-    case 'clear':
-      return output.replaceChildren();
-    case 'nueva':
-      await invoke('chat_reset');
-      return printLine('conversación nueva con Nexo', 'info');
-    case 'clave':
-    case 'key':
-      if (!arg) return printLine('Uso: clave sk-ant-…', 'error');
-      try {
-        await invoke('set_api_key', { key: arg });
-        printLine('clave guardada en la configuración de nexo', 'info');
-      } catch (error) {
-        fail(error);
-      }
-      return;
-    case 'compile':
-    case 'compilar': {
-      const selected = sources.filter((s) => !excluded.has(s.path)).map((s) => s.path);
-      if (!selected.length) return printLine('No hay fuentes marcadas en contexto.', 'error');
-      const count = await runNexo('compile', { sources: selected }, false);
-      if (count) {
-        printLine(`${count} ${count === 1 ? 'fuente integrada' : 'fuentes integradas'} en wiki/`, 'info');
-        await loadGraph();
-      }
-      return;
-    }
-    case 'resumir': {
-      if (!vault) return printLine('Primero elige un vault.', 'error');
-      const pending = sources.filter((s) => !s.summarized && hasText(s));
-      if (!pending.length) return printLine('Todas las fuentes con texto ya tienen resumen.', 'info');
-      printLine(`${pending.length} fuentes en la cola de Antigravity`, 'info');
-      pending.forEach((s) => summarizeSource(s.path));
-      return;
-    }
-    case 'web':
-    case 'url':
-      if (!arg) return printLine('Uso: web https://…', 'error');
-      await addWebSource(arg);
-      return;
-    case 'convertir':
-    case 'convert':
-      if (!vault) return printLine('Primero elige un vault.', 'error');
-      if (!sources.some((s) => s.convertible && !s.converted)) return printLine('No hay nada pendiente de convertir.', 'info');
-      return convertSources([]);
-    case 'ask':
-    case 'pregunta': {
-      if (!arg) return printLine('Uso: ask ¿tu pregunta?', 'error');
-      const saved = await runNexo('ask', { question: arg }, true);
-      if (saved) printLine(`guardado en ${saved}`, 'info');
-      return;
-    }
-    default:
-      printLine(`Comando desconocido: ${head}. Escribe ayuda.`, 'error');
+async function compileSources() {
+  const selected = sources.filter((s) => !excluded.has(s.path)).map((s) => s.path);
+  if (!selected.length) return printLine('No hay fuentes marcadas en contexto.', 'error');
+  const count = await runNexo('compile', { sources: selected });
+  if (count) {
+    printLine(`${count} ${count === 1 ? 'fuente integrada' : 'fuentes integradas'} en wiki/`, 'info');
+    await loadGraph();
   }
 }
 
-$('prompt').addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const input = $('prompt-input');
-  const text = input.value.trim();
-  if (!text || busy) return;
-  input.value = '';
-  // Nunca se muestra la clave en pantalla.
-  printLine(text.replace(/(sk-ant-[\w-]{4})[\w-]+/g, '$1…'));
-  const command = text.replace(/^\//, '');
-  const head = command.replace(/^nexo\s+/i, '').split(/\s+/)[0].toLowerCase();
-  if (COMMANDS.has(head)) await runCommand(command);
-  else await runNexo('chat_send', { message: text }, true);
-});
-
-// Pestañas del panel derecho: API (Nexo) y Claude Code (terminal real en el vault).
-const claudeCode = createClaudeCode({
-  container: $('cc-term'),
-  exitBox: $('cc-exit'),
-  exitText: $('cc-exit-text'),
-  onError: fail,
-});
-$('cc-restart').addEventListener('click', () => claudeCode.restart());
-
-function setMode(next) {
-  mode = next;
-  showActivity(false);
-  const cc = mode === 'claude-code';
-  $('output').hidden = cc;
-  $('prompt').hidden = cc;
-  $('cc-view').hidden = !cc;
-  $('terminal-title').textContent = cc ? 'Claude Code' : 'Nexo';
-  $('rail-label').textContent = cc ? 'Claude Code' : 'Nexo';
-  document.querySelectorAll('[data-rail-mode]').forEach((b) => b.classList.toggle('active', b.dataset.railMode === mode));
-  $('cc-save').hidden = !cc;
-  if (!cc) return $('prompt-input').focus();
-  if (!desktop) return printLine('Claude Code solo funciona en la app de escritorio.', 'error');
-  if (!vault) {
-    $('cc-exit-text').textContent = 'Primero elige un vault: Claude Code se abrirá dentro de él.';
-    $('cc-exit').hidden = false;
-    return;
-  }
-  claudeCode.show();
+async function askWiki(question) {
+  if (!question) return printLine('Uso: /preguntar ¿tu pregunta?', 'error');
+  if (apiBusy || !desktop || !vault) return runNexo('ask', { question });
+  chat.userNote(`/preguntar ${question}`);
+  const saved = await runNexo('ask', { question }, chat.reply('Nexo · API'));
+  if (saved) printLine(`guardado en ${saved}`, 'info');
 }
 
-// Guardar la conversación: Claude Code escribe sus conclusiones en wiki/conversaciones/ y la
-// nota aparece como nodo del grafo. Se revisa el grafo hasta que llegue (o pasen 3 minutos).
-$('cc-save').addEventListener('click', () => {
+// La clave no se pinta nunca: ni en la conversación ni en el aviso.
+async function saveKey(key) {
+  if (!key) return printLine('Uso: /clave sk-ant-…', 'error');
+  if (!desktop) return printLine('Guardar la clave solo funciona en la app de escritorio.', 'error');
+  try {
+    await invoke('set_api_key', { key });
+    printLine('Clave guardada en la configuración de nexo.', 'info');
+    refreshConnections();
+  } catch (error) {
+    fail(error);
+  }
+}
+
+function convertPending() {
+  if (!vault) return printLine('Primero elige un vault.', 'error');
+  if (!sources.some((s) => s.convertible && !s.converted)) return printLine('No hay nada pendiente de convertir.', 'info');
+  convertSources([]);
+}
+
+function summarizePending() {
+  if (!vault) return printLine('Primero elige un vault.', 'error');
+  const pending = sources.filter((s) => !s.summarized && hasText(s));
+  if (!pending.length) return printLine('Todas las fuentes con texto ya tienen resumen.', 'info');
+  printLine(`${pending.length} fuentes en la cola de Antigravity`, 'info');
+  pending.forEach((s) => summarizeSource(s.path));
+}
+
+// Guardar la conversación: Claude escribe sus conclusiones en wiki/conversaciones/ y la nota
+// aparece como nodo del grafo. Se revisa el grafo hasta que llegue (o pasen 3 minutos).
+async function saveConversation() {
+  if (!chat.hasConversation) return printLine('Todavía no hay conversación que guardar.', 'info');
   if (activityOpen) showActivity(false);
-  if (!claudeCode.say('Guarda la conversación en el grafo.')) {
-    return printLine('Abre primero la sesión de Claude Code.', 'error');
-  }
+  if (!(await chat.send('Guarda la conversación en el grafo.'))) return;
   const before = new Set(graphData.nodes.filter((n) => n.kind === 'conversation').map((n) => n.id));
   const started = Date.now();
   $('cc-save').classList.add('working');
@@ -383,11 +277,8 @@ $('cc-save').addEventListener('click', () => {
       if (fresh) graph.focus(fresh.id);
     }
   }, 4000);
-});
-
-document.querySelectorAll('[data-mode]').forEach((button) => {
-  button.addEventListener('click', () => setMode(button.dataset.mode));
-});
+}
+$('cc-save').addEventListener('click', saveConversation);
 
 // ---------------------------------------------------------------- vault
 // Carpeta de Obsidian con raw/ → wiki/ → output/.
@@ -407,17 +298,14 @@ async function useVault(path) {
     vault = await invoke('set_vault', { path });
     excluded.clear();
     showVault();
-    printLine(`vault → ${vault.path}`, 'system');
-    printLine(
-      vault.created.length ? `creado: ${vault.created.join(', ')}` : 'estructura raw/ · wiki/ · output/ lista',
-      'system',
-    );
+    // Claude trabaja dentro del vault: al cambiarlo se cierra la conversación anterior y se
+    // abre otra en el nuevo.
+    await chat.stop();
+    if (vault.created.length) printLine(`En el vault se creó: ${vault.created.join(', ')}`, 'info');
+    chat.start();
     await refresh();
     notesStale = true;
     if (view === 'notas') activateNotes();
-    // Claude Code trabaja dentro del vault: al cambiarlo se cierra la sesión anterior.
-    await claudeCode.stop();
-    if (mode === 'claude-code') setMode('claude-code');
   } catch (error) {
     fail(error);
   }
@@ -1466,14 +1354,10 @@ function showActivity(open) {
   activityOpen = open;
   $('activity-button').setAttribute('aria-pressed', String(open));
   $('activity-view').hidden = !open;
-  const cc = mode === 'claude-code';
-  $('output').hidden = open || cc;
-  $('prompt').hidden = open || cc;
-  $('cc-view').hidden = open || !cc;
+  $('chat-view').hidden = open;
   renderActivity();
-  // Al cerrar la actividad se vuelve a la vista anterior con el foco donde corresponde.
-  if (!open && cc && vault && desktop) claudeCode.show();
-  else if (!open && !cc) $('prompt-input').focus();
+  // Al cerrar la actividad se vuelve a la conversación, con el foco en su campo.
+  if (!open) chat.show();
 }
 
 $('activity-button').addEventListener('click', () => showActivity(!activityOpen));
@@ -1645,26 +1529,14 @@ $('plane-galaxy').addEventListener('click', () => setPlane('galaxia'));
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Escribe un mensaje en Claude Code como si lo tecleara el usuario: abre la terminal (y la
-// sesión, si hace falta) y espera a que pueda recibirlo.
+// Le manda un mensaje a Claude como si lo escribiera el usuario: abre el chat (y a Claude, si
+// hace falta) y lo envía.
 async function sendToClaude(text) {
-  if (!desktop) throw 'Claude Code solo funciona en la app de escritorio.';
-  if (!vault) throw 'Primero elige un vault: Claude Code trabaja dentro de él.';
+  if (!desktop) throw 'Claude solo funciona en la app de escritorio.';
+  if (!vault) throw 'Primero elige un vault: Claude trabaja dentro de él.';
   if (minimized) setMinimized(false);
-  const wasRunning = claudeCode.running;
-  if (mode !== 'claude-code') document.querySelector('[data-mode="claude-code"]').click();
-  else if (activityOpen) showActivity(false);
-  if (!claudeCode.running && !$('cc-exit').hidden) claudeCode.restart();
-  const started = Date.now();
-  while (!claudeCode.running) {
-    const waited = Date.now() - started;
-    if (waited > 1500 && !$('cc-exit').hidden) throw $('cc-exit-text').textContent;
-    if (waited > 30_000) throw 'Claude Code no arrancó a tiempo.';
-    await wait(200);
-  }
-  // Recién abierto, Claude Code tarda un momento en dibujar su caja de texto.
-  if (!wasRunning) await wait(3000);
-  claudeCode.say(text);
+  if (activityOpen) showActivity(false);
+  if (!(await chat.send(text))) throw 'No se pudo enviar el mensaje a Claude.';
 }
 
 const skills = createSkills({
@@ -1709,7 +1581,7 @@ const agentLog = createAgentLog({
 
 // ---------------------------------------------------------------- vistas: Grafo / Notas
 // Notas cambia la carta de la izquierda por temas y notas y el grafo por el escritorio
-// de notas; la terminal de la derecha no cambia.
+// de notas; el chat de la derecha no cambia.
 const notes = createNotes({
   invoke: (cmd, args) => (desktop ? invoke(cmd, args) : Promise.reject('Las notas solo funcionan en la app de escritorio.')),
   ask: (message, options) => (desktop ? ask(message, options) : Promise.resolve(window.confirm(message))),
@@ -1955,11 +1827,11 @@ searchButton.addEventListener('click', (event) => {
 document.addEventListener('click', (event) => {
   if (!searchMenu.hidden && !searchMenu.contains(event.target) && !searchButton.contains(event.target)) closeSearch();
 });
-// ⌘K / Ctrl+K abre la búsqueda (salvo dentro de la terminal de Claude Code, donde Ctrl+K es suyo).
+// ⌘K / Ctrl+K abre la búsqueda.
 const isMac = /Mac/i.test(navigator.platform);
 $('search-kbd').textContent = isMac ? '⌘K' : 'Ctrl K';
 document.addEventListener('keydown', (event) => {
-  if ((isMac ? event.metaKey : event.ctrlKey) && event.key.toLowerCase() === 'k' && !event.target.closest?.('.xterm')) {
+  if ((isMac ? event.metaKey : event.ctrlKey) && event.key.toLowerCase() === 'k') {
     event.preventDefault();
     openSearch();
   }
@@ -1989,25 +1861,11 @@ if (desktop) {
       vault = await invoke('get_vault');
       refreshConnections();
       detected = await invoke('detect_vaults');
-      const key = await invoke('key_status');
-      printLine(
-        `Nexo · ${key.model} · ${
-          !key.configured
-            ? 'falta la clave: escribe clave sk-ant-…'
-            : key.source === 'env'
-              ? 'clave desde ANTHROPIC_API_KEY'
-              : 'clave guardada'
-        }`,
-        'info',
-      );
       // Primer arranque con un único vault de Obsidian: se usa directamente.
-      if (!vault && detected.length === 1) {
-        printLine(`vault de Obsidian detectado: ${detected[0].name}`, 'system');
-        return useVault(detected[0].path);
-      }
+      if (!vault && detected.length === 1) return useVault(detected[0].path);
       showVault();
-      if (vault) printLine(`vault → ${vault.path}`, 'system');
-      else if (detected.length) printLine(`${detected.length} vaults de Obsidian detectados`, 'system');
+      // Cada vez que se abre nexo, el chat con Claude queda abierto con la suscripción.
+      chat.start();
       await refresh();
       if (view === 'notas') activateNotes();
     } catch (error) {

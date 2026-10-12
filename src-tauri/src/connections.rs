@@ -62,10 +62,7 @@ async fn api(app: &AppHandle) -> Connection {
         detail,
     };
     let Some(source) = claude::key_source(app) else {
-        return base(
-            "missing",
-            "Sin clave · en la terminal: clave sk-ant-…".into(),
-        );
+        return base("missing", "Sin clave · en el chat: /clave sk-ant-…".into());
     };
     let origin = if source == "env" {
         "ANTHROPIC_API_KEY"

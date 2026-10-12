@@ -1,11 +1,16 @@
-//! Terminal real dentro de nexo que ejecuta Claude Code (`claude`) en la carpeta del vault.
+//! Chat con Claude Code: nexo lanza `claude` sin terminal (`-p`, con entrada y salida en
+//! `stream-json`) dentro del vault y la interfaz pinta la conversación con su propio diseño.
+//! Este módulo solo arranca el proceso, le pasa líneas y reenvía las que devuelve; el
+//! protocolo (mensajes, procesos, permisos, cambio de modelo, esfuerzo y modo de permisos)
+//! lo interpreta la interfaz (`chat-model.js`). Usa la suscripción de Claude Code; lo que va
+//! por la API de Anthropic (compilar, preguntar) sigue en `nexo.rs`.
 
-use std::io::{Read, Write};
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{Arc, Mutex};
 
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager, State};
 
@@ -14,30 +19,67 @@ use crate::{browser, playwright};
 
 #[derive(Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PtyEvent {
-    Data { text: String },
-    Exit { code: Option<u32> },
+pub enum ChatEvent {
+    /// Una línea JSON del protocolo de Claude Code, tal cual.
+    Line { text: String },
+    /// Claude Code terminó; `detail` trae el final de su salida de error.
+    Exit { code: Option<i32>, detail: String },
 }
 
 struct Session {
     id: u64,
-    master: Box<dyn MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
-    child: Box<dyn Child + Send + Sync>,
+    child: Child,
+    stdin: ChildStdin,
 }
 
-/// Sesión de Claude Code de esta apertura de nexo: se crea la primera vez que se abre la
-/// pestaña y se retoma mientras la app siga abierta. Al cerrar nexo, la siguiente empieza limpia.
+/// Sesión de Claude Code de esta apertura de nexo: se crea al abrir la app y se retoma
+/// mientras siga abierta. Al cerrar nexo (o al pedir una conversación nueva), la siguiente
+/// empieza limpia.
 struct RunSession {
     id: String,
     name: String,
+}
+
+/// A dónde van las líneas y lo ya dicho en esta apertura. La interfaz puede recargarse (Vite)
+/// con Claude Code en marcha: al volver a conectarse recibe la conversación desde aquí.
+#[derive(Default)]
+struct Shared {
+    sink: Option<Channel<ChatEvent>>,
+    backlog: Vec<String>,
 }
 
 #[derive(Default)]
 pub struct ClaudeCodeState {
     session: Mutex<Option<Session>>,
     run: Mutex<Option<RunSession>>,
+    shared: Arc<Mutex<Shared>>,
 }
+
+/// Lo que la interfaz elige antes de arrancar (después se cambia con peticiones de control).
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatOptions {
+    model: Option<String>,
+    effort: Option<String>,
+    permission_mode: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct Started {
+    /// Nombre de la sesión («Nexo · fecha»).
+    session: String,
+    /// Se retomó una sesión guardada de esta apertura.
+    resumed: bool,
+    /// Claude Code ya estaba en marcha: la interfaz solo se ha vuelto a conectar.
+    attached: bool,
+}
+
+/// Líneas que se guardan como mucho para volver a pintar la conversación.
+const BACKLOG_MAX: usize = 6000;
+const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+/// Modos de permiso que ofrece nexo. `bypassPermissions` y `dontAsk` quedan fuera a
+/// propósito: Claude Code tiene aquí el navegador con las sesiones del usuario.
+const PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "plan", "auto"];
 
 static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -172,7 +214,10 @@ ventana sobre una copia del perfil del navegador del usuario (sus sesiones inici
 «Cargar navegador» de Conexiones. Úsalo cuando el usuario te pida consultar o hacer algo en una web, sobre todo \
 si necesita sesión. Como tiene las cuentas reales del usuario: no publiques, compres, envíes mensajes, borres ni \
 cambies ajustes sin su confirmación explícita, no muestres contraseñas ni cookies, y cierra el navegador \
-(browser_close) al terminar.",
+(browser_close) al terminar.\n\n\
+Formato: tus respuestas se ven en el chat de nexo, que entiende Markdown (párrafos, listas, negritas, \
+`código`, bloques de código y tablas sencillas). Sé directo, responde en el idioma del usuario y cita las \
+notas como [[nombre-de-la-nota]].",
         vault = root.display(),
         session = session
     )
@@ -235,185 +280,501 @@ fn stop(session: Option<Session>) {
     }
 }
 
-/// Arranca (o reinicia) Claude Code en el vault y envía su salida por `channel`.
+/// Un modelo es un alias (`opus`) o un id (`claude-opus-5-5`, `opus[1m]`): nada que pueda
+/// pasar por otra opción de la línea de órdenes.
+fn valid_model(model: &str) -> bool {
+    !model.is_empty()
+        && model.len() <= 80
+        && !model.starts_with('-')
+        && model
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_.[]:".contains(c))
+}
+
+/// Argumentos de `claude` para el chat: sin terminal, con el protocolo en JSON por líneas en
+/// los dos sentidos, los avisos de permiso por ese mismo canal y el texto a medida que llega.
+fn launch_args(
+    run: &RunSession,
+    saved: bool,
+    prompt: &str,
+    mcp_config: Option<&Path>,
+    options: &ChatOptions,
+) -> Result<Vec<String>, String> {
+    let mut args: Vec<String> = [
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--include-partial-messages",
+        "--forward-subagent-text",
+        "--permission-prompt-tool",
+        "stdio",
+    ]
+    .map(String::from)
+    .to_vec();
+    // Una sesión por apertura de nexo: nueva la primera vez, retomada después.
+    if saved {
+        args.extend(["--resume".into(), run.id.clone()]);
+    } else {
+        args.extend([
+            "--session-id".into(),
+            run.id.clone(),
+            "--name".into(),
+            run.name.clone(),
+        ]);
+    }
+    args.extend(["--append-system-prompt".into(), prompt.to_string()]);
+    if let Some(config) = mcp_config {
+        args.extend(["--mcp-config".into(), config.to_string_lossy().into_owned()]);
+    }
+    if let Some(model) = options.model.as_deref().filter(|m| *m != "default") {
+        if !valid_model(model) {
+            return Err(format!("Modelo no válido: {model}"));
+        }
+        args.extend(["--model".into(), model.into()]);
+    }
+    if let Some(effort) = options.effort.as_deref() {
+        if !EFFORTS.contains(&effort) {
+            return Err(format!("Esfuerzo no válido: {effort}"));
+        }
+        args.extend(["--effort".into(), effort.into()]);
+    }
+    if let Some(mode) = options.permission_mode.as_deref() {
+        if !PERMISSION_MODES.contains(&mode) {
+            return Err(format!("Modo de permisos no válido: {mode}"));
+        }
+        // «default» es no pasar nada: la opción de la línea de órdenes lo llama de otra forma.
+        if mode != "default" {
+            args.extend(["--permission-mode".into(), mode.into()]);
+        }
+    }
+    Ok(args)
+}
+
+/// Lo que no hace falta para volver a pintar la conversación: los trozos del streaming (el
+/// mensaje completo llega después), los hooks y los contadores que van cambiando.
+fn keep_in_backlog(line: &str) -> bool {
+    const SKIP: &[&str] = &[
+        r#"{"type":"stream_event""#,
+        r#"{"type":"system","subtype":"hook_"#,
+        r#"{"type":"system","subtype":"thinking_tokens""#,
+        r#"{"type":"rate_limit_event""#,
+    ];
+    !SKIP.iter().any(|prefix| line.starts_with(prefix))
+}
+
+fn remember(shared: &mut Shared, line: &str) {
+    if !keep_in_backlog(line) {
+        return;
+    }
+    if shared.backlog.len() >= BACKLOG_MAX {
+        let extra = shared.backlog.len() + 1 - BACKLOG_MAX;
+        shared.backlog.drain(..extra);
+    }
+    shared.backlog.push(line.to_string());
+}
+
+/// Lee la salida de Claude Code línea a línea hasta que se cierra: guarda cada una para poder
+/// repetir la conversación y la reenvía a la interfaz, si hay alguna escuchando.
+fn pump(stdout: impl Read, shared: &Mutex<Shared>) {
+    for line in BufReader::new(stdout).lines() {
+        let Ok(text) = line else { break };
+        if text.trim().is_empty() {
+            continue;
+        }
+        let Ok(mut shared) = shared.lock() else { break };
+        remember(&mut shared, &text);
+        if let Some(sink) = &shared.sink {
+            let _ = sink.send(ChatEvent::Line { text });
+        }
+    }
+}
+
+/// Arranca Claude Code en el vault (o se vuelve a conectar al que ya está en marcha) y envía
+/// sus líneas por `channel`. Con `replay`, primero repite la conversación de esta apertura:
+/// lo pide una interfaz recién cargada, que no la tiene.
 #[tauri::command]
 pub fn claude_code_start(
     app: AppHandle,
     state: State<'_, ClaudeCodeState>,
-    cols: u16,
-    rows: u16,
-    channel: Channel<PtyEvent>,
-) -> Result<String, String> {
+    options: ChatOptions,
+    replay: bool,
+    channel: Channel<ChatEvent>,
+) -> Result<Started, String> {
     let root = vault_root(&app)?;
     let claude = find_claude(&app)
         .ok_or("No encontré Claude Code. Instálalo desde https://claude.com/claude-code y vuelve a intentarlo.")?;
 
-    stop(state.session.lock().map_err(|e| e.to_string())?.take());
+    let mut session = state.session.lock().map_err(|e| e.to_string())?;
+    let running = session
+        .as_mut()
+        .is_some_and(|s| matches!(s.child.try_wait(), Ok(None)));
+    {
+        let mut shared = state.shared.lock().map_err(|e| e.to_string())?;
+        if replay {
+            for text in &shared.backlog {
+                let _ = channel.send(ChatEvent::Line { text: text.clone() });
+            }
+        }
+        shared.sink = Some(channel);
+    }
+    if running {
+        let name = current_session_name(&app).unwrap_or_default();
+        return Ok(Started {
+            session: name,
+            resumed: true,
+            attached: true,
+        });
+    }
+    stop(session.take());
 
-    let pty = native_pty_system()
-        .openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| e.to_string())?;
-    // Una sesión por apertura de nexo: nueva la primera vez, retomada después.
-    let mut cmd = CommandBuilder::new(&claude);
-    let (session_name, description) = {
+    let (args, name, resumed) = {
         let mut run = state.run.lock().map_err(|e| e.to_string())?;
         let run = run.get_or_insert_with(|| RunSession {
             id: uuid::Uuid::new_v4().to_string(),
             name: format!("Nexo · {}", chrono::Local::now().format("%Y-%m-%d %H:%M")),
         });
-        if session_saved(&app, &run.id) {
-            cmd.args(["--resume", &run.id]);
-            (run.name.clone(), format!("{} · retomada", run.name))
-        } else {
-            cmd.args(["--session-id", &run.id, "--name", &run.name]);
-            (run.name.clone(), format!("{} · sesión nueva", run.name))
+        let saved = session_saved(&app, &run.id);
+        // El agente que escribe las skills tiene que estar antes de arrancar: Claude Code lee
+        // los agentes del vault al empezar la sesión.
+        if let Err(e) = crate::skills::install_agent(&root) {
+            log::warn!("No se pudo instalar el agente de skills: {e}");
         }
+        let prompt = orchestrator_prompt(&root, &run.name);
+        let config = playwright_mcp_config(&app);
+        (
+            launch_args(run, saved, &prompt, config.as_deref(), &options)?,
+            run.name.clone(),
+            saved,
+        )
     };
-    // El agente que escribe las skills tiene que estar antes de arrancar: Claude Code lee
-    // los agentes del vault al empezar la sesión.
-    if let Err(e) = crate::skills::install_agent(&root) {
-        log::warn!("No se pudo instalar el agente de skills: {e}");
-    }
-    let cwd = root.clone();
-    cmd.args([
-        "--append-system-prompt",
-        &orchestrator_prompt(&root, &session_name),
-    ]);
-    if let Some(config) = playwright_mcp_config(&app) {
-        cmd.arg("--mcp-config");
-        cmd.arg(config);
-    }
-    cmd.cwd(&cwd);
+
+    let mut cmd = Command::new(&claude);
+    cmd.args(&args)
+        .current_dir(&root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     for key in INHERITED_ENV {
         cmd.env_remove(key);
     }
-    cmd.env("TERM", "xterm-256color");
-    cmd.env("COLORTERM", "truecolor");
-    let child = pty
-        .slave
-        .spawn_command(cmd)
+    let mut child = cmd
+        .spawn()
         .map_err(|e| format!("No se pudo iniciar Claude Code: {e}"))?;
-    drop(pty.slave);
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or("Claude Code no aceptó la entrada.")?;
+    let stdout = child.stdout.take().ok_or("Claude Code no dio salida.")?;
+    let stderr = child.stderr.take();
 
-    let mut reader = pty.master.try_clone_reader().map_err(|e| e.to_string())?;
-    let writer = pty.master.take_writer().map_err(|e| e.to_string())?;
-
-    // Lector en su propio hilo: reenvía la salida respetando los caracteres UTF-8 partidos entre lecturas.
-    let events = channel.clone();
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        let mut pending: Vec<u8> = Vec::new();
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    pending.extend_from_slice(&buf[..n]);
-                    let valid = match std::str::from_utf8(&pending) {
-                        Ok(_) => pending.len(),
-                        Err(e) if e.error_len().is_none() => e.valid_up_to(),
-                        Err(_) => pending.len(), // bytes inválidos: se envían con reemplazo
-                    };
-                    let text = String::from_utf8_lossy(&pending[..valid]).into_owned();
-                    pending.drain(..valid);
-                    // Si la interfaz ya no escucha (p. ej. se recargó), se sigue vaciando la salida:
-                    // dejar de leer llenaría el PTY y bloquearía a Claude Code.
-                    if !text.is_empty() {
-                        let _ = events.send(PtyEvent::Data { text });
+    // Lo último que escriba por la salida de error explica por qué terminó, si termina.
+    let errors = Arc::new(Mutex::new(String::new()));
+    if let Some(mut stderr) = stderr {
+        let errors = errors.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = stderr.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                if let Ok(mut text) = errors.lock() {
+                    text.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    if text.len() > 4000 {
+                        let cut = text.len() - 2000;
+                        let cut = (cut..text.len())
+                            .find(|i| text.is_char_boundary(*i))
+                            .unwrap_or(0);
+                        text.drain(..cut);
                     }
                 }
             }
-        }
-    });
+        });
+    }
 
     let id = NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let session = Session {
-        id,
-        master: pty.master,
-        writer,
-        child,
-    };
-    *state.session.lock().map_err(|e| e.to_string())? = Some(session);
+    *session = Some(Session { id, child, stdin });
+    drop(session);
 
-    // Aviso de salida: se comprueba el proceso en segundo plano.
-    let app_handle = app.clone();
+    // Lector en su propio hilo. Si la interfaz ya no escucha (se recargó), se sigue leyendo:
+    // dejar de leer llenaría la tubería y bloquearía a Claude Code.
+    let shared = state.shared.clone();
+    let handle = app.clone();
     std::thread::spawn(move || {
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            let state = app_handle.state::<ClaudeCodeState>();
-            let Ok(mut guard) = state.session.lock() else {
-                break;
-            };
-            // Si se reinició o se detuvo, esta vigilancia ya no corresponde a la sesión actual.
-            let Some(session) = guard.as_mut().filter(|s| s.id == id) else {
-                break;
-            };
-            if let Ok(Some(status)) = session.child.try_wait() {
-                *guard = None;
-                let _ = channel.send(PtyEvent::Exit {
-                    code: Some(status.exit_code()),
-                });
-                break;
+        pump(stdout, &shared);
+        // Fin de la salida: Claude Code terminó. Si la sesión ya es otra (se detuvo o se
+        // reinició a propósito), no hay nada que avisar.
+        let state = handle.state::<ClaudeCodeState>();
+        let ended = match state.session.lock() {
+            Ok(mut guard) if guard.as_ref().is_some_and(|s| s.id == id) => guard.take(),
+            _ => None,
+        };
+        let Some(mut ended) = ended else { return };
+        let code = ended.child.wait().ok().and_then(|status| status.code());
+        let detail = errors
+            .lock()
+            .map(|t| t.trim().to_string())
+            .unwrap_or_default();
+        if let Ok(shared) = shared.lock() {
+            if let Some(sink) = &shared.sink {
+                let _ = sink.send(ChatEvent::Exit { code, detail });
             }
         }
     });
 
-    Ok(description)
+    Ok(Started {
+        session: name,
+        resumed,
+        attached: false,
+    })
 }
 
+/// Escribe una línea del protocolo (un mensaje del usuario, una petición o una respuesta de
+/// control). `record` es lo que se guarda para volver a pintar la conversación: lo que
+/// escribe el usuario y lo que contesta a los permisos no vuelve por la salida de Claude
+/// Code, así que la interfaz lo deja anotado en su propio formato.
 #[tauri::command]
-pub async fn claude_code_write(
+pub async fn claude_code_send(
     state: State<'_, ClaudeCodeState>,
-    data: String,
+    line: String,
+    record: Option<String>,
 ) -> Result<(), String> {
-    let mut guard = state.session.lock().map_err(|e| e.to_string())?;
-    let session = guard.as_mut().ok_or("Claude Code no está en marcha.")?;
-    session
-        .writer
-        .write_all(data.as_bytes())
-        .map_err(|e| e.to_string())?;
-    session.writer.flush().map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub async fn claude_code_resize(
-    state: State<'_, ClaudeCodeState>,
-    cols: u16,
-    rows: u16,
-) -> Result<(), String> {
-    let guard = state.session.lock().map_err(|e| e.to_string())?;
-    if let Some(session) = guard.as_ref() {
+    let one_line = |text: &str| !text.contains('\n') && !text.trim().is_empty();
+    if !one_line(&line) || record.as_deref().is_some_and(|r| !one_line(r)) {
+        return Err("Cada mensaje para Claude Code va en una sola línea.".into());
+    }
+    {
+        let mut guard = state.session.lock().map_err(|e| e.to_string())?;
+        let session = guard.as_mut().ok_or("Claude Code no está en marcha.")?;
         session
-            .master
-            .resize(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+            .stdin
+            .write_all(format!("{line}\n").as_bytes())
+            .and_then(|_| session.stdin.flush())
             .map_err(|e| e.to_string())?;
+    }
+    if let Some(record) = record {
+        remember(
+            &mut *state.shared.lock().map_err(|e| e.to_string())?,
+            &record,
+        );
     }
     Ok(())
 }
 
+/// Detiene Claude Code; la sesión de esta apertura se conserva y se retoma al volver a abrir.
 #[tauri::command]
 pub fn claude_code_stop(state: State<'_, ClaudeCodeState>) -> Result<(), String> {
     stop(state.session.lock().map_err(|e| e.to_string())?.take());
     Ok(())
 }
 
+/// Conversación nueva: detiene Claude Code y olvida la sesión y lo dicho en esta apertura.
+#[tauri::command]
+pub fn claude_code_reset(state: State<'_, ClaudeCodeState>) -> Result<(), String> {
+    stop(state.session.lock().map_err(|e| e.to_string())?.take());
+    *state.run.lock().map_err(|e| e.to_string())? = None;
+    state
+        .shared
+        .lock()
+        .map_err(|e| e.to_string())?
+        .backlog
+        .clear();
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn el_prompt_explica_notas_y_escritorio() {
-        let prompt = super::orchestrator_prompt(std::path::Path::new("/vault"), "Nexo · prueba");
+        let prompt = orchestrator_prompt(Path::new("/vault"), "Nexo · prueba");
         assert!(prompt.contains("wiki/notas/"));
         assert!(prompt.contains(r#"{"cards":[{"path":"#));
         assert!(prompt.contains("<!-- nexo:contenido -->"));
         assert!(prompt.contains("📅 AAAA-MM-DD"));
+    }
+
+    #[test]
+    fn el_prompt_dice_que_el_chat_entiende_markdown() {
+        let prompt = orchestrator_prompt(Path::new("/vault"), "Nexo · prueba");
+        assert!(prompt.contains("el chat de nexo, que entiende Markdown"));
+    }
+
+    fn run() -> RunSession {
+        RunSession {
+            id: "0b1c".into(),
+            name: "Nexo · prueba".into(),
+        }
+    }
+
+    fn pos(args: &[String], flag: &str) -> Option<usize> {
+        args.iter().position(|a| a == flag)
+    }
+
+    #[test]
+    fn los_argumentos_piden_el_protocolo_sin_terminal() {
+        let args = launch_args(&run(), false, "papel", None, &ChatOptions::default()).unwrap();
+        assert_eq!(args[0], "-p");
+        for (flag, value) in [
+            ("--input-format", "stream-json"),
+            ("--output-format", "stream-json"),
+            ("--permission-prompt-tool", "stdio"),
+            ("--session-id", "0b1c"),
+            ("--name", "Nexo · prueba"),
+            ("--append-system-prompt", "papel"),
+        ] {
+            let at = pos(&args, flag).unwrap_or_else(|| panic!("falta {flag}"));
+            assert_eq!(args[at + 1], value);
+        }
+        assert!(pos(&args, "--include-partial-messages").is_some());
+        // Sin elegir nada, manda la configuración de Claude Code del usuario.
+        for flag in [
+            "--model",
+            "--effort",
+            "--permission-mode",
+            "--resume",
+            "--mcp-config",
+        ] {
+            assert!(pos(&args, flag).is_none(), "sobra {flag}");
+        }
+    }
+
+    #[test]
+    fn una_sesion_guardada_se_retoma() {
+        let args = launch_args(&run(), true, "papel", None, &ChatOptions::default()).unwrap();
+        assert_eq!(args[pos(&args, "--resume").unwrap() + 1], "0b1c");
+        assert!(pos(&args, "--session-id").is_none());
+        assert!(pos(&args, "--name").is_none());
+    }
+
+    #[test]
+    fn modelo_esfuerzo_y_permisos_se_pasan_si_son_validos() {
+        let options = ChatOptions {
+            model: Some("claude-sonnet-5-5".into()),
+            effort: Some("xhigh".into()),
+            permission_mode: Some("acceptEdits".into()),
+        };
+        let config = Path::new("/cache/claude-mcp.json");
+        let args = launch_args(&run(), false, "papel", Some(config), &options).unwrap();
+        assert_eq!(
+            args[pos(&args, "--model").unwrap() + 1],
+            "claude-sonnet-5-5"
+        );
+        assert_eq!(args[pos(&args, "--effort").unwrap() + 1], "xhigh");
+        assert_eq!(
+            args[pos(&args, "--permission-mode").unwrap() + 1],
+            "acceptEdits"
+        );
+        assert_eq!(
+            args[pos(&args, "--mcp-config").unwrap() + 1],
+            "/cache/claude-mcp.json"
+        );
+
+        // «default» (modelo o permisos) es no pasar la opción.
+        let options = ChatOptions {
+            model: Some("default".into()),
+            effort: None,
+            permission_mode: Some("default".into()),
+        };
+        let args = launch_args(&run(), false, "papel", None, &options).unwrap();
+        assert!(pos(&args, "--model").is_none());
+        assert!(pos(&args, "--permission-mode").is_none());
+    }
+
+    #[test]
+    fn no_se_puede_saltar_los_permisos_ni_colar_opciones() {
+        let with = |model: Option<&str>, effort: Option<&str>, mode: Option<&str>| {
+            let options = ChatOptions {
+                model: model.map(String::from),
+                effort: effort.map(String::from),
+                permission_mode: mode.map(String::from),
+            };
+            launch_args(&run(), false, "papel", None, &options)
+        };
+        assert!(with(None, None, Some("bypassPermissions")).is_err());
+        assert!(with(None, None, Some("dontAsk")).is_err());
+        assert!(with(Some("--dangerously-skip-permissions"), None, None).is_err());
+        assert!(with(Some("opus --dangerously-skip-permissions"), None, None).is_err());
+        assert!(with(None, Some("enorme"), None).is_err());
+        assert!(with(Some("opus[1m]"), Some("max"), Some("plan")).is_ok());
+    }
+
+    #[test]
+    fn el_historial_no_guarda_el_streaming() {
+        assert!(!keep_in_backlog(r#"{"type":"stream_event","event":{}}"#));
+        assert!(!keep_in_backlog(
+            r#"{"type":"system","subtype":"hook_started"}"#
+        ));
+        assert!(!keep_in_backlog(
+            r#"{"type":"system","subtype":"thinking_tokens"}"#
+        ));
+        assert!(!keep_in_backlog(r#"{"type":"rate_limit_event"}"#));
+        assert!(keep_in_backlog(r#"{"type":"assistant","message":{}}"#));
+        assert!(keep_in_backlog(
+            r#"{"type":"user","message":{"role":"user","content":"hola"}}"#
+        ));
+        assert!(keep_in_backlog(
+            r#"{"type":"control_request","request_id":"1"}"#
+        ));
+        assert!(keep_in_backlog(r#"{"type":"system","subtype":"init"}"#));
+        // Lo que anota la interfaz: el mensaje del usuario y su respuesta a un permiso.
+        assert!(keep_in_backlog(
+            r#"{"type":"nexo_user","text":"hola","files":[]}"#
+        ));
+        assert!(keep_in_backlog(
+            r#"{"type":"nexo_permission","request_id":"1","decision":"allow"}"#
+        ));
+    }
+
+    #[test]
+    fn el_lector_sigue_aunque_nadie_escuche() {
+        let salida = concat!(
+            r#"{"type":"system","subtype":"init"}"#,
+            "\n\n",
+            r#"{"type":"stream_event","event":{}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"año"}]}}"#,
+            "\n",
+            r#"{"type":"result","subtype":"success"}"#,
+        );
+        let shared = Mutex::new(Shared::default());
+        pump(salida.as_bytes(), &shared);
+        let backlog = &shared.lock().unwrap().backlog;
+        assert_eq!(backlog.len(), 3, "sin la línea vacía ni el streaming");
+        assert!(backlog[1].contains("año"));
+        assert!(backlog[2].contains("result"));
+    }
+
+    /// Con un proceso de verdad: lo que se escribe en su entrada vuelve por el lector.
+    #[cfg(unix)]
+    #[test]
+    fn una_linea_escrita_vuelve_por_el_lector() {
+        let mut child = Command::new("cat")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("cat");
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let line = r#"{"type":"user","message":{"role":"user","content":"¿qué hay en la wiki?"}}"#;
+        stdin.write_all(format!("{line}\n").as_bytes()).unwrap();
+        drop(stdin);
+        let shared = Mutex::new(Shared::default());
+        pump(stdout, &shared);
+        assert_eq!(shared.lock().unwrap().backlog, vec![line.to_string()]);
+        assert!(child.wait().unwrap().success());
+    }
+
+    #[test]
+    fn el_historial_tiene_tope() {
+        let mut shared = Shared::default();
+        for i in 0..BACKLOG_MAX + 25 {
+            remember(&mut shared, &format!(r#"{{"type":"assistant","n":{i}}}"#));
+        }
+        assert_eq!(shared.backlog.len(), BACKLOG_MAX);
+        assert!(shared.backlog[0].contains(r#""n":25"#));
     }
 }

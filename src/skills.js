@@ -282,7 +282,7 @@ export function createSkills({ invoke, ask, fail, galaxy, stage, onUse, onCreate
         </span>
       </div>`;
     li.querySelector('.row-meta-text').textContent = item.text;
-    li.title = 'El agente creador-de-skills está trabajando en la terminal de Claude Code';
+    li.title = 'El agente creador-de-skills está trabajando: lo verás en el chat con Claude';
     return li;
   }
 
@@ -302,7 +302,7 @@ export function createSkills({ invoke, ask, fail, galaxy, stage, onUse, onCreate
     load();
   }
 
-  // Formulario «Agregar skill»: la descripción va al agente por la terminal de Claude Code.
+  // Formulario «Agregar skill»: la descripción va al agente por el chat con Claude.
   function openAdd() {
     form.hidden = false;
     $('skill-add').hidden = true;

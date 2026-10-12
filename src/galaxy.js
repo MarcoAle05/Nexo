@@ -1,20 +1,34 @@
-// Galaxia inicial: el plano principal antes de abrir el grafo. Miles de puntos blancos muy
-// pequeños forman un núcleo grande y brillante y un aro que gira despacio a su alrededor,
-// inclinado como la elipse del logo. Se dibuja con WebGL (un solo dibujado por fotograma:
+// Galaxia inicial: el plano principal antes de abrir el grafo. Miles de puntos muy pequeños,
+// blancos y con los tintes del acento (lila, violeta, azul y algo de rosa), forman un núcleo
+// grande y brillante y un aro ancho que gira despacio a su alrededor, inclinado como la
+// elipse del logo. Se dibuja con WebGL (un solo dibujado por fotograma:
 // la GPU calcula la órbita de cada punto) y, si no hay WebGL, con un canvas 2D con menos puntos.
 
+// Tintes de los puntos (RGB lineal de 0 a 1), a juego con el acento de styles.css: blanco,
+// lila (--violet-300), violeta (--violet-400), azul (--blue-500 aclarado) y rosa.
+export const TINTS = [
+  [1, 1, 1],
+  [0.8, 0.68, 1],
+  [0.66, 0.46, 1],
+  [0.38, 0.52, 1],
+  [1, 0.52, 0.84],
+];
+
 // Aspecto de la galaxia. Las distancias van en unidades de la galaxia (el aro mide ~0.9) y
-// los tamaños de los puntos en píxeles CSS. Los colores siempre son blancos: cambia el brillo.
+// los tamaños de los puntos en píxeles CSS. `tint` reparte cada grupo entre los TINTS (pesos
+// en su mismo orden); el disco y el aro tienen un lado frío y otro cálido, que giran con ellos.
 export const LOOK = {
   seed: 7,
   tilt: 0.36, // aplastamiento del disco visto en perspectiva (cos de la inclinación)
   angle: -24, // grados: el mismo giro que la elipse del logo
   speed: 1, // multiplica todas las velocidades de giro
   twinkle: 0.16, // cuánto titilan los puntos (0 = nada)
-  core: { count: 11200, radius: 0.5, flatten: 0.8, size: [0.7, 1.4], alpha: [0.2, 0.62], spin: 0.05 },
-  disk: { count: 1800, radius: 0.68, arms: 2, pitch: 0.32, scatter: 0.08, size: [0.6, 1.1], alpha: [0.08, 0.24] },
-  ring: { count: 6200, radius: 0.9, width: 0.03, thickness: 0.008, size: [0.7, 1.5], alpha: [0.34, 0.9], clumps: 4, spin: 0.07 },
-  halo: { count: 700, radius: 1.3, size: [0.6, 1.0], alpha: [0.05, 0.16], spin: 0.02 },
+  core: { count: 11200, radius: 0.5, flatten: 0.8, size: [0.7, 1.4], alpha: [0.2, 0.62], spin: 0.05, tint: [0.1, 0.26, 0.14, 0.04, 0.46] },
+  disk: { count: 1800, radius: 0.68, arms: 2, pitch: 0.32, scatter: 0.08, size: [0.6, 1.1], alpha: [0.08, 0.24], tint: [0.08, 0.2, 0.3, 0.42, 0], warm: [0.08, 0.24, 0.4, 0.1, 0.18] },
+  // El aro es una banda ancha: `width` es la desviación de su radio y `edge` cuántas
+  // desviaciones como mucho, para que no se desparrame hasta la órbita de las skills.
+  ring: { count: 8600, radius: 0.845, width: 0.1, edge: 1.9, thickness: 0.008, size: [0.7, 1.6], alpha: [0.4, 1], clumps: 4, spin: 0.07, tint: [0.08, 0.18, 0.32, 0.4, 0.02], warm: [0.08, 0.22, 0.4, 0.06, 0.24] },
+  halo: { count: 700, radius: 1.3, size: [0.6, 1.0], alpha: [0.05, 0.16], spin: 0.02, tint: [0.22, 0.26, 0.14, 0.38, 0] },
 };
 
 // Tipos de punto (el último dato de cada uno): el núcleo no se tapa a sí mismo; el disco y
@@ -35,7 +49,8 @@ function random(seed) {
 }
 
 // Puntos de la galaxia: por cada uno, su órbita (radio, ángulo inicial, altura sobre el
-// disco, velocidad angular) y su aspecto (tamaño, brillo, fase del titileo, tipo).
+// disco, velocidad angular), su aspecto (tamaño, brillo, fase del titileo, tipo) y su tinte
+// (`tone`, el índice en TINTS, y `color`, ese mismo tinte ya en RGB para WebGL).
 // Determinista: la misma semilla da siempre la misma galaxia.
 export function makePoints(look = LOOK) {
   const rand = random(look.seed);
@@ -44,10 +59,29 @@ export function makePoints(look = LOOK) {
   const total = look.core.count + look.disk.count + look.ring.count + look.halo.count;
   const orbit = new Float32Array(total * 4);
   const style = new Float32Array(total * 4);
+  const color = new Float32Array(total * 3);
+  const tone = new Uint8Array(total);
   let n = 0;
-  const push = (r, theta, z, omega, size, alpha, kind) => {
+  // El tinte sale de la fase del punto (ya aleatoria), sin gastar más números de la semilla:
+  // así la forma de la galaxia no depende de los colores. Con `warm`, el lado del grupo hacia
+  // el que apunta el ángulo inicial mezcla los dos repartos.
+  const toneFor = (group, theta, phase) => {
+    const weights = group.tint ?? [1];
+    const side = group.warm ? 0.5 + 0.5 * Math.sin(theta - 2.4) : 0;
+    const total = weights.reduce((sum, w, i) => sum + w + ((group.warm?.[i] ?? w) - w) * side, 0);
+    let t = ((phase * 5.371) % 1) * total;
+    for (let i = 0; i < weights.length; i++) {
+      t -= weights[i] + ((group.warm?.[i] ?? weights[i]) - weights[i]) * side;
+      if (t < 0) return i;
+    }
+    return 0;
+  };
+  const push = (group, r, theta, z, omega, size, alpha, kind) => {
+    const phase = rand();
     orbit.set([r, theta, z, omega * look.speed], n * 4);
-    style.set([size, alpha, rand(), kind], n * 4);
+    style.set([size, alpha, phase, kind], n * 4);
+    tone[n] = toneFor(group, theta, phase);
+    color.set(TINTS[tone[n]], n * 3);
     n++;
   };
   // Curva de rotación plana: el aro gira a `ring.spin` y lo de dentro, más deprisa.
@@ -62,7 +96,7 @@ export function makePoints(look = LOOK) {
     const cos = 2 * rand() - 1;
     const sin = Math.sqrt(1 - cos * cos);
     const near = 1 - s / (core.radius * 1.25); // 1 en el centro, 0 en el borde
-    push(s * sin, rand() * Math.PI * 2, s * cos * core.flatten, core.spin * (0.85 + rand() * 0.3), between(core.size, near * 0.7 + rand() * 0.3), between(core.alpha, near * 0.8 + rand() * 0.2), CORE);
+    push(core, s * sin, rand() * Math.PI * 2, s * cos * core.flatten, core.spin * (0.85 + rand() * 0.3), between(core.size, near * 0.7 + rand() * 0.3), between(core.alpha, near * 0.8 + rand() * 0.2), CORE);
   }
 
   // Disco interior: polvo tenue en dos brazos espirales entre el núcleo y el aro.
@@ -71,26 +105,26 @@ export function makePoints(look = LOOK) {
     const r = core.radius * 0.7 + (disk.radius - core.radius * 0.7) * Math.sqrt(rand());
     const arm = Math.floor(rand() * disk.arms);
     const theta = arm * ((Math.PI * 2) / disk.arms) + Math.log(r / (core.radius * 0.7)) / Math.tan(disk.pitch) + gauss() * disk.scatter * 3;
-    push(r + gauss() * disk.scatter * 0.3, theta, gauss() * 0.012, keplerish(r), between(disk.size), between(disk.alpha), DISC);
+    push(disk, r + gauss() * disk.scatter * 0.3, theta, gauss() * 0.012, keplerish(r), between(disk.size), between(disk.alpha), DISC);
   }
 
-  // Aro: un anillo fino con grumos, la parte que más se ve girar.
+  // Aro: una banda ancha con grumos, la parte que más se ve girar.
   const { ring } = look;
   for (let i = 0; i < ring.count; i++) {
     let theta = rand() * Math.PI * 2;
     // Más puntos en unos tramos que en otros: el aro no es una línea perfecta.
     while (rand() > 0.7 + 0.3 * Math.sin(theta * ring.clumps + Math.sin(theta * 2) * 1.7) ** 2) theta = rand() * Math.PI * 2;
-    const r = ring.radius + gauss() * ring.width;
-    push(r, theta, gauss() * ring.thickness, keplerish(r), between(ring.size), between(ring.alpha), DISC);
+    const r = ring.radius + Math.max(-ring.edge, Math.min(ring.edge, gauss())) * ring.width;
+    push(ring, r, theta, gauss() * ring.thickness, keplerish(r), between(ring.size), between(ring.alpha), DISC);
   }
 
   // Halo: estrellas sueltas y muy tenues alrededor.
   const { halo } = look;
   for (let i = 0; i < halo.count; i++) {
     const r = core.radius + (halo.radius - core.radius) * Math.sqrt(rand());
-    push(r, rand() * Math.PI * 2, gauss() * 0.12, halo.spin * (0.6 + rand() * 0.8), between(halo.size), between(halo.alpha), HALO);
+    push(halo, r, rand() * Math.PI * 2, gauss() * 0.12, halo.spin * (0.6 + rand() * 0.8), between(halo.size), between(halo.alpha), HALO);
   }
-  return { orbit, style, count: n };
+  return { orbit, style, color, tone, count: n };
 }
 
 // Semiejes (en unidades de la galaxia) del rectángulo que ocupa la galaxia en pantalla,
@@ -115,19 +149,47 @@ export function galaxyExtent(points, look = LOOK) {
   return { x, y };
 }
 
+// Escala máxima de la galaxia (px): en un hueco muy ancho no crece más.
+export const MAX_SCALE = 420;
+
 // Tamaño y centro de la galaxia dentro del hueco del escenario (px CSS de la ventana). El ancho
 // manda casi siempre: deja sitio a los lados para la órbita de las skills (`ORBIT` en skills.js).
 // En huecos estrechos (< ~600 px) los recuadros de los lados chocan con el borde del escenario,
 // así que la galaxia encoge lo justo para que no pisen el anillo.
 export function frameFor(rect) {
   const fit = Math.min(rect.width / 2.85, rect.height / 2.3, (rect.width - 300) / 1.45);
-  const scale = Math.min(420, Math.max(80, fit));
+  const scale = Math.min(MAX_SCALE, Math.max(80, fit));
   return { cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2 + 6, scale, rect };
+}
+
+// Caja (px CSS, relativa al contenedor) centrada en (cx, cy) que cubre la galaxia a esa
+// escala, con un margen. Su tamaño solo depende de la escala.
+export function boxAround(cx, cy, scale, extent, pad = 12) {
+  const hw = Math.ceil(extent.x * scale + pad);
+  const hh = Math.ceil(extent.y * scale + pad);
+  return { x: Math.round(cx) - hw, y: Math.round(cy) - hh, w: 2 * hw, h: 2 * hh };
+}
+
+// La caja que debe ocupar el lienzo de la galaxia:
+// - dispersa (el grafo se abre o se cierra): todo el contenedor, los puntos salen volando;
+// - en reposo: lo justo para la galaxia (WebKit copia el lienzo entero en cada fotograma);
+// - mientras el hueco del escenario cambia (se minimiza la terminal, se redimensiona la
+//   ventana): una caja cuyo tamaño no cambie de un fotograma a otro, solo su posición. Vale
+//   la que ya hay (`current`) si la galaxia cabe en ella; si no, la de la escala máxima.
+export function planBox({ spread, moving, current, cx, cy, scale, extent, parent }) {
+  if (spread) return { x: 0, y: 0, w: Math.round(parent.width), h: Math.round(parent.height), full: true };
+  const tight = boxAround(cx, cy, scale, extent);
+  if (!moving) return tight;
+  const max = boxAround(cx, cy, MAX_SCALE, extent);
+  const reusable = current && !current.full && current.w >= tight.w && current.h >= tight.h && current.w <= max.w && current.h <= max.h;
+  if (!reusable) return max;
+  return { x: Math.round(cx) - current.w / 2, y: Math.round(cy) - current.h / 2, w: current.w, h: current.h };
 }
 
 const VERTEX = `
 attribute vec4 a_orbit; // radio, ángulo inicial, altura, velocidad angular
 attribute vec4 a_style; // tamaño, brillo, fase, tipo
+attribute vec3 a_color; // tinte
 uniform vec2 u_res;
 uniform vec2 u_center;
 uniform float u_scale;
@@ -140,6 +202,7 @@ uniform float u_dpr;
 uniform float u_core;
 uniform float u_twinkle;
 varying float v_alpha;
+varying vec3 v_color;
 void main() {
   float ang = a_orbit.y + a_orbit.w * u_time;
   float x = cos(ang) * a_orbit.x;
@@ -163,15 +226,17 @@ void main() {
   // En una galaxia pequeña los puntos (1 px como mínimo) se amontonan y saturan: se apagan un poco.
   a *= clamp(u_scale / (300.0 * u_dpr), 0.55, 1.0);
   v_alpha = a * pow(1.0 - u_spread, 1.5);
+  v_color = a_color;
 }`;
 
 const FRAGMENT = `
 precision mediump float;
 varying float v_alpha;
+varying vec3 v_color;
 void main() {
   vec2 c = gl_PointCoord - 0.5;
   float a = v_alpha * (1.0 - smoothstep(0.1, 0.25, dot(c, c)));
-  gl_FragColor = vec4(a, a, a, a);
+  gl_FragColor = vec4(v_color * a, a);
 }`;
 
 function webglRenderer(canvas, points) {
@@ -196,20 +261,21 @@ function webglRenderer(canvas, points) {
     return null;
   }
   gl.useProgram(program);
-  const attribute = (name, data) => {
+  const attribute = (name, data, size = 4) => {
     const buffer = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     const at = gl.getAttribLocation(program, name);
     gl.enableVertexAttribArray(at);
-    gl.vertexAttribPointer(at, 4, gl.FLOAT, false, 0, 0);
+    gl.vertexAttribPointer(at, size, gl.FLOAT, false, 0, 0);
   };
   attribute('a_orbit', points.orbit);
   attribute('a_style', points.style);
+  attribute('a_color', points.color, 3);
   const u = {};
   for (const name of ['res', 'center', 'scale', 'time', 'spread', 'glow', 'tilt', 'turn', 'dpr', 'core', 'twinkle']) u[name] = gl.getUniformLocation(program, `u_${name}`);
   gl.enable(gl.BLEND);
-  gl.blendFunc(gl.ONE, gl.ONE); // luz que se suma: el núcleo denso brilla solo
+  gl.blendFunc(gl.ONE, gl.ONE); // luz que se suma: el núcleo denso brilla solo y sus tintes dan blanco
   gl.clearColor(0, 0, 0, 0);
   return {
     kind: 'webgl',
@@ -233,7 +299,7 @@ function webglRenderer(canvas, points) {
   };
 }
 
-// Sin WebGL (pintado por CPU): uno de cada tres puntos, agrupados por brillo.
+// Sin WebGL (pintado por CPU): uno de cada tres puntos, agrupados por brillo y por tinte.
 function canvasRenderer(canvas, points) {
   const ctx = canvas.getContext('2d');
   const step = 3;
@@ -241,7 +307,8 @@ function canvasRenderer(canvas, points) {
   const ids = [];
   for (let i = 0; i < points.count; i += step) ids.push(i);
   const bucket = new Uint8Array(points.count);
-  for (const i of ids) bucket[i] = Math.min(BUCKETS - 1, Math.floor(points.style[i * 4 + 1] * BUCKETS));
+  for (const i of ids) bucket[i] = Math.min(BUCKETS - 1, Math.floor(points.style[i * 4 + 1] * BUCKETS)) + points.tone[i] * BUCKETS;
+  const fills = TINTS.map((t) => `rgb(${t.map((v) => Math.round(v * 255)).join(' ')})`);
   return {
     kind: '2d',
     draw(state) {
@@ -250,7 +317,6 @@ function canvasRenderer(canvas, points) {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = '#fff';
       const ci = look.tilt;
       const si = Math.sqrt(1 - ci * ci);
       const turn = (look.angle * Math.PI) / 180;
@@ -258,7 +324,7 @@ function canvasRenderer(canvas, points) {
       const ts = Math.sin(turn);
       const fade = Math.pow(1 - state.spread, 1.5);
       const spread = state.spread * state.spread;
-      const paths = Array.from({ length: BUCKETS }, () => new Path2D());
+      const paths = Array.from({ length: BUCKETS * TINTS.length }, () => new Path2D());
       for (const i of ids) {
         const o = i * 4;
         const ang = orbit[o + 1] + orbit[o + 3] * state.time;
@@ -273,10 +339,12 @@ function canvasRenderer(canvas, points) {
         const size = Math.max(1, style[o] * dpr);
         paths[bucket[i]].rect(px - size / 2, py - size / 2, size, size);
       }
-      for (let b = 0; b < BUCKETS; b++) {
-        const small = Math.min(1, Math.max(0.55, state.scale / 300));
+      const small = Math.min(1, Math.max(0.55, state.scale / 300));
+      for (let k = 0; k < paths.length; k++) {
+        const b = k % BUCKETS;
+        ctx.fillStyle = fills[(k - b) / BUCKETS];
         ctx.globalAlpha = Math.min(1, ((b + 0.5) / BUCKETS) * 1.6 * fade * small * (1 + state.glow * 0.3));
-        ctx.fill(paths[b]);
+        ctx.fill(paths[k]);
       }
       ctx.globalAlpha = 1;
     },
@@ -284,6 +352,11 @@ function canvasRenderer(canvas, points) {
 }
 
 const ease = (t) => 1 - Math.pow(1 - t, 3);
+
+// El hueco del escenario se da por quieto cuando lleva este tiempo sin cambiar.
+const SETTLE_MS = 240;
+// Fotogramas que se dibuja el lienzo de reserva antes de enseñarlo.
+const SWAP_FRAMES = 2;
 
 // En reposo la galaxia se repinta como mucho a esta frecuencia: gira tan despacio (menos de
 // medio píxel por fotograma) que a 120 Hz no se ve distinta, y cada fotograma de un lienzo
@@ -294,15 +367,32 @@ const IDLE_FPS = 60;
 export function createGalaxy(canvas, { stage, onOpen }) {
   const points = makePoints(LOOK);
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
-  let renderer = webglRenderer(canvas, points);
-  if (!renderer) renderer = canvasRenderer(canvas, points);
+  const rendererFor = (el) => webglRenderer(el, points) ?? canvasRenderer(el, points);
+  const renderer = rendererFor(canvas);
   canvas.dataset.renderer = renderer.kind;
+
+  // Dos lienzos y solo uno a la vista. En WebKitGTK, cambiar el tamaño de un lienzo que se
+  // ve hace parpadear la galaxia (durante un fotograma su imagen y su caja no casan), así
+  // que el visible nunca cambia de tamaño: cuando hace falta otro, se prepara el de reserva
+  // (casi transparente, pero ya compuesto) y se intercambian cuando tiene la imagen.
+  let front = { canvas, renderer, box: null }; // box: { x, y, w, h, dpr, full? } en px CSS del contenedor
+  let back = null;
+  {
+    const spare = canvas.cloneNode(false);
+    spare.removeAttribute('id');
+    spare.classList.add('is-spare');
+    canvas.after(spare);
+    const spareRenderer = rendererFor(spare);
+    if (spareRenderer.kind === renderer.kind) back = { canvas: spare, renderer: spareRenderer, box: null };
+    else spare.remove(); // sin un segundo lienzo igual, el único cambia de tamaño como antes
+  }
+  let pending = 0; // fotogramas que faltan para enseñar el lienzo de reserva
+  let movedAt = -Infinity; // última vez que cambió el hueco del escenario
 
   const extent = galaxyExtent(points, LOOK);
   let dpr = 1;
   let frame = frameFor({ left: 0, top: 0, width: 800, height: 600 });
   let parent = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
-  let box = null; // { x, y, w, h, dpr }: el lienzo dentro de su contenedor (px CSS)
   const listeners = new Set();
   let active = false;
   let raf = 0;
@@ -318,6 +408,7 @@ export function createGalaxy(canvas, { stage, onOpen }) {
     const next = frameFor(r);
     if (next.cx === frame.cx && next.cy === frame.cy && next.scale === frame.scale) return;
     frame = next;
+    movedAt = performance.now();
     for (const fn of listeners) fn(frame);
     request();
   }
@@ -333,28 +424,65 @@ export function createGalaxy(canvas, { stage, onOpen }) {
   // En reposo el lienzo cubre solo la galaxia (con un margen), no la ventana: WebKit copia
   // cada fotograma del lienzo entero aunque apenas cambie, y así copia unas cuatro veces
   // menos. Al dispersarse (abrir o cerrar el grafo) los puntos salen de ese rectángulo y el
-  // lienzo pasa a cubrir todo el contenedor hasta que vuelven a su sitio.
-  function layoutBox() {
-    let x = 0;
-    let y = 0;
-    let w = Math.round(parent.width);
-    let h = Math.round(parent.height);
-    if (spread < 0.001 && !tween) {
-      const pad = 12;
-      const cx = frame.cx - parent.left;
-      const cy = frame.cy - parent.top;
-      const hw = extent.x * frame.scale + pad;
-      const hh = extent.y * frame.scale + pad;
-      x = Math.max(0, Math.floor(cx - hw));
-      y = Math.max(0, Math.floor(cy - hh));
-      w = Math.min(w, Math.ceil(cx + hw)) - x;
-      h = Math.min(h, Math.ceil(cy + hh)) - y;
+  // lienzo pasa a cubrir todo el contenedor hasta que vuelven a su sitio (ver `planBox`).
+  const sameSize = (a, b) => Boolean(a) && a.w === b.w && a.h === b.h && a.dpr === dpr;
+
+  function setBox(layer, box) {
+    const b = layer.box;
+    const el = layer.canvas;
+    if (!b || b.x !== box.x || b.y !== box.y) Object.assign(el.style, { left: `${box.x}px`, top: `${box.y}px` });
+    if (!sameSize(b, box)) {
+      Object.assign(el.style, { width: `${box.w}px`, height: `${box.h}px` });
+      el.width = Math.max(1, Math.round(box.w * dpr));
+      el.height = Math.max(1, Math.round(box.h * dpr));
     }
-    if (box && box.x === x && box.y === y && box.w === w && box.h === h && box.dpr === dpr) return;
-    box = { x, y, w, h, dpr };
-    Object.assign(canvas.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
-    canvas.width = Math.max(1, Math.round(w * dpr));
-    canvas.height = Math.max(1, Math.round(h * dpr));
+    layer.box = { ...box, dpr };
+  }
+
+  function paint(layer, time) {
+    const cx = frame.cx - parent.left - layer.box.x;
+    const cy = frame.cy - parent.top - layer.box.y;
+    layer.renderer.draw({ ...frame, cx, cy, time, spread, glow, dpr, look: LOOK });
+  }
+
+  function swap() {
+    front.canvas.classList.add('is-spare');
+    back.canvas.classList.remove('is-spare');
+    [front, back] = [back, front];
+    pending = 0;
+    // El que deja de verse suelta su memoria (puede ser del tamaño de la ventana).
+    setBox(back, { x: 0, y: 0, w: 1, h: 1 });
+  }
+
+  function layout(now, time) {
+    const cx = frame.cx - parent.left;
+    const cy = frame.cy - parent.top;
+    const want = planBox({
+      spread: spread >= 0.001 || Boolean(tween),
+      moving: now - movedAt < SETTLE_MS,
+      current: front.box,
+      cx,
+      cy,
+      scale: frame.scale,
+      extent,
+      parent,
+    });
+    if (!back || !front.box || sameSize(front.box, want)) {
+      // Mismo tamaño (o no hay con qué intercambiar): el lienzo visible solo se mueve.
+      setBox(front, want);
+      paint(front, time);
+      pending = 0;
+      return;
+    }
+    // Otro tamaño: se prepara el lienzo de reserva y, mientras, el visible sigue a la galaxia
+    // con el tamaño que tiene.
+    if (!sameSize(back.box, want)) pending = SWAP_FRAMES;
+    setBox(back, want);
+    paint(back, time);
+    const f = front.box;
+    setBox(front, f.full ? f : { ...f, x: Math.round(cx) - f.w / 2, y: Math.round(cy) - f.h / 2 });
+    paint(front, time);
+    if (--pending <= 0) swap();
   }
 
   function request() {
@@ -365,7 +493,7 @@ export function createGalaxy(canvas, { stage, onOpen }) {
 
   function draw(now) {
     raf = 0;
-    const settled = !tween && glow === (hover ? 1 : 0);
+    const settled = !tween && glow === (hover ? 1 : 0) && !pending && now - movedAt >= SETTLE_MS;
     if (settled && now - drawnAt < 1000 / IDLE_FPS - 2) {
       request();
       return;
@@ -385,12 +513,10 @@ export function createGalaxy(canvas, { stage, onOpen }) {
     if (Math.abs(target - glow) < 0.01) glow = target;
     const time = reduced.matches ? frozenAt : now / 1000;
     if (!reduced.matches) frozenAt = time;
-    layoutBox();
-    const cx = frame.cx - parent.left - box.x;
-    const cy = frame.cy - parent.top - box.y;
-    renderer.draw({ ...frame, cx, cy, time, spread, glow, dpr, look: LOOK });
-    // Quieta (movimiento reducido) solo se repinta mientras algo cambia.
-    if (tween || (active && (!reduced.matches || glow !== target))) request();
+    layout(now, time);
+    // Quieta (movimiento reducido) solo se repinta mientras algo cambia: una transición, el
+    // brillo, un intercambio de lienzos pendiente o el hueco que aún se mueve.
+    if (tween || pending || now - movedAt < SETTLE_MS || (active && (!reduced.matches || glow !== target))) request();
   }
 
   // La galaxia se centra en el hueco del escenario, que cambia al expandir, contraer o
@@ -411,21 +537,28 @@ export function createGalaxy(canvas, { stage, onOpen }) {
     return (u / rx) ** 2 + (v / ry) ** 2 <= 1;
   }
 
-  canvas.addEventListener('pointermove', (event) => {
-    const inside = active && spread < 0.05 && contains(event.clientX, event.clientY);
-    if (inside === hover) return;
-    hover = inside;
-    canvas.style.cursor = inside ? 'pointer' : '';
-    request();
-  });
-  canvas.addEventListener('pointerleave', () => {
-    hover = false;
-    canvas.style.cursor = '';
-    request();
-  });
-  canvas.addEventListener('click', (event) => {
-    if (active && spread < 0.05 && contains(event.clientX, event.clientY)) onOpen();
-  });
+  // El lienzo a la vista cambia: los dos atienden al ratón.
+  const canvases = [front.canvas, ...(back ? [back.canvas] : [])];
+  const setCursor = (value) => canvases.forEach((el) => (el.style.cursor = value));
+  for (const el of canvases) {
+    el.addEventListener('pointermove', (event) => {
+      const inside = active && spread < 0.05 && contains(event.clientX, event.clientY);
+      if (inside === hover) return;
+      hover = inside;
+      setCursor(inside ? 'pointer' : '');
+      request();
+    });
+    el.addEventListener('pointerleave', () => {
+      // Al intercambiar los lienzos el ratón «sale» del que se oculta sin haberse movido.
+      if (el !== front.canvas) return;
+      hover = false;
+      setCursor('');
+      request();
+    });
+    el.addEventListener('click', (event) => {
+      if (active && spread < 0.05 && contains(event.clientX, event.clientY)) onOpen();
+    });
+  }
 
   function animate(to, ms) {
     return new Promise((resolve) => {
@@ -445,7 +578,7 @@ export function createGalaxy(canvas, { stage, onOpen }) {
         request();
       } else {
         hover = false;
-        canvas.style.cursor = '';
+        setCursor('');
       }
     },
     // Al abrir el grafo los puntos se dispersan y se apagan; al volver se recogen.

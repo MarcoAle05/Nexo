@@ -11,7 +11,7 @@ Un «NotebookLM propio» de escritorio: vuelcas tus fuentes en un vault de Obsid
 - **Fuentes.** PDF, Office, EPUB, Markdown y páginas web. MarkItDown las convierte a Markdown en tu equipo, sin IA, y cada una tiene su ficha con resumen e ideas clave.
 - **Wiki y grafo.** Claude integra las fuentes en notas atómicas enlazadas con `[[...]]`. El grafo las dibuja como estrellas por tema, con búsqueda, y se actualiza solo cuando algo cambia en el vault.
 - **Notas.** Un escritorio de cartas con un editor por bloques al estilo de Notion que guarda Markdown normal dentro del vault.
-- **Claude, de dos maneras.** Nexo (la API) compila fuentes, responde preguntas y conversa con la wiki como contexto. Claude Code corre en una terminal real dentro de la app y hace de orquestador.
+- **Claude, de dos maneras.** Claude Code corre dentro de la app con tu suscripción y se ve como un chat con el diseño de nexo: sus respuestas, sus procesos y los permisos que pide; hace de orquestador y eliges su modelo, su esfuerzo y su modo de permisos desde el propio chat. Nexo (la API) compila fuentes en la wiki y responde preguntas con ella: se lanza desde el menú «/» de ese chat (`/compilar`, `/preguntar`).
 - **Skills y agentes.** Las skills y los subagentes de Claude Code del vault se ven y se crean desde la app. El registro muestra qué agente gastó qué parte de tu sesión de 5 horas.
 - **Lectura de webs.** Antigravity o Playwright leen la página; Claude Code puede usar un Chrome con tus sesiones y pide confirmación antes de cualquier acción con efectos.
 
@@ -20,8 +20,8 @@ Todo vive en archivos Markdown de tu vault (`raw/` → `wiki/` → `output/`), a
 ## Stack
 
 - **Escritorio:** Tauri 2 con backend en Rust.
-- **Interfaz:** Vite y JavaScript sin framework; galaxia en WebGL, grafo en canvas con d3-force y d3-zoom, terminal con xterm.js, Markdown con marked y DOMPurify.
-- **IA:** la Messages API de Claude, Claude Code y Antigravity como CLI, y los servidores MCP de MarkItDown y Playwright.
+- **Interfaz:** Vite y JavaScript sin framework; galaxia en WebGL, grafo en canvas con d3-force y d3-zoom, Markdown con marked y DOMPurify.
+- **IA:** la Messages API de Claude, Claude Code (sin terminal, por su protocolo `stream-json`) y Antigravity como CLI, y los servidores MCP de MarkItDown y Playwright.
 
 ## Cómo correrlo
 
@@ -38,8 +38,8 @@ Para todas las funciones hacen falta además:
 
 - `markitdown-mcp`: `uv tool install --python 3.12 markitdown-mcp`
 - `playwright-mcp`: `npm install -g --prefix ~/.local @playwright/mcp` (usa el Google Chrome instalado)
-- `claude` (Claude Code) y `agy` (Antigravity) en el `PATH`
-- Una clave de API de Anthropic para Nexo, en `ANTHROPIC_API_KEY` o guardada desde la app. Claude Code usa tu suscripción.
+- `claude` (Claude Code, con la sesión iniciada: el chat usa tu suscripción) y `agy` (Antigravity) en el `PATH`
+- Una clave de API de Anthropic para Nexo (compilar y preguntar), en `ANTHROPIC_API_KEY` o guardada desde el chat con `/clave`. Claude Code usa tu suscripción.
 
 Pruebas:
 
@@ -70,4 +70,4 @@ El binario queda en `src-tauri/target/release/nexo-mcp`. Las seis herramientas y
 
 ## Licencia
 
-[MIT](LICENSE). Las skills de diseño de `.claude/skills/` son de terceros y conservan su licencia: [Impeccable](https://github.com/pbakaus/impeccable) (Apache-2.0) y [taste-skill](https://github.com/Leonxlnx/taste-skill) (MIT), con sus textos en [`licenses/`](licenses/).
+[MIT](LICENSE). Las skills de diseño de `.claude/skills/` son de terceros y conservan su licencia: [Impeccable](https://github.com/pbakaus/impeccable) (Apache-2.0), [taste-skill](https://github.com/Leonxlnx/taste-skill) (MIT) y las de [jakubkrehel/skills](https://github.com/jakubkrehel/skills) (MIT), con sus textos en [`licenses/`](licenses/).
