@@ -187,7 +187,7 @@ export function createAgents({ invoke, ask, fail, onCreate }) {
     specs[0].textContent = modelLabel(item.model);
     specs[1].textContent = effortLabel(item.effort);
     li.querySelector('.agent-desc').textContent = item.text;
-    li.title = 'creador-de-skills está trabajando en la terminal de Claude Code';
+    li.title = 'creador-de-skills está trabajando: lo verás en el chat con Claude';
     return li;
   }
 

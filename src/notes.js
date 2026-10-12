@@ -4,6 +4,7 @@
 // línea (note-editor.js), y se guardan en Markdown (notas.rs); la disposición del
 // escritorio, en .nexo/escritorio.json (Claude Code también la edita).
 
+import { fitCards } from './desk-layout.js';
 import { reconcile } from './dom.js';
 import { createNoteEditor, isoToday, parseDate, relativeDay, taskCount } from './note-editor.js';
 
@@ -22,6 +23,7 @@ const ICON = {
   markdown: '<path d="m7 6-4 4 4 4M13 6l4 4-4 4"/>',
   front: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M4 13V5a1 1 0 0 1 1-1h8"/>',
   back: '<rect x="3" y="3" width="10" height="10" rx="2"/><path d="M16 7v8a1 1 0 0 1-1 1H7" stroke-dasharray="2 2"/>',
+  undo: '<path d="M7.5 4 4 7.5 7.5 11"/><path d="M4 7.5h7.5a4.5 4.5 0 0 1 0 9H8"/>',
 };
 
 const MIN_W = 220;
@@ -166,7 +168,10 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     main.addEventListener('click', () => openNote(note.path, { focus: true }));
     const actions = document.createElement('div');
     actions.className = 'row-actions';
-    actions.append(actionButton(ICON.trash, `Borrar ${note.title}`, () => remove(note.path, note.title, false)));
+    actions.append(
+      actionButton(ICON.pencil, `Renombrar ${note.title}`, () => renameNote(row, note)),
+      actionButton(ICON.trash, `Borrar ${note.title}`, () => remove(note.path, note.title, false)),
+    );
     row.append(main, actions);
     return li;
   }
@@ -240,12 +245,13 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     $('notes-scroll').scrollTop = 0;
   }
 
-  function renameTopic(row, topic) {
+  // Cambia el nombre de una fila en su sitio: el título se vuelve un campo de texto.
+  function renameRow(row, current, label, rename) {
     const title = row.querySelector('.row-title');
     const input = document.createElement('input');
     input.className = 'row-rename';
-    input.value = topic.title;
-    input.setAttribute('aria-label', 'Nuevo nombre del tema');
+    input.value = current;
+    input.setAttribute('aria-label', label);
     const main = row.querySelector('.row-main');
     main.replaceWith(input);
     input.focus();
@@ -255,16 +261,16 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       if (done) return;
       done = true;
       const value = input.value.trim();
-      if (save && value && value !== topic.title) {
+      if (save && value && value !== current) {
         try {
-          await invoke('topic_rename', { path: topic.path, title: value });
+          await rename(value);
         } catch (error) {
           fail(error);
         }
         await loadTree();
       } else {
         input.replaceWith(main);
-        title.textContent = topic.title;
+        title.textContent = current;
       }
     };
     input.addEventListener('keydown', (event) => {
@@ -273,6 +279,16 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     });
     input.addEventListener('blur', () => finish(true));
   }
+
+  const renameTopic = (row, topic) =>
+    renameRow(row, topic.title, 'Nuevo nombre del tema', (title) => invoke('topic_rename', { path: topic.path, title }));
+
+  // Si la nota está abierta, el cambio va por la fila de guardados de su carta.
+  const renameNote = (row, note) =>
+    renameRow(row, note.title, 'Nuevo nombre de la nota', (title) => {
+      const card = cards.get(note.path);
+      return card?.doc ? save(card, { title }) : invoke('note_save', { path: note.path, changes: { title } });
+    });
 
   async function remove(path, title, isTopic) {
     const message = isTopic
@@ -355,9 +371,9 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       });
   }
 
-  // Pinta la carta donde la dejó el usuario. Nunca la recoloca ni la encoge por su
-  // cuenta: si el escritorio se estrecha (al expandir o minimizar las cartas laterales),
-  // las cartas conservan posición y tamaño y el escritorio se desplaza.
+  // Pinta la carta donde la dejó el usuario. Aquí nunca se recoloca ni se encoge: si el
+  // escritorio se estrecha, las cartas conservan posición y tamaño y el escritorio se
+  // desplaza. La única excepción es volver a abrir la terminal (`fitToDesk`).
   function place(card) {
     Object.assign(card.el.style, {
       left: `${card.x}px`,
@@ -438,7 +454,10 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     const source = el.querySelector('.desk-editor');
     const tools = el.querySelector('.desk-card-tools');
     card.sourceButton = cardButton(ICON.markdown, 'Ver el Markdown', () => setSource(card, !card.source), 'card-source');
+    card.undoButton = cardButton(ICON.undo, 'Deshacer el último cambio', () => undoCard(card), 'card-undo');
+    card.undoButton.disabled = true;
     tools.append(
+      card.undoButton,
       cardButton(ICON.pencil, 'Renombrar', () => renameCard(card)),
       card.sourceButton,
       cardButton(ICON.front, 'Traer al frente', () => bringToFront(card)),
@@ -451,6 +470,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
         card.draft = markdown;
         scheduleSave(card);
         scheduleHead(card);
+        syncUndo(card);
       },
       onLink: (link) => onLink(link, card.path),
       onEscape: () => el.focus({ preventScroll: true }),
@@ -603,17 +623,35 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     const body = card.el.querySelector('.desk-card-body');
     const source = card.el.querySelector('.desk-editor');
     if (on === card.source) return;
-    if (!on) card.editor.setValue(source.value);
+    // Lo escrito en el Markdown a la vista cuenta como un paso de deshacer.
+    if (!on) card.editor.setValue(source.value, { undoable: true });
     else source.value = card.editor.getValue();
     card.source = on;
     body.hidden = on;
     source.hidden = !on;
-    card.el.classList.toggle('source', on);
+    // Ojo: `.source` a secas es la clase de las filas de Fuentes y descolocaba la carta.
+    card.el.classList.toggle('desk-md', on);
     card.sourceButton.title = on ? 'Volver a la nota' : 'Ver el Markdown';
     card.sourceButton.setAttribute('aria-label', card.sourceButton.title);
     card.sourceButton.setAttribute('aria-pressed', String(on));
+    syncUndo(card);
     if (on) source.focus();
     else card.editor.focusEnd();
+  }
+
+  // El botón de deshacer solo se enciende cuando hay un paso al que volver.
+  function syncUndo(card) {
+    card.undoButton.disabled = !card.source && !card.editor.canUndo();
+  }
+
+  // Un paso atrás en la nota (lo mismo que Ctrl+Z).
+  function undoCard(card) {
+    if (card.source) {
+      const source = card.el.querySelector('.desk-editor');
+      source.focus();
+      document.execCommand('undo');
+    } else card.editor.undo();
+    syncUndo(card);
   }
 
   function renameCard(card) {
@@ -654,8 +692,9 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       const doc = await invoke('note_read', { path: card.path });
       card.doc = doc;
       if (!same(doc.body, card.editor.getValue())) {
-        card.editor.setValue(doc.body);
+        card.editor.setValue(doc.body, { undoable: true });
         if (card.source) card.el.querySelector('.desk-editor').value = doc.body;
+        syncUndo(card);
       }
       renderHead(card);
     } catch {
@@ -774,6 +813,52 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     saveDesk();
   }
 
+  // Al volver a abrir la terminal el escritorio se estrecha y algunas cartas quedan cortadas
+  // o fuera: esas (y solo esas) se acomodan en el hueco libre más cercano.
+  function fitToDesk() {
+    const moved = fitCards(
+      [...cards.values()].map(({ path, x, y, w, h }) => ({ path, x, y, w, h })),
+      deskSize().w,
+      { gap: GAP, minW: MIN_W },
+    );
+    if (!moved.size) return;
+    surface.classList.add('arranging');
+    for (const [path, geometry] of moved) {
+      const card = cards.get(path);
+      Object.assign(card, geometry);
+      place(card);
+    }
+    surface.scrollLeft = 0;
+    setTimeout(() => surface.classList.remove('arranging'), 520);
+    saveDesk();
+  }
+
+  // El ancho del escritorio cambia poco a poco (la transición de las cartas laterales): se
+  // acomoda cuando lleva un momento quieto. Si el escritorio no se ve (otra vista), queda
+  // pendiente hasta que se vuelva a él.
+  let fitFrame = 0;
+  let fitPending = false;
+  function fitWhenSettled() {
+    fitPending = true;
+    cancelAnimationFrame(fitFrame);
+    const started = performance.now();
+    let width = -1;
+    let since = started;
+    const tick = (now) => {
+      const w = surface.clientWidth;
+      if (w !== width) {
+        width = w;
+        since = now;
+      }
+      if (w > 0 && now - since >= 250) {
+        fitPending = false;
+        return fitToDesk();
+      }
+      if (now - started < 3000) fitFrame = requestAnimationFrame(tick);
+    };
+    fitFrame = requestAnimationFrame(tick);
+  }
+
   $('desk-arrange').addEventListener('click', arrange);
   $('desk-close-all').addEventListener('click', () => {
     for (const path of [...cards.keys()]) closeCard(path, { persist: false });
@@ -833,6 +918,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       if (reset || !cards.size) await applyDesk();
       for (const card of cards.values()) place(card);
       renderDeskChrome();
+      if (fitPending) fitWhenSettled();
     },
     // Cambios en wiki/ (rutas relativas a wiki/).
     onWikiChanged(changed) {
@@ -860,5 +946,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     relayout() {
       for (const card of cards.values()) place(card);
     },
+    // La terminal se ha vuelto a abrir: acomoda las cartas que ya no caben a lo ancho.
+    fitAfterResize: fitWhenSettled,
   };
 }

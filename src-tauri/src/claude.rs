@@ -40,7 +40,7 @@ impl Claude {
             .filter(|k| !k.trim().is_empty())
             .or_else(|| read_config(app).api_key)
             .filter(|k| !k.trim().is_empty())
-            .ok_or("Falta la clave de la API de Anthropic. Escribe: clave sk-ant-…")?;
+            .ok_or("Falta la clave de la API de Anthropic. Escribe en el chat: /clave sk-ant-…")?;
         let http = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(600))
             .build()
@@ -71,7 +71,7 @@ impl Claude {
             .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
             .unwrap_or_default();
         Err(match status.as_u16() {
-            401 => "La clave de API no es válida (401). Revísala con: clave sk-ant-…".into(),
+            401 => "La clave de API no es válida (401). Revísala con: /clave sk-ant-…".into(),
             403 => format!("Sin permiso para esta petición (403). {detail}"),
             429 => "Límite de uso alcanzado (429). Espera un momento y vuelve a intentarlo.".into(),
             529 => "La API está saturada (529). Inténtalo de nuevo en unos segundos.".into(),

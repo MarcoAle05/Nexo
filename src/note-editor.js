@@ -11,6 +11,11 @@
 // La línea con el cursor se ve como Markdown; las demás, con formato (negrita, enlaces,
 // [[enlaces]] de Obsidian, fechas 📅). Las líneas que no se tocan se guardan exactamente
 // como estaban.
+//
+// Cada línea es un campo editable aparte, así que el navegador no puede seleccionar texto de
+// una a otra. Para eso hay una selección de líneas enteras: Ctrl+A (toda la nota) o arrastrar
+// el ratón de una línea a otra. Lo seleccionado se copia y se corta como Markdown, se borra
+// con Supr y se sustituye al escribir o pegar.
 
 // ------------------------------------------------------------------ Markdown ↔ bloques
 
@@ -488,6 +493,9 @@ function setCaret(el, offset) {
   sel.addRange(range);
 }
 
+// El salto de línea final no cuenta como diferencia.
+const same = (a, b) => (a ?? '').replace(/\n+$/, '') === (b ?? '').replace(/\n+$/, '');
+
 export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable }) {
   const root = document.createElement('div');
   root.className = 'ne';
@@ -497,6 +505,17 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
   const menu = createMenu(applyOption);
   const history = { past: [], future: [] };
   let typing = 0;
+  // Con líneas seleccionadas el foco está en este campo oculto, que lleva su Markdown
+  // seleccionado. Así copiar, cortar, pegar y escribir encima son los del navegador (también
+  // con acentos y métodos de entrada): lo que acabe en el campo sustituye a las líneas.
+  const proxy = document.createElement('textarea');
+  proxy.className = 'ne-proxy';
+  proxy.spellcheck = false;
+  proxy.tabIndex = -1;
+  proxy.setAttribute('aria-label', 'Líneas seleccionadas');
+  host.append(proxy);
+  let picked = null; // { from, to }: índices de la primera y la última línea seleccionadas
+  let drag = null; // { index, active }: arrastre del ratón que empezó en una línea
 
   const indexOf = (b) => blocks.indexOf(b);
   const blockOf = (el) => blocks.find((b) => String(b.id) === el?.closest('.ne-row')?.dataset.id) ?? null;
@@ -636,6 +655,7 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
   }
 
   function render() {
+    picked = null;
     rows.clear();
     root.replaceChildren(...blocks.map(row));
     refreshNumbers();
@@ -781,6 +801,145 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
     restore(s);
   }
 
+  // ---------- selección de líneas
+
+  function pick(a, b) {
+    const from = Math.max(0, Math.min(a, b));
+    let to = Math.min(blocks.length - 1, Math.max(a, b));
+    // La línea vacía del final no es de la nota: no entra salvo que sea la única.
+    if (to > from && blocks[to]?.ghost) to -= 1;
+    picked = { from, to };
+    blocks.forEach((blk, i) => rows.get(blk.id)?.classList.toggle('ne-picked', i >= from && i <= to));
+    menu.close();
+    proxy.value = serializeBlocks(blocks.slice(from, to + 1));
+    proxy.focus({ preventScroll: true });
+    proxy.select();
+  }
+
+  function unpick() {
+    if (!picked) return;
+    picked = null;
+    for (const el of rows.values()) el.classList.remove('ne-picked');
+  }
+
+  // Quita las líneas seleccionadas. Con `replace` deja una línea vacía en su sitio (para
+  // escribir o pegar encima); sin él, el cursor va al principio de la línea que les seguía.
+  function removePicked(replace) {
+    if (!picked) return null;
+    snapshot();
+    const { from, to } = picked;
+    blocks.splice(from, to - from + 1);
+    let target = blocks[from] ?? null;
+    if (replace || !target) {
+      if (!target || target.type !== 'p' || target.text) {
+        target = makeBlock('p');
+        blocks.splice(from, 0, target);
+      }
+    }
+    ensureGhost();
+    render();
+    focusBlock(target, 0);
+    changed();
+    return target;
+  }
+
+  function onPickedKey(e) {
+    if (!picked || e.isComposing) return;
+    const mod = e.ctrlKey || e.metaKey;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    if (mod && k === 'a') {
+      e.preventDefault();
+      return pick(0, blocks.length - 1);
+    }
+    if (mod && (k === 'z' || k === 'y')) {
+      e.preventDefault();
+      unpick();
+      return k === 'y' || e.shiftKey ? redo() : undo();
+    }
+    if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault();
+      return removePicked(false);
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      return removePicked(true);
+    }
+    if (e.key === 'Tab') return e.preventDefault();
+    if (e.key === 'Escape' || e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'ArrowDown' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const start = e.key === 'ArrowUp' || e.key === 'ArrowLeft';
+      const b = blocks[start ? picked.from : picked.to];
+      unpick();
+      return focusBlock(b, start ? 0 : 'end');
+    }
+    // Lo demás (letras, copiar, cortar, pegar) lo hace el navegador en el campo oculto.
+  }
+
+  // El campo oculto ha cambiado: lo que tenga ahora (lo tecleado o pegado; nada si se cortó)
+  // sustituye a las líneas seleccionadas, en un solo paso de deshacer.
+  function onProxyInput(e) {
+    if (!picked || e?.isComposing) return;
+    const text = proxy.value.replace(/\r\n?/g, '\n').replace(/\n$/, '');
+    if (!text) return removePicked(false);
+    const target = removePicked(true);
+    if (text.includes('\n')) insertLines(target, textOf(target), text, false);
+    else {
+      target.text = text;
+      target.raw = null;
+      target.ghost = false;
+      refresh(target);
+      syncGhost();
+      focusBlock(target, 'end');
+      changed();
+    }
+    // Lo que se teclee a continuación sigue en el mismo paso.
+    clearTimeout(typing);
+    typing = setTimeout(() => (typing = 0), 800);
+  }
+
+  // Línea que queda a la altura `y` de la ventana (la primera o la última si cae fuera).
+  function indexAtY(y) {
+    let best = -1;
+    for (let i = 0; i < blocks.length; i++) {
+      const r = rows.get(blocks[i].id)?.getBoundingClientRect();
+      if (!r) continue;
+      if (y < r.top) return best < 0 ? i : best;
+      best = i;
+      if (y <= r.bottom) return i;
+    }
+    return best;
+  }
+
+  function onDragMove(e) {
+    if (!drag) return;
+    if (!(e.buttons & 1)) return onDragEnd();
+    const i = indexAtY(e.clientY);
+    if (i < 0 || (!drag.active && i === drag.index)) return; // dentro de su línea manda la selección normal
+    if (!drag.active) {
+      // Rozar la línea de al lado al seleccionar texto no cuenta: hay que entrar en ella.
+      const r = rows.get(blocks[i].id).getBoundingClientRect();
+      const deep = Math.min(8, r.height / 2);
+      if (e.clientY < r.top + deep || e.clientY > r.bottom - deep) return;
+    }
+    drag.active = true;
+    root.classList.add('ne-dragging');
+    e.preventDefault();
+    if (!picked || picked.from !== Math.min(drag.index, i) || picked.to !== Math.max(drag.index, i)) pick(drag.index, i);
+    // Cerca del borde de la carta, la nota se desplaza para seguir seleccionando.
+    const box = host.getBoundingClientRect();
+    if (e.clientY < box.top + 24) host.scrollTop -= 14;
+    else if (e.clientY > box.bottom - 24) host.scrollTop += 14;
+  }
+
+  function onDragEnd() {
+    drag = null;
+    root.classList.remove('ne-dragging');
+    document.removeEventListener('mousemove', onDragMove);
+    document.removeEventListener('mouseup', onDragEnd);
+    // Al soltar, el navegador recoloca la selección: el campo oculto vuelve a quedar entero.
+    if (picked) setTimeout(() => picked && document.activeElement === proxy && proxy.select(), 0);
+  }
+
   // ---------- cambios
 
   function changed() {
@@ -906,8 +1065,8 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
   }
 
   // Inserta texto con varias líneas: cada línea es un bloque (se interpreta como Markdown).
-  function insertLines(b, el, text) {
-    snapshot();
+  function insertLines(b, el, text, undoable = true) {
+    if (undoable) snapshot();
     const { start, end } = offsets(el) ?? { start: b.text.length, end: b.text.length };
     const current = readText(el);
     const before = current.slice(0, start);
@@ -975,6 +1134,16 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
     if (mod && k === 'y') {
       e.preventDefault();
       return redo();
+    }
+    if (mod && k === 'a') {
+      // Toda la nota. En un bloque de código o una tabla, primero su texto y, si ya está
+      // seleccionado entero (o vacío), la nota.
+      if (MULTILINE.has(b.type)) {
+        const o = offsets(el);
+        if (b.text && !(o && o.start === 0 && o.end >= readText(el).length)) return;
+      }
+      e.preventDefault();
+      return pick(0, blocks.length - 1);
     }
     if (mod && e.key === 'Enter' && b.type === 'todo') {
       e.preventDefault();
@@ -1188,6 +1357,11 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
   // ---------- eventos
 
   root.addEventListener('keydown', onKey);
+  proxy.addEventListener('keydown', onPickedKey);
+  proxy.addEventListener('input', onProxyInput);
+  proxy.addEventListener('compositionend', () => onProxyInput());
+  // Al salir del campo oculto (clic en una línea, en otra carta…) la selección termina.
+  proxy.addEventListener('blur', unpick);
 
   root.addEventListener('beforeinput', (e) => {
     if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
@@ -1261,6 +1435,13 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
 
   root.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
+    // Arrastrar de una línea a otra selecciona líneas enteras.
+    const from = e.target.closest?.('.ne-row');
+    if (from && !e.target.closest('input, button')) {
+      drag = { index: indexOf(blockOf(from)), active: false };
+      document.addEventListener('mousemove', onDragMove);
+      document.addEventListener('mouseup', onDragEnd);
+    }
     const el = e.target.closest?.('.ne-text');
     const link = e.target.closest?.('a');
     if (el && link && el.dataset.mode === 'view') return e.preventDefault(); // el clic abre el enlace
@@ -1306,7 +1487,11 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
 
   // ---------- API
 
-  function setValue(markdown) {
+  // Sustituye toda la nota. Con `undoable`, deshacer devuelve lo que había (se usa cuando la
+  // nota cambia desde fuera del editor: el Markdown a la vista, Claude Code, Obsidian).
+  function setValue(markdown, { undoable = false } = {}) {
+    if (undoable && same(markdown, serializeBlocks(blocks))) return;
+    if (undoable) snapshot();
     blocks = parseMarkdown(markdown);
     ensureGhost();
     render();
@@ -1315,10 +1500,19 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
   return {
     setValue,
     getValue: () => serializeBlocks(blocks),
-    hasFocus: () => root.contains(document.activeElement),
+    hasFocus: () => root.contains(document.activeElement) || document.activeElement === proxy,
     focusEnd: () => focusBlock(blocks.at(-1), 'end'),
+    // Un paso atrás (lo mismo que Ctrl+Z) y si hay algo que deshacer.
+    undo() {
+      unpick();
+      undo();
+    },
+    canUndo: () => history.past.length > 0,
+    selectAll: () => pick(0, blocks.length - 1),
     destroy() {
+      onDragEnd();
       menu.destroy();
+      proxy.remove();
       root.remove();
     },
   };
