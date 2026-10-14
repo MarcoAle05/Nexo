@@ -2170,10 +2170,10 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
   flex-shrink: 0;
   min-width: 58px;
   height: 32px;
-  padding: 0 6px;
+  padding: 0 4px;
   border-radius: var(--r-sm);
-  font-family: var(--mono);
-  font-size: 12px;
+  /* En Inter, como el resto de la barra; las cifras tabulares no bailan al cambiar. */
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   text-align: center;
   color: var(--fg);
@@ -2270,6 +2270,9 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
   outline: none;
   font-size: 13px;
 }
+/* La pista de «Nuevo escritorio» es una frase, no una ruta: va en Inter (las demás opciones
+   de estos menús enseñan rutas en la monoespaciada). */
+.desks-new small { font-family: var(--sans); font-size: 11.5px; }
 .desks-new[aria-disabled="true"] { cursor: default; }
 .desks-new[aria-disabled="true"] > span { color: var(--dim); }
 .desks-empty { margin: 2px 12px 8px; font-size: 11.5px; line-height: 1.45; color: var(--dim); }
@@ -2311,7 +2314,8 @@ body[data-view="notas"] .clock-date { display: none; }
   body[data-view="notas"] .brand { padding-right: 8px; }
   body[data-view="notas"] .desk-map { width: 92px; }
   body[data-view="notas"] .desk-zoom { padding: 0 4px; }
-  body[data-view="notas"] .desk-zoom-value { min-width: 0; padding: 0 4px; }
+  /* En Inter a 12 px y con 2 px a los lados ocupa lo que ocupaba en la monoespaciada. */
+  body[data-view="notas"] .desk-zoom-value { min-width: 0; padding: 0 2px; font-size: 12px; }
   /* La zona derecha mide media ventana menos el selector: la barra del zoom se lleva lo que
      queda tras las demás piezas (40 px a 1024 de ancho, los 92 de siempre desde unos 1130). */
   body[data-view="notas"] .desk-zoom-range { flex: 0 0 auto; width: clamp(40px, calc(50vw - 474px), 92px); }
