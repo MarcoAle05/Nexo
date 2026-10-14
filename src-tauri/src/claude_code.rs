@@ -175,9 +175,13 @@ se sangran con tabulador. Para fechas y vencimientos escribe «📅 AAAA-MM-DD»
 renta 📅 2026-10-31»): nexo la muestra como fecha y avisa si vence. Nombre de archivo en kebab-case; no lo \
 cambies al renombrar (cambia title), para no romper enlaces.\n\
 - Para mostrar notas en el escritorio de notas, edita .nexo/escritorio.json (en la raíz del vault): \
-{{\"cards\":[{{\"path\":\"<ruta relativa a wiki/notas/, p. ej. rutinas/pecho/press.md>\",\"x\":24,\"y\":24,\"w\":340,\"h\":280,\"z\":1}}]}} \
-(x, y, w, h en píxeles dentro del escritorio; z es la capa, mayor = encima). Conserva las cartas que ya estén y \
-añade o quita solo las que te pidan; la app lo aplica al momento.\n\
+{{\"cards\":[{{\"path\":\"<ruta relativa a wiki/notas/, p. ej. rutinas/pecho/press.md>\",\"x\":24,\"y\":24,\"w\":380,\"h\":440,\"z\":1}}]}} \
+(x, y, w, h en píxeles; z es la capa, mayor = encima). El escritorio es un lienzo enorme que ocupa toda la app: \
+x e y son posiciones en él y pueden ser negativas. Una carta nueva va a la derecha de la última, a su misma \
+altura y con su mismo tamaño (x = su x + su w + 16), para que queden en fila. Conserva las cartas que ya estén \
+y los demás campos del archivo (como `view`, lo que se está viendo) y añade o quita solo las que te pidan; la \
+app lo aplica al momento y lleva la vista a la carta nueva. Ese archivo es el escritorio que está abierto; los \
+demás escritorios y los archivados están en .nexo/escritorios.json, que no debes tocar.\n\
 - Historial y seguimiento: si el usuario quiere conservar lo anterior (p. ej. series y cargas de cada día) mientras \
 la nota muestra lo más reciente, actualiza la nota con lo nuevo y guarda el registro en notas del grafo fuera de \
 notas/ (p. ej. wiki/<tema>/historial/AAAA-MM-DD-<cosa>.md o una nota de progreso con una tabla por fecha), \
@@ -593,6 +597,8 @@ mod tests {
         let prompt = orchestrator_prompt(Path::new("/vault"), "Nexo · prueba");
         assert!(prompt.contains("wiki/notas/"));
         assert!(prompt.contains(r#"{"cards":[{"path":"#));
+        assert!(prompt.contains("lienzo enorme"));
+        assert!(prompt.contains(".nexo/escritorios.json, que no debes tocar"));
         assert!(prompt.contains("<!-- nexo:contenido -->"));
         assert!(prompt.contains("📅 AAAA-MM-DD"));
     }

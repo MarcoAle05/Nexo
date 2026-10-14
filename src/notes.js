@@ -1,10 +1,14 @@
 // Apartado Notas: la carta de la izquierda muestra temas, subtemas y notas de
-// wiki/notas/, y el centro es un escritorio donde cada nota abierta es una carta que se
-// mueve, se redimensiona y se apila. Las notas se escriben directamente en la carta, línea a
-// línea (note-editor.js), y se guardan en Markdown (notas.rs); la disposición del
-// escritorio, en .nexo/escritorio.json (Claude Code también la edita).
+// wiki/notas/, y detrás de toda la app hay un lienzo donde cada nota abierta es una carta
+// que se mueve, se redimensiona y se apila. El lienzo es tan grande que hace de infinito: se
+// recorre arrastrando el fondo, con la rueda o desde el minimapa de la barra superior. Las
+// notas se escriben directamente en la carta, línea a línea (note-editor.js), y se guardan en
+// Markdown (notas.rs). La disposición del escritorio abierto va en .nexo/escritorio.json
+// (Claude Code también la edita) y la lista de escritorios y los archivados, en
+// .nexo/escritorios.json (desks.js).
 
-import { fitCards } from './desk-layout.js';
+import { ZOOM, boundsOf, clampZoom, fromMap, mapFrame, nextSpot, revealShift, scaleOf, toMap, zoomAround, zoomLabel } from './desk-layout.js';
+import { MAX_DESKS, activeDesk, archiveDesk, createDesk, normalize, removeArchived, renameDesk, restoreDesk, storeActive, switchDesk } from './desks.js';
 import { reconcile } from './dom.js';
 import { createNoteEditor, isoToday, parseDate, relativeDay, taskCount } from './note-editor.js';
 
@@ -24,13 +28,23 @@ const ICON = {
   front: '<rect x="7" y="7" width="10" height="10" rx="2"/><path d="M4 13V5a1 1 0 0 1 1-1h8"/>',
   back: '<rect x="3" y="3" width="10" height="10" rx="2"/><path d="M16 7v8a1 1 0 0 1-1 1H7" stroke-dasharray="2 2"/>',
   undo: '<path d="M7.5 4 4 7.5 7.5 11"/><path d="M4 7.5h7.5a4.5 4.5 0 0 1 0 9H8"/>',
+  check: '<path d="m4.5 10.5 3.5 3.5 7.5-8"/>',
+  archive: '<rect x="3" y="4" width="14" height="4" rx="1"/><path d="M4.5 8v7.5h11V8M8 11.5h4"/>',
 };
 
 const MIN_W = 220;
 const MIN_H = 150;
-const GAP = 14;
+const GAP = 16; // entre una carta y la que se abre a su derecha
 const CARD_W = 380;
 const CARD_H = 440;
+// El lienzo. Las cartas guardan su posición en coordenadas del lienzo, con el (0, 0) en su
+// centro (pueden ser negativas); en el DOM van desplazadas ORIGIN, porque un desplazamiento
+// nativo no admite posiciones negativas.
+const WORLD = { w: 40000, h: 28000 };
+const ORIGIN = { x: WORLD.w / 2, y: WORLD.h / 2 };
+const HOME_PAD = 24; // del borde del hueco libre a la primera carta
+const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const newId = () => `d${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
 
 // «2026-10-02 18:30» → «hoy 18:30», «ayer 9:05» o «2 oct 18:30».
 function editedText(stamp) {
@@ -51,7 +65,10 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
   let loaded = false;
   let createMode = null; // 'nota' | 'tema'
   const cards = new Map(); // ruta → carta
-  const surface = $('desk-surface');
+  const viewport = $('desk'); // la ventana: lo que se desplaza
+  const surface = $('desk-surface'); // el lienzo entero
+  surface.style.setProperty('--desk-w', `${WORLD.w}px`);
+  surface.style.setProperty('--desk-h', `${WORLD.h}px`);
 
   // ------------------------------------------------------------ árbol y panel
 
@@ -359,8 +376,106 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
 
   // ------------------------------------------------------------ escritorio
 
-  const deskSize = () => ({ w: surface.clientWidth, h: surface.clientHeight });
   const zValues = () => [...cards.values()].map((c) => c.z);
+
+  // La cámara: el punto del lienzo que cae en la esquina superior izquierda de la ventana.
+  // Se guarda aparte del desplazamiento del elemento porque este se pierde mientras el
+  // lienzo está oculto (otra vista); `camReady` evita leerlo antes de volver a ponerlo.
+  // Con zoom, el lienzo se encoge con `transform: scale` (desde su esquina): el
+  // desplazamiento va en píxeles de pantalla y la cámara, en coordenadas del lienzo.
+  let cam = null;
+  let camReady = false;
+  let zoom = 0; // de 0 a −200 (%), ver `scaleOf`
+  let scale = 1;
+  const readCamera = () => ({ x: viewport.scrollLeft / scale - ORIGIN.x, y: viewport.scrollTop / scale - ORIGIN.y });
+
+  // El hueco libre entre las cartas laterales y bajo la barra, en coordenadas de la ventana
+  // del lienzo: ahí es donde se ve lo que no tapa la interfaz.
+  function freeArea() {
+    const stage = $('stage').getBoundingClientRect();
+    const frame = viewport.getBoundingClientRect();
+    return { x: Math.round(stage.left - frame.left), y: Math.round(stage.top - frame.top), w: Math.round(stage.width), h: Math.round(stage.height) };
+  }
+
+  // Cámara de partida: el (0, 0) del lienzo, en la esquina del hueco libre.
+  function homeCamera() {
+    const free = freeArea();
+    return { x: -(free.x + HOME_PAD) / scale, y: -(free.y + HOME_PAD) / scale };
+  }
+
+  function applyCamera() {
+    if (viewport.hidden) return;
+    cam ??= homeCamera();
+    camReady = false;
+    viewport.scrollTo({ left: (cam.x + ORIGIN.x) * scale, top: (cam.y + ORIGIN.y) * scale, behavior: 'instant' });
+    camReady = true;
+    queueMap();
+  }
+
+  function moveCamera(next, { smooth = false } = {}) {
+    viewport.scrollTo({ left: (next.x + ORIGIN.x) * scale, top: (next.y + ORIGIN.y) * scale, behavior: smooth && !reducedMotion() ? 'smooth' : 'instant' });
+  }
+
+  // Trae una carta al hueco libre si no se ve entera ahí (recién abierta, o con el foco).
+  // Las cuentas van en píxeles de pantalla, que es donde está el hueco.
+  function reveal(card, { smooth = true } = {}) {
+    if (viewport.hidden || !camReady) return;
+    const at = readCamera();
+    const { dx, dy } = revealShift({ x: (card.x - at.x) * scale, y: (card.y - at.y) * scale, w: card.w * scale, h: card.h * scale }, freeArea());
+    if (dx || dy) moveCamera({ x: at.x + dx / scale, y: at.y + dy / scale }, { smooth });
+  }
+
+  // ------------------------------------------------------------ zoom (solo alejar)
+  // Barra y botones a la derecha del gestor de escritorios. La rueda no cambia el zoom: sigue
+  // moviendo el lienzo. Lo que hay en el centro del hueco libre se queda en su sitio.
+  const zoomRange = $('zoom-range');
+  function renderZoom() {
+    zoomRange.value = String(zoom);
+    zoomRange.setAttribute('aria-valuetext', zoomLabel(zoom));
+    $('zoom-value').textContent = zoomLabel(zoom);
+    $('zoom-value').setAttribute('aria-label', `Zoom ${zoomLabel(zoom)}${zoom ? ', volver a 0 %' : ''}`);
+    $('zoom-out').disabled = zoom <= ZOOM.min;
+    $('zoom-in').disabled = zoom >= ZOOM.max;
+  }
+  function applyScale() {
+    surface.style.transform = scale === 1 ? '' : `scale(${scale})`;
+    renderZoom();
+  }
+  // La cámara exacta del último cambio de zoom: el desplazamiento se queda en píxeles enteros
+  // y, si cada paso partiera de él, el redondeo se acumularía (arrastrando la barra, el centro
+  // se iba unos píxeles por paso). Vale mientras el lienzo no se mueva por otra cosa.
+  let zoomCam = null;
+  function setZoom(next, { save = true } = {}) {
+    const target = clampZoom(next);
+    if (target === zoom) return renderZoom();
+    const from = scale;
+    let at = camReady && !viewport.hidden ? readCamera() : (cam ?? homeCamera());
+    if (zoomCam && Math.abs(at.x - zoomCam.x) * from < 1 && Math.abs(at.y - zoomCam.y) * from < 1) at = zoomCam;
+    const free = freeArea();
+    const center = { x: free.x + free.w / 2, y: free.y + free.h / 2 };
+    zoom = target;
+    scale = scaleOf(zoom);
+    applyScale();
+    cam = zoomAround(at, center, from, scale);
+    zoomCam = cam;
+    applyCamera();
+    if (save) {
+      clearTimeout(viewTimer);
+      viewTimer = setTimeout(() => loaded && writeDesk().catch(fail), 600);
+    }
+  }
+  zoomRange.addEventListener('input', () => setZoom(zoomRange.value));
+  $('zoom-out').addEventListener('click', () => setZoom(Math.ceil(zoom / ZOOM.step) * ZOOM.step - ZOOM.step));
+  $('zoom-in').addEventListener('click', () => setZoom(Math.floor(zoom / ZOOM.step) * ZOOM.step + ZOOM.step));
+  $('zoom-value').addEventListener('click', () => setZoom(0));
+  // Al pasar a otro escritorio, el suyo: la vista que se guardó con él (sin animación).
+  function useView(view) {
+    zoomCam = null;
+    zoom = clampZoom(view?.zoom ?? 0);
+    scale = scaleOf(zoom);
+    applyScale();
+    cam = view && Number.isFinite(view.x) && Number.isFinite(view.y) ? { x: view.x, y: view.y } : null;
+  }
 
   function normalizeLayers() {
     [...cards.values()]
@@ -371,37 +486,34 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       });
   }
 
-  // Pinta la carta donde la dejó el usuario. Aquí nunca se recoloca ni se encoge: si el
-  // escritorio se estrecha, las cartas conservan posición y tamaño y el escritorio se
-  // desplaza. La única excepción es volver a abrir la terminal (`fitToDesk`).
+  // Pinta la carta donde la dejó el usuario. Nunca se recoloca ni se encoge sola: lo que
+  // queda bajo una carta lateral se ve moviendo el lienzo o minimizando esa carta.
   function place(card) {
     Object.assign(card.el.style, {
-      left: `${card.x}px`,
-      top: `${card.y}px`,
+      left: `${card.x + ORIGIN.x}px`,
+      top: `${card.y + ORIGIN.y}px`,
       width: `${card.w}px`,
       height: `${card.h}px`,
       zIndex: String(card.z),
     });
   }
 
+  // Lo que hay en pantalla, tal como se guarda: las cartas y la cámara.
+  const snapshotCards = () => [...cards.values()].map(({ path, x, y, w, h, z }) => ({ path, x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h), z }));
+  const snapshotView = () => (cam ? { x: Math.round(cam.x), y: Math.round(cam.y), ...(zoom ? { zoom } : {}) } : null);
+  const writeDesk = () => invoke('desk_save', { state: { cards: snapshotCards(), view: snapshotView() } });
+
   let saveTimer = 0;
   function saveDesk() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      const state = {
-        cards: [...cards.values()].map(({ path, x, y, w, h, z }) => ({ path, x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h), z })),
-      };
-      invoke('desk_save', { state }).catch(fail);
-    }, 350);
+    saveTimer = setTimeout(() => writeDesk().catch(fail), 350);
     renderDeskChrome();
   }
 
   function renderDeskChrome() {
-    const n = cards.size;
-    $('desk-empty').hidden = n > 0;
-    $('desk-count').textContent = `${n} ${n === 1 ? 'carta' : 'cartas'}`;
-    $('desk-arrange').disabled = n < 1;
-    $('desk-close-all').disabled = n < 1;
+    $('desk-empty').hidden = cards.size > 0;
+    queueMap();
+    renderManager();
   }
 
   function bringToFront(card) {
@@ -502,15 +614,16 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       el.classList.add('dragging');
       head.setPointerCapture(event.pointerId);
       const move = (e) => {
-        const { w: W } = deskSize();
-        card.x = Math.max(-card.w + 80, Math.min(start.x + e.clientX - start.px, W - 80 + surface.scrollLeft));
-        card.y = Math.max(0, start.y + e.clientY - start.py);
+        // El lienzo es enorme, pero tiene bordes: la carta no sale de él.
+        // El ratón se mueve en píxeles de pantalla; con zoom, la carta recorre más lienzo.
+        card.x = Math.max(-ORIGIN.x, Math.min(start.x + (e.clientX - start.px) / scale, WORLD.w - ORIGIN.x - card.w));
+        card.y = Math.max(-ORIGIN.y, Math.min(start.y + (e.clientY - start.py) / scale, WORLD.h - ORIGIN.y - card.h));
         el.style.translate = `${card.x - start.x}px ${card.y - start.y}px`;
+        queueMap();
       };
       const up = () => {
         head.removeEventListener('pointermove', move);
         el.classList.remove('dragging');
-        card.x = Math.max(0, card.x);
         el.style.translate = '';
         place(card);
         saveDesk();
@@ -534,11 +647,11 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       el.classList.add('resizing');
       grip.setPointerCapture(event.pointerId);
       const move = (e) => {
-        const { w: W } = deskSize();
-        card.w = Math.max(MIN_W, Math.min(start.w + e.clientX - start.px, W - card.x + surface.scrollLeft));
-        card.h = Math.max(MIN_H, start.h + e.clientY - start.py);
+        card.w = Math.max(MIN_W, start.w + (e.clientX - start.px) / scale);
+        card.h = Math.max(MIN_H, start.h + (e.clientY - start.py) / scale);
         el.style.width = `${card.w}px`;
         el.style.height = `${card.h}px`;
+        queueMap();
       };
       const up = () => {
         grip.removeEventListener('pointermove', move);
@@ -703,28 +816,16 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     }
   }
 
-  // Sitio libre en la parte visible del escritorio para una carta nueva: la primera
-  // posición (de arriba abajo y de izquierda a derecha) donde no tapa a ninguna otra. Si no
-  // cabe con su tamaño, se prueba algo más pequeña; si tampoco, va en cascada.
+  // Sitio de una carta nueva: a la derecha de la última que se abrió, a su altura y con su
+  // tamaño (`nextSpot`). La primera va a la esquina del hueco libre de lo que se está viendo.
+  let lastOpened = null;
   function newGeometry() {
-    const { w: W, h: H } = deskSize();
-    const left = surface.scrollLeft;
-    const top = surface.scrollTop;
-    const taken = [...cards.values()].filter((c) => c.el?.isConnected);
-    const w = Math.max(MIN_W, Math.min(CARD_W, W - 2 * GAP));
-    const h = Math.max(MIN_H, Math.min(CARD_H, H - 2 * GAP));
-    const small = Math.max(MIN_H + 110, Math.min(h, Math.round(H * 0.42)));
-    for (const [cw, ch] of [[w, h], [w, small], [Math.max(MIN_W + 60, Math.round(w * 0.8)), small]]) {
-      for (let y = top + GAP; y + ch <= top + H - GAP; y += 24) {
-        for (let x = left + GAP; x + cw <= left + W - GAP; x += 24) {
-          const free = !taken.some((c) => x < c.x + c.w + GAP && x + cw + GAP > c.x && y < c.y + c.h + GAP && y + ch + GAP > c.y);
-          if (free) return { x, y, w: cw, h: ch };
-        }
-      }
-    }
-    // Sin hueco: en cascada desde la esquina, para que se vea que hay una carta nueva.
-    const k = cards.size;
-    return { x: left + 24 + ((k * 28) % 220), y: top + 20 + ((k * 28) % 160), w, h };
+    const at = camReady ? readCamera() : (cam ?? homeCamera());
+    const free = freeArea();
+    return nextSpot(
+      [...cards.values()].map(({ path, x, y, w, h }) => ({ path, x, y, w, h })),
+      { anchor: lastOpened, home: { x: Math.round(at.x + (free.x + HOME_PAD) / scale), y: Math.round(at.y + (free.y + HOME_PAD) / scale) }, size: { w: CARD_W, h: CARD_H }, gap: GAP },
+    );
   }
 
   async function openNote(path, { focus = false, geometry = null } = {}) {
@@ -735,6 +836,8 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       void existing.el.offsetWidth;
       existing.el.classList.add('pulse');
       if (focus) existing.editor.focusEnd();
+      // Después del foco: enfocar ya desplaza por su cuenta y cortaría este movimiento.
+      reveal(existing);
       return existing;
     }
     const card = {
@@ -749,7 +852,10 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     surface.append(createCardEl(card));
     place(card);
     renderHead(card);
-    if (!geometry) saveDesk();
+    if (!geometry) {
+      lastOpened = path;
+      saveDesk();
+    }
     renderDeskChrome();
     try {
       card.doc = await invoke('note_read', { path });
@@ -762,8 +868,9 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     card.editor.setValue(card.doc.body);
     renderHead(card);
     renderPanel();
-    if (!geometry) card.el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     if (focus) card.editor.focusEnd();
+    // La carta nueva se trae al hueco libre (después del foco, que desplaza por su cuenta).
+    if (!geometry) reveal(card);
     return card;
   }
 
@@ -781,92 +888,156 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     renderPanel();
   }
 
-  // Ordenar: todas del mismo tamaño, en rejilla y sin encimarse.
-  function arrange() {
-    const list = [...cards.values()].sort((a, b) => a.y - b.y || a.x - b.x);
-    const n = list.length;
-    if (!n) return;
-    const { w: W, h: H } = deskSize();
-    let best = null;
-    for (let cols = 1; cols <= n; cols++) {
-      const rows = Math.ceil(n / cols);
-      const w = (W - GAP * (cols + 1)) / cols;
-      const h = (H - GAP * (rows + 1)) / rows;
-      if (w < MIN_W || h < MIN_H) continue;
-      const score = Math.min(w, h * 1.2);
-      if (!best || score > best.score) best = { cols, w, h, score };
-    }
-    if (!best) {
-      // No caben todas: columnas de ancho mínimo y el escritorio se desplaza hacia abajo.
-      const cols = Math.max(1, Math.floor((W - GAP) / (MIN_W + 40 + GAP)));
-      best = { cols, w: (W - GAP * (cols + 1)) / cols, h: 260 };
-    }
-    surface.classList.add('arranging');
-    list.forEach((card, i) => {
-      const col = i % best.cols;
-      const row = Math.floor(i / best.cols);
-      Object.assign(card, { x: GAP + col * (best.w + GAP), y: GAP + row * (best.h + GAP), w: best.w, h: best.h, z: i + 1 });
-      place(card);
-    });
-    surface.scrollTo({ left: 0, top: 0 });
-    setTimeout(() => surface.classList.remove('arranging'), 520);
-    saveDesk();
-  }
+  // ------------------------------------------------------------ lienzo: moverse por él
 
-  // Al volver a abrir la terminal el escritorio se estrecha y algunas cartas quedan cortadas
-  // o fuera: esas (y solo esas) se acomodan en el hueco libre más cercano.
-  function fitToDesk() {
-    const moved = fitCards(
-      [...cards.values()].map(({ path, x, y, w, h }) => ({ path, x, y, w, h })),
-      deskSize().w,
-      { gap: GAP, minW: MIN_W },
-    );
-    if (!moved.size) return;
-    surface.classList.add('arranging');
-    for (const [path, geometry] of moved) {
-      const card = cards.get(path);
-      Object.assign(card, geometry);
-      place(card);
-    }
-    surface.scrollLeft = 0;
-    setTimeout(() => surface.classList.remove('arranging'), 520);
-    saveDesk();
-  }
-
-  // El ancho del escritorio cambia poco a poco (la transición de las cartas laterales): se
-  // acomoda cuando lleva un momento quieto. Si el escritorio no se ve (otra vista), queda
-  // pendiente hasta que se vuelva a él.
-  let fitFrame = 0;
-  let fitPending = false;
-  function fitWhenSettled() {
-    fitPending = true;
-    cancelAnimationFrame(fitFrame);
-    const started = performance.now();
-    let width = -1;
-    let since = started;
-    const tick = (now) => {
-      const w = surface.clientWidth;
-      if (w !== width) {
-        width = w;
-        since = now;
-      }
-      if (w > 0 && now - since >= 250) {
-        fitPending = false;
-        return fitToDesk();
-      }
-      if (now - started < 3000) fitFrame = requestAnimationFrame(tick);
+  // La rueda y el trackpad lo desplazan solos (es un desplazamiento nativo). Aquí, lo que
+  // falta: arrastrar el fondo, seguir la cámara y traer una carta al tabular hasta ella.
+  viewport.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || (event.target !== surface && event.target !== viewport)) return;
+    const start = { px: event.clientX, py: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
+    viewport.setPointerCapture(event.pointerId);
+    viewport.classList.add('panning');
+    const move = (e) => viewport.scrollTo({ left: start.left - (e.clientX - start.px), top: start.top - (e.clientY - start.py), behavior: 'instant' });
+    const up = () => {
+      viewport.removeEventListener('pointermove', move);
+      viewport.classList.remove('panning');
     };
-    fitFrame = requestAnimationFrame(tick);
-  }
-
-  $('desk-arrange').addEventListener('click', arrange);
-  $('desk-close-all').addEventListener('click', () => {
-    for (const path of [...cards.keys()]) closeCard(path, { persist: false });
-    saveDesk();
+    viewport.addEventListener('pointermove', move);
+    viewport.addEventListener('pointerup', up, { once: true });
+    viewport.addEventListener('pointercancel', up, { once: true });
   });
 
+  // Sobre una carta, la rueda desplaza la nota si es larga y el lienzo si no (ver
+  // `can-scroll` en styles.css). Se mira al entrar el ratón en la carta y en cada giro.
+  const syncScrollable = (event) => {
+    const card = event.target.closest?.('.desk-card');
+    for (const box of card?.querySelectorAll('.desk-card-body, .desk-editor') ?? []) box.classList.toggle('can-scroll', box.scrollHeight > box.clientHeight + 1);
+  };
+  surface.addEventListener('pointerover', syncScrollable, { passive: true });
+  surface.addEventListener('wheel', syncScrollable, { capture: true, passive: true });
+
+  let viewTimer = 0;
+  viewport.addEventListener('scroll', () => {
+    if (viewport.hidden || !camReady) return;
+    cam = readCamera();
+    queueMap();
+    // Dónde se quedó uno se recuerda con el escritorio.
+    clearTimeout(viewTimer);
+    viewTimer = setTimeout(() => loaded && writeDesk().catch(fail), 600);
+  });
+
+  // Con el teclado, el foco puede caer en una carta tapada por una carta lateral: se trae
+  // al hueco libre. Con el ratón no, que movería la carta bajo el cursor.
+  let byKeyboard = false;
+  document.addEventListener('keydown', (event) => event.key === 'Tab' && (byKeyboard = true), true);
+  document.addEventListener('pointerdown', () => (byKeyboard = false), true);
+  surface.addEventListener('focusin', (event) => {
+    const card = byKeyboard && cards.get(event.target.closest?.('.desk-card')?.dataset.path);
+    if (card) reveal(card, { smooth: false });
+  });
+
+  // ------------------------------------------------------------ minimapa
+  // Dónde está uno en el lienzo: las cartas en pequeño y un recuadro por lo que se ve. Se
+  // pulsa o se arrastra para ir a un sitio; con el foco, las flechas mueven la vista.
+  const map = $('desk-map');
+  const mapWorld = $('desk-map-world');
+  const mapView = $('desk-map-view');
+  const mapDots = new Map(); // ruta → su recuadro en el mapa
+  let mapNow = null; // el encuadre con el que está pintado
+  let mapHeld = null; // encuadre fijo mientras se arrastra en el mapa
+  let mapQueued = 0;
+
+  const viewRect = () => ({ ...(camReady ? readCamera() : (cam ?? { x: 0, y: 0 })), w: viewport.clientWidth / scale, h: viewport.clientHeight / scale });
+
+  function renderMap() {
+    mapQueued = 0;
+    const size = { w: map.clientWidth, h: map.clientHeight };
+    if (viewport.hidden || !size.w) return;
+    const rects = [...cards.values()].map(({ path, x, y, w, h }) => ({ path, x, y, w, h }));
+    const view = viewRect();
+    mapNow = mapHeld ?? mapFrame(rects, view, size);
+    const put = (node, rect) => {
+      const box = toMap(mapNow, rect);
+      Object.assign(node.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` });
+    };
+    for (const [path, node] of mapDots) {
+      if (cards.has(path)) continue;
+      node.remove();
+      mapDots.delete(path);
+    }
+    for (const rect of rects) {
+      let node = mapDots.get(rect.path);
+      if (!node) {
+        node = document.createElement('span');
+        node.className = 'desk-map-card';
+        mapWorld.insertBefore(node, mapView);
+        mapDots.set(rect.path, node);
+      }
+      put(node, rect);
+    }
+    put(mapView, view);
+  }
+  function queueMap() {
+    if (!mapQueued) mapQueued = requestAnimationFrame(renderMap);
+  }
+
+  // Lleva el centro de la vista al punto del lienzo que hay bajo el puntero en el mapa.
+  function goToMapPoint(event) {
+    if (!mapNow) return;
+    const box = map.getBoundingClientRect();
+    const point = fromMap(mapNow, event.clientX - box.left - map.clientLeft, event.clientY - box.top - map.clientTop);
+    moveCamera({ x: point.x - viewport.clientWidth / scale / 2, y: point.y - viewport.clientHeight / scale / 2 });
+  }
+  map.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || !mapNow) return;
+    event.preventDefault();
+    map.focus({ preventScroll: true });
+    // Mientras se arrastra, el encuadre no cambia: si no, el mapa se movería bajo el puntero.
+    mapHeld = mapNow;
+    map.setPointerCapture(event.pointerId);
+    goToMapPoint(event);
+    const up = () => {
+      map.removeEventListener('pointermove', goToMapPoint);
+      mapHeld = null;
+      queueMap();
+    };
+    map.addEventListener('pointermove', goToMapPoint);
+    map.addEventListener('pointerup', up, { once: true });
+    map.addEventListener('pointercancel', up, { once: true });
+  });
+
+  // Vuelve a las cartas: deja la esquina de todas ellas en la esquina del hueco libre.
+  function goToCards({ smooth = true } = {}) {
+    const all = boundsOf([...cards.values()]);
+    const home = homeCamera();
+    moveCamera(all ? { x: all.x + home.x, y: all.y + home.y } : home, { smooth });
+  }
+  map.addEventListener('dblclick', () => goToCards());
+  map.addEventListener('keydown', (event) => {
+    const step = event.shiftKey ? 480 : 120;
+    const delta = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[event.key];
+    if (delta) {
+      event.preventDefault();
+      viewport.scrollBy({ left: delta[0], top: delta[1], behavior: 'instant' });
+    } else if (event.key === 'Home') {
+      event.preventDefault();
+      goToCards();
+    }
+  });
+  window.addEventListener('resize', queueMap);
+
+  // ------------------------------------------------------------ escritorios
+  // Hasta cinco en la lista; los demás, archivados con sus notas colocadas, para cargarlos
+  // cuando hagan falta. El que está abierto es el de .nexo/escritorio.json.
+  let deskState = null;
+  let deskWork = Promise.resolve();
+  const desksButton = $('desks-button');
+  const desksMenu = $('desks-menu');
+
+  const saveDesks = () => invoke('desks_save', { state: deskState });
+
   // Aplica el escritorio guardado (al empezar o cuando Claude Code lo cambia).
-  async function applyDesk() {
+  async function applyDesk({ initial = false } = {}) {
     let state;
     try {
       state = await invoke('desk_load');
@@ -876,12 +1047,13 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     const wanted = Array.isArray(state?.cards) ? state.cards.filter((c) => typeof c?.path === 'string') : [];
     const keep = new Set(wanted.map((c) => c.path));
     for (const path of [...cards.keys()]) if (!keep.has(path)) closeCard(path, { persist: false });
+    const fresh = [];
     for (const c of wanted) {
       const geometry = {
         x: Number(c.x) || 0,
         y: Number(c.y) || 0,
-        w: Number(c.w) || CARD_W,
-        h: Number(c.h) || CARD_H,
+        w: Math.max(MIN_W, Number(c.w) || CARD_W),
+        h: Math.max(MIN_H, Number(c.h) || CARD_H),
         z: Number(c.z) || 1,
       };
       const card = cards.get(c.path);
@@ -889,13 +1061,194 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
         Object.assign(card, geometry);
         place(card);
       } else {
-        await openNote(c.path, { geometry });
+        const opened = await openNote(c.path, { geometry });
+        if (opened) fresh.push(opened);
       }
     }
     normalizeLayers();
+    if (initial) {
+      useView(state?.view ?? activeDesk(deskState)?.view);
+      applyCamera();
+    } else if (fresh.length) {
+      // Claude Code puso una carta: la vista va a ella.
+      lastOpened = fresh.at(-1).path;
+      reveal(fresh.at(-1));
+    }
     renderDeskChrome();
     renderPanel();
   }
+
+  // Pone en pantalla el escritorio activo de `deskState` y lo deja en .nexo/escritorio.json.
+  async function showActive() {
+    clearTimeout(saveTimer);
+    clearTimeout(viewTimer);
+    for (const path of [...cards.keys()]) closeCard(path, { persist: false });
+    lastOpened = null;
+    const desk = activeDesk(deskState);
+    for (const c of desk.cards) await openNote(c.path, { geometry: { x: c.x, y: c.y, w: Math.max(MIN_W, c.w || CARD_W), h: Math.max(MIN_H, c.h || CARD_H), z: c.z || 1 } });
+    normalizeLayers();
+    useView(desk.view);
+    applyCamera();
+    await writeDesk();
+    renderDeskChrome();
+    renderPanel();
+  }
+
+  // Los cambios de escritorio van de uno en uno: cada uno parte de lo que dejó el anterior.
+  function deskAction(change) {
+    deskWork = deskWork
+      .then(async () => {
+        if (!deskState) return;
+        // Lo que se estaba escribiendo se guarda antes de quitar las cartas de en medio.
+        await Promise.all([...cards.values()].map(flush));
+        const before = deskState;
+        const active = before.active;
+        deskState = change(storeActive(before, snapshotCards(), snapshotView()));
+        await saveDesks();
+        if (deskState.active !== active) await showActive();
+        else renderManager();
+      })
+      .catch(fail);
+    return deskWork;
+  }
+
+  const cardCount = (n) => `${n} ${n === 1 ? 'nota' : 'notas'}`;
+  const deskButton = (className, paths, label, handler) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = className;
+    if (paths) b.innerHTML = icon(paths, 14);
+    b.setAttribute('aria-label', label);
+    b.title = label;
+    b.addEventListener('click', handler);
+    return b;
+  };
+
+  function renameDeskRow(row, desk) {
+    const input = document.createElement('input');
+    input.className = 'desks-rename';
+    input.value = desk.name;
+    input.maxLength = 60;
+    input.setAttribute('aria-label', `Nombre de ${desk.name}`);
+    let done = false;
+    const finish = (save) => {
+      if (done) return;
+      done = true;
+      const name = input.value;
+      if (save && name.trim() && name.trim() !== desk.name) deskAction((state) => renameDesk(state, desk.id, name)).then(() => focusRow(desk.id));
+      else {
+        renderManager();
+        focusRow(desk.id);
+      }
+    };
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') finish(true);
+      else if (event.key === 'Escape') {
+        // Escape cancela el nombre, no cierra el menú.
+        event.stopPropagation();
+        finish(false);
+      }
+    });
+    input.addEventListener('blur', () => finish(true));
+    row.replaceChildren(input);
+    input.focus();
+    input.select();
+  }
+  const focusRow = (id) => desksMenu.querySelector(`[data-desk="${id}"] .desks-pick`)?.focus();
+
+  function renderManager() {
+    if (!deskState) return;
+    const active = activeDesk(deskState);
+    $('desks-current').textContent = active.name;
+    if (desksMenu.hidden) return;
+    const full = deskState.desks.length >= MAX_DESKS;
+    $('desks-count').textContent = `${deskState.desks.length} de ${MAX_DESKS}`;
+    $('desks-list').replaceChildren(
+      ...deskState.desks.map((desk) => {
+        const on = desk.id === deskState.active;
+        const row = document.createElement('li');
+        row.className = `desks-row${on ? ' is-active' : ''}`;
+        row.dataset.desk = desk.id;
+        const pick = document.createElement('button');
+        pick.type = 'button';
+        pick.className = 'desks-pick';
+        if (on) pick.setAttribute('aria-current', 'true');
+        pick.innerHTML = `<span class="desks-check" aria-hidden="true">${icon(ICON.check, 13)}</span><span class="desks-name"></span><span class="desks-meta"></span>`;
+        pick.children[1].textContent = desk.name;
+        pick.children[2].textContent = `${cardCount(on ? cards.size : desk.cards.length)}${on ? ' · abierto' : ''}`;
+        pick.addEventListener('click', () => {
+          if (on) return closeManager(true);
+          deskAction((state) => switchDesk(state, desk.id)).then(() => focusRow(desk.id));
+        });
+        row.append(
+          pick,
+          deskButton('desks-act', ICON.pencil, `Renombrar ${desk.name}`, () => renameDeskRow(row, desk)),
+          deskButton('desks-act', ICON.archive, `Archivar ${desk.name}`, () =>
+            deskAction((state) => archiveDesk(state, desk.id, new Date().toISOString(), newId())).then(() => focusRow(deskState.active)),
+          ),
+        );
+        return row;
+      }),
+    );
+    const add = $('desks-new');
+    add.setAttribute('aria-disabled', String(full));
+    $('desks-new-hint').textContent = full ? `Ya hay ${MAX_DESKS}: archiva uno para abrir otro` : 'Un lienzo vacío para otras notas';
+    $('desks-archived-empty').hidden = deskState.archived.length > 0;
+    $('desks-archived').replaceChildren(
+      ...deskState.archived.map((desk) => {
+        const row = document.createElement('li');
+        row.className = 'desks-row';
+        row.dataset.desk = desk.id;
+        const info = document.createElement('div');
+        info.className = 'desks-pick';
+        info.innerHTML = '<span></span><span class="desks-name"></span><span class="desks-meta"></span>';
+        info.children[1].textContent = desk.name;
+        const when = desk.archivedAt ? new Date(desk.archivedAt) : null;
+        const day = when && !Number.isNaN(when.getTime()) ? ` · ${when.toLocaleDateString('es', { day: 'numeric', month: 'short' })}` : '';
+        info.children[2].textContent = `${cardCount(desk.cards.length)}${day}`;
+        const load = deskButton('desks-act desks-load', null, full ? `Cargar ${desk.name}: antes archiva uno de la lista` : `Cargar ${desk.name}`, () =>
+          deskAction((state) => restoreDesk(state, desk.id)).then(() => focusRow(desk.id)),
+        );
+        load.textContent = 'Cargar';
+        load.disabled = full;
+        row.append(
+          info,
+          load,
+          deskButton('desks-act', ICON.trash, `Borrar ${desk.name}`, async () => {
+            const sure = await ask(`¿Borrar el escritorio archivado «${desk.name}»? Sus notas no se borran: solo se pierde cómo estaban colocadas.`, { title: 'Borrar escritorio', kind: 'warning' });
+            if (sure) deskAction((state) => removeArchived(state, desk.id)).then(() => $('desks-new').focus());
+          }),
+        );
+        return row;
+      }),
+    );
+  }
+
+  function openManager() {
+    desksMenu.hidden = false;
+    desksButton.setAttribute('aria-expanded', 'true');
+    renderManager();
+    focusRow(deskState?.active);
+  }
+  function closeManager(refocus = false) {
+    if (desksMenu.hidden) return;
+    desksMenu.hidden = true;
+    desksButton.setAttribute('aria-expanded', 'false');
+    if (refocus) desksButton.focus();
+  }
+  desksButton.addEventListener('click', () => (desksMenu.hidden ? openManager() : closeManager(true)));
+  $('desks-new').addEventListener('click', () => {
+    if (!deskState || deskState.desks.length >= MAX_DESKS) return;
+    deskAction((state) => createDesk(state, newId())).then(() => focusRow(deskState.active));
+  });
+  $('desk-manager').addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || desksMenu.hidden) return;
+    event.stopPropagation();
+    closeManager(true);
+  });
+  document.addEventListener('pointerdown', (event) => {
+    if (!event.target.closest?.('#desk-manager')) closeManager();
+  });
 
   let treeTimer = 0;
   function scheduleTreeReload() {
@@ -913,12 +1266,29 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
         for (const path of [...cards.keys()]) closeCard(path, { persist: false });
         current = '';
         loaded = false;
+        deskState = null;
+        useView(null);
+        lastOpened = null;
+        closeManager();
       }
       await loadTree();
-      if (reset || !cards.size) await applyDesk();
+      renderZoom();
+      if (!deskState) {
+        let raw = null;
+        try {
+          raw = await invoke('desks_load');
+        } catch {}
+        deskState = normalize(raw, newId());
+        await applyDesk({ initial: true });
+      }
       for (const card of cards.values()) place(card);
+      applyCamera();
       renderDeskChrome();
-      if (fitPending) fitWhenSettled();
+    },
+    // Se sale de la vista Notas: el lienzo se oculta y su desplazamiento deja de valer.
+    pause() {
+      camReady = false;
+      closeManager();
     },
     // Cambios en wiki/ (rutas relativas a wiki/).
     onWikiChanged(changed) {
@@ -935,7 +1305,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       }
     },
     onDeskChanged() {
-      if (loaded) applyDesk();
+      if (loaded && deskState) deskWork = deskWork.then(() => applyDesk()).catch(fail);
     },
     openNote,
     // Abre un tema (ruta relativa a wiki/notas/) en la carta de la izquierda.
@@ -943,10 +1313,10 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       if (!loaded) await loadTree();
       goTo(findTopic(path) ? path : '');
     },
+    // La vista Notas vuelve a verse: cada carta en su sitio y la cámara donde estaba.
     relayout() {
       for (const card of cards.values()) place(card);
+      applyCamera();
     },
-    // La terminal se ha vuelto a abrir: acomoda las cartas que ya no caben a lo ancho.
-    fitAfterResize: fitWhenSettled,
   };
 }

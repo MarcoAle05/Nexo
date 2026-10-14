@@ -70,6 +70,8 @@ pub fn run() {
             notas::notes_delete,
             notas::desk_load,
             notas::desk_save,
+            notas::desks_load,
+            notas::desks_save,
             render::render_info,
             render::render_retry_gpu,
             skills::skills_list,
