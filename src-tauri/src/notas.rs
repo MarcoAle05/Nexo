@@ -9,8 +9,9 @@
 //!   editor de nexo: casillas `- [ ]` / `- [x]`, viñetas, números, títulos, citas, código,
 //!   tablas y fechas `📅 AAAA-MM-DD` (la convención del plugin Tasks de Obsidian). Las notas
 //!   antiguas con `type: texto | lista | fecha` siguen valiendo: ese campo ya no se usa.
-//! - El escritorio de notas (cartas abiertas, posición, tamaño y capa) vive en
-//!   `.nexo/escritorio.json`, para que también Claude Code pueda abrir notas en él.
+//! - El escritorio de notas (cartas abiertas, posición, tamaño y capa, y qué trozo del lienzo
+//!   se ve) vive en `.nexo/escritorio.json`, para que también Claude Code pueda abrir notas en
+//!   él. Los demás escritorios de la lista y los archivados, en `.nexo/escritorios.json`.
 //!
 //! Los archivos los puede crear o editar cualquiera (la interfaz, Claude Code, Obsidian):
 //! nexo solo regenera los índices cuando cambia algo (`sync`).
@@ -32,6 +33,7 @@ const INDEX: &str = "_index.md";
 const START: &str = "<!-- nexo:contenido -->";
 const END: &str = "<!-- /nexo:contenido -->";
 const DESK: &str = ".nexo/escritorio.json";
+const DESKS: &str = ".nexo/escritorios.json";
 
 fn notes_dir(root: &Path) -> PathBuf {
     root.join(DIR)
@@ -620,9 +622,70 @@ pub fn desk_save(app: AppHandle, state: Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Lista de escritorios y archivados (`.nexo/escritorios.json`). Es un JSON que solo entiende
+/// la interfaz (`desks.js`); aquí se lee y se escribe tal cual.
+#[tauri::command]
+pub fn desks_load(app: AppHandle) -> Result<Value, String> {
+    let root = vault_root(&app)?;
+    Ok(read_json(&root.join(DESKS)))
+}
+
+#[tauri::command]
+pub fn desks_save(app: AppHandle, state: Value) -> Result<(), String> {
+    let root = vault_root(&app)?;
+    write_json(&root.join(DESKS), &state)
+}
+
+/// El JSON de un archivo, o `{}` si no existe o no se entiende.
+fn read_json(path: &Path) -> Value {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_else(|| serde_json::json!({}))
+}
+
+/// Escribe el JSON en un archivo temporal y lo pone en su sitio: si nexo se cierra a media
+/// escritura no queda un archivo cortado (ahí van los escritorios archivados).
+fn write_json(path: &Path, value: &Value) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, text).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn los_escritorios_se_guardan_y_se_leen_tal_cual() {
+        let dir = std::env::temp_dir().join(format!("nexo-escritorios-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join(DESKS);
+        assert_eq!(
+            read_json(&path),
+            serde_json::json!({}),
+            "sin archivo, vacío"
+        );
+        let state = serde_json::json!({
+            "active": "d2",
+            "desks": [{ "id": "d2", "name": "Semana", "cards": [{ "path": "a.md", "x": -40, "y": 12, "w": 380, "h": 440, "z": 1 }], "view": { "x": -300, "y": -90 } }],
+            "archived": [{ "id": "d1", "name": "Escritorio 1", "cards": [], "view": null, "archivedAt": "2026-10-13T10:00:00" }],
+        });
+        write_json(&path, &state).unwrap();
+        assert_eq!(read_json(&path), state);
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "no deja el temporal"
+        );
+        // Un archivo estropeado no rompe nada: se lee como vacío.
+        fs::write(&path, "{ mal").unwrap();
+        assert_eq!(read_json(&path), serde_json::json!({}));
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     fn tmp() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

@@ -63,11 +63,17 @@ tickClock();
 // Cada carta puede expandirse hasta el borde de la otra; con las dos expandidas se
 // reparten el ancho. Contraer una deja a la otra como esté. Se recuerda entre aperturas.
 const expanded = { left: false, right: false };
-// La carta derecha (Nexo / Claude Code) se puede minimizar a un riel estrecho.
+// Las dos cartas se pueden minimizar a un riel estrecho: la derecha (el chat) y la izquierda
+// (fuentes, notas o agentes, según la vista).
 let minimized = false;
+let minimizedLeft = false;
 try {
   minimized = localStorage.getItem('nexo.minimized') === 'true';
+  minimizedLeft = localStorage.getItem('nexo.minimizedLeft') === 'true';
 } catch {}
+// Al entrar en Notas el chat se minimiza solo para dejar sitio al lienzo; al salir vuelve,
+// salvo que el usuario lo haya tocado entretanto.
+let chatAutoMin = false;
 try {
   Object.assign(expanded, JSON.parse(localStorage.getItem('nexo.expanded') ?? '{}'));
 } catch {}
@@ -75,17 +81,36 @@ try {
 // El grafo deja de dibujarse mientras está tapado (se conecta más abajo, al crearlo).
 let syncGraphActive = () => {};
 
+// Cómo se llama la carta izquierda en cada vista (para su riel y sus botones).
+const LEFT_CARD = {
+  grafo: { label: 'Fuentes', card: 'la carta de fuentes' },
+  notas: { label: 'Notas', card: 'la carta de notas' },
+  agentes: { label: 'Agentes', card: 'la carta de agentes' },
+};
+
 function renderExpanded() {
   const layout = $('layout');
-  // Minimizado, el chat no puede estar expandido.
+  // Minimizada, una carta no puede estar expandida.
   if (minimized) expanded.right = false;
+  if (minimizedLeft) expanded.left = false;
   syncGraphActive();
   layout.classList.toggle('expand-left', expanded.left);
   layout.classList.toggle('expand-right', expanded.right);
   layout.classList.toggle('expanded', expanded.left || expanded.right);
   layout.classList.toggle('min-right', minimized);
+  layout.classList.toggle('min-left', minimizedLeft);
   $('term-rail').hidden = !minimized;
   document.querySelector('#terminal-panel > .panel-core').hidden = minimized;
+  // La izquierda tiene un núcleo por vista, cada uno con su `hidden`: minimizada se ocultan
+  // todos con una clase (ver styles.css), sin perder cuál toca enseñar al volver.
+  $('sources-panel').classList.toggle('is-min', minimizedLeft);
+  $('left-rail').hidden = !minimizedLeft;
+  const leftName = LEFT_CARD[document.body.dataset.view] ?? LEFT_CARD.grafo;
+  $('left-rail-label').textContent = leftName.label;
+  for (const [button, verb] of [[$('left-restore'), 'Restaurar'], ...[...document.querySelectorAll('.left-minimize')].map((b) => [b, 'Minimizar'])]) {
+    button.setAttribute('aria-label', `${verb} ${leftName.card}`);
+    button.title = `${verb} ${leftName.card}`;
+  }
   document.querySelectorAll('[data-expand]').forEach((b) => {
     const on = expanded[b.dataset.expand];
     const what =
@@ -138,22 +163,48 @@ function focusChat() {
   chat.focus();
 }
 
-function setMinimized(value) {
+// `auto` es la minimización que hace la app al entrar y salir de Notas: no se guarda como
+// preferencia ni le quita el foco a lo que el usuario esté haciendo.
+function setMinimized(value, { auto = false } = {}) {
   minimized = value;
+  if (!auto) chatAutoMin = false;
   renderExpanded();
-  try {
-    localStorage.setItem('nexo.minimized', String(minimized));
-    localStorage.setItem('nexo.expanded', JSON.stringify(expanded));
-  } catch {}
-  if (minimized) return;
-  // El escritorio de notas se estrecha: las cartas que ya no caben se acomodan.
-  notes.fitAfterResize();
+  if (!auto) {
+    try {
+      localStorage.setItem('nexo.minimized', String(minimized));
+      localStorage.setItem('nexo.expanded', JSON.stringify(expanded));
+    } catch {}
+  }
+  if (minimized) {
+    // El botón que se pulsó desaparece con la carta: el foco pasa al que la devuelve.
+    if (!auto) $('term-restore').focus();
+    return;
+  }
   // Al volver, la conversación baja hasta el final y el teclado va al campo.
-  if (!activityOpen) requestAnimationFrame(() => chat.show());
+  if (!auto && !activityOpen) requestAnimationFrame(() => chat.show());
 }
 $('term-minimize').addEventListener('click', () => setMinimized(true));
 $('term-restore').addEventListener('click', () => setMinimized(false));
 $('rail-chat').addEventListener('click', () => setMinimized(false));
+
+function setMinimizedLeft(value, { focus = true } = {}) {
+  if (minimizedLeft === value) return;
+  minimizedLeft = value;
+  renderExpanded();
+  try {
+    localStorage.setItem('nexo.minimizedLeft', String(minimizedLeft));
+    localStorage.setItem('nexo.expanded', JSON.stringify(expanded));
+  } catch {}
+  if (!focus) return;
+  // El foco sigue al control equivalente: del botón de minimizar al de restaurar y al revés.
+  if (minimizedLeft) $('left-restore').focus();
+  else document.querySelector('#sources-panel > .panel-core:not([hidden]) .left-minimize')?.focus();
+}
+document.querySelectorAll('.left-minimize').forEach((b) => b.addEventListener('click', () => setMinimizedLeft(true)));
+$('left-restore').addEventListener('click', () => setMinimizedLeft(false));
+// Lo que se va a enseñar en la carta izquierda (un nodo, una fuente, un tema, las skills) no
+// se vería con ella minimizada: se restaura, sin mover el foco de donde esté.
+const revealLeft = () => setMinimizedLeft(false, { focus: false });
 
 // ---------------------------------------------------------------- chat con Claude
 // La carta derecha: Claude Code con la suscripción del usuario, pintado como un chat
@@ -1014,6 +1065,7 @@ let noteView = null; // { id, body, meta, modified }
 let detailView = null; // ficha: resumen, ideas clave, conceptos
 
 async function openDetail(path, { fromGraph = false } = {}) {
+  revealLeft();
   noteNode = null;
   noteView = null;
   detailPath = path;
@@ -1101,6 +1153,7 @@ function renderDetail() {
 // Al elegir un nodo del grafo (que no sea una fuente), la carta de la izquierda muestra
 // lo que hay dentro de su nota: el Markdown, sus propiedades y sus conexiones.
 async function showNode(node) {
+  revealLeft();
   if (detailPath) closeDetail();
   noteNode = node;
   noteView = null;
@@ -1553,6 +1606,7 @@ const skills = createSkills({
   },
   onShowAgents({ add = false } = {}) {
     setView('agentes');
+    revealLeft();
     agents.showTab('skills');
     if (add) skills.openAdd();
   },
@@ -1604,6 +1658,7 @@ function activateNotes() {
 }
 
 function setView(next) {
+  const wasNotes = view === 'notas';
   view = next === 'notas' || next === 'agentes' ? next : 'grafo';
   document.body.dataset.view = view;
   document.querySelectorAll('[data-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.view === view)));
@@ -1612,11 +1667,26 @@ function setView(next) {
   document.querySelector('#sources-panel > .panel-core.sources').hidden = inNotes || inAgents;
   $('notes-core').hidden = !inNotes;
   $('agents-core').hidden = !inAgents;
+  // El lienzo de notas, su minimapa, el gestor de escritorios y el zoom solo existen en Notas.
   $('desk').hidden = !inNotes;
-  $('desk-toolbar').hidden = !inNotes;
+  $('desk-map').hidden = !inNotes;
+  $('desk-manager').hidden = !inNotes;
+  $('desk-zoom').hidden = !inNotes;
   try {
     localStorage.setItem('nexo.view', view);
   } catch {}
+  // En Notas el lienzo es toda la app: el chat se minimiza solo y vuelve al salir, si era
+  // la app quien lo había minimizado. Lo que el usuario elija a mano se respeta.
+  if (inNotes && !wasNotes && !minimized) {
+    setMinimized(true, { auto: true });
+    chatAutoMin = true;
+  } else if (!inNotes && wasNotes) {
+    notes.pause();
+    if (chatAutoMin && minimized) setMinimized(false, { auto: true });
+    chatAutoMin = false;
+  }
+  // El riel de la izquierda lleva el nombre de la carta de esta vista.
+  renderExpanded();
   renderScene();
   if (inNotes) {
     activateNotes();
@@ -1644,7 +1714,10 @@ async function openInNotes(id) {
   const rel = id.replace(/^notas\//, '');
   if (view !== 'notas') setView('notas');
   await notesActivation;
-  if (/(^|\/)_index\.md$/.test(rel)) return notes.openTopic(rel.replace(/\/?_index\.md$/, ''));
+  if (/(^|\/)_index\.md$/.test(rel)) {
+    revealLeft();
+    return notes.openTopic(rel.replace(/\/?_index\.md$/, ''));
+  }
   return notes.openNote(rel);
 }
 const isNotesNode = (node) => node?.id?.startsWith('notas/') && node.kind !== 'missing';
@@ -1845,7 +1918,11 @@ async function refresh() {
 if (desktop) {
   getCurrentWebview().onDragDropEvent(({ payload }) => {
     const panel = $('sources-panel');
-    if (payload.type === 'enter' || payload.type === 'over') panel.classList.toggle('dragging', Boolean(vault));
+    if (payload.type === 'enter' || payload.type === 'over') {
+      // Soltar archivos añade fuentes: con la carta minimizada no se vería dónde.
+      if (payload.type === 'enter' && vault && view === 'grafo') revealLeft();
+      panel.classList.toggle('dragging', Boolean(vault));
+    }
     else if (payload.type === 'leave') panel.classList.remove('dragging');
     else if (payload.type === 'drop') {
       panel.classList.remove('dragging');

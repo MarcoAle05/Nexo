@@ -10,7 +10,7 @@ Un «NotebookLM propio» de escritorio: vuelcas tus fuentes en un vault de Obsid
 
 - **Fuentes.** PDF, Office, EPUB, Markdown y páginas web. MarkItDown las convierte a Markdown en tu equipo, sin IA, y cada una tiene su ficha con resumen e ideas clave.
 - **Wiki y grafo.** Claude integra las fuentes en notas atómicas enlazadas con `[[...]]`. El grafo las dibuja como estrellas por tema, con búsqueda, y se actualiza solo cuando algo cambia en el vault.
-- **Notas.** Un escritorio de cartas con un editor por bloques al estilo de Notion que guarda Markdown normal dentro del vault.
+- **Notas.** Un lienzo que ocupa toda la app, donde cada nota es una carta con un editor por bloques al estilo de Notion que guarda Markdown normal dentro del vault. Tiene minimapa, zoom para alejarse hasta ver el triple y varios escritorios, que se pueden archivar y volver a cargar.
 - **Claude, de dos maneras.** Claude Code corre dentro de la app con tu suscripción y se ve como un chat con el diseño de nexo: sus respuestas, sus procesos y los permisos que pide; hace de orquestador y eliges su modelo, su esfuerzo y su modo de permisos desde el propio chat. Nexo (la API) compila fuentes en la wiki y responde preguntas con ella: se lanza desde el menú «/» de ese chat (`/compilar`, `/preguntar`).
 - **Skills y agentes.** Las skills y los subagentes de Claude Code del vault se ven y se crean desde la app. El registro muestra qué agente gastó qué parte de tu sesión de 5 horas.
 - **Lectura de webs.** Antigravity o Playwright leen la página; Claude Code puede usar un Chrome con tus sesiones y pide confirmación antes de cualquier acción con efectos.

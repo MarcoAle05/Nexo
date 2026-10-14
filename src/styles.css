@@ -565,7 +565,10 @@ kbd {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 22px 20px 14px 22px;
+  /* A la derecha, lo mismo que el margen del compositor: los botones de la cabecera, los de
+     las herramientas y el compositor comparten borde. Y el último botón (minimizar) queda
+     justo donde el riel pone el de restaurar: se abre y se cierra sin mover el ratón. */
+  padding: 22px 12px 14px 22px;
 }
 .terminal-head .panel-title { gap: 3px; }
 .path {
@@ -599,7 +602,9 @@ kbd {
 .graph-fx { pointer-events: none; }
 /* Las capas de encima dejan pasar el ratón al grafo salvo en sus controles. */
 .topbar, .layout, .stage { pointer-events: none; }
-.topnav > *, .panel, .toolbar, .focus-pill, .vault-menu, .plane-open, .skill-pill, .skill-pop { pointer-events: auto; }
+.topnav > .views, .top-side > *, .panel, .toolbar, .focus-pill, .vault-menu, .plane-open, .skill-pill, .skill-pop { pointer-events: auto; }
+/* Los huecos de la barra (y el reloj, que no se pulsa) dejan pasar el ratón a lo de detrás. */
+.top-side, .top-side > .clock { pointer-events: none; }
 .stage { justify-content: space-between; }
 .stage-empty[hidden], .focus-pill[hidden] { display: none; }
 
@@ -1472,7 +1477,7 @@ kbd {
 
 /* ---------- Actividad Antigravity ---------- */
 /* La costura de la terminal va bajo las herramientas, no bajo la cabecera. */
-.terminal-tools { display: flex; gap: 8px; padding: 0 20px 16px 22px; border-bottom: 1px solid var(--seam); }
+.terminal-tools { display: flex; gap: 8px; padding: 0 12px 16px 22px; border-bottom: 1px solid var(--seam); }
 .activity-btn, .save-btn {
   display: flex;
   align-items: center;
@@ -1907,20 +1912,33 @@ body:not([data-scene="grafo"]) #graph-toolbar,
 body:not([data-scene="grafo"]) #stage-empty { display: none; }
 #graph-toolbar { margin-top: auto; }
 body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease) both 200ms; }
-.desk { position: absolute; inset: 0 0 72px; pointer-events: auto; }
-.desk[hidden], .desk-toolbar[hidden] { display: none; }
-.desk-surface {
+/* El lienzo de notas ocupa toda la app, por detrás de la barra y de las cartas, y es tan
+   grande (--desk-w × --desk-h, los pone notes.js) que hace de infinito. Es un desplazamiento
+   nativo sin barras: la rueda y el trackpad lo mueven solos y, al tabular a una carta que
+   no se ve, el navegador la trae. Arrastrar el fondo también lo mueve. */
+.desk {
   position: absolute;
   inset: 0;
-  overflow: auto;
-  border-radius: var(--r-card);
-  border: 1px solid var(--line);
-  /* Retícula de puntos: un escritorio, no el cielo del grafo. */
-  background:
-    radial-gradient(circle, rgba(255, 255, 255, 0.07) 1px, transparent 1.2px) 0 0 / 22px 22px,
-    rgba(255, 255, 255, 0.015);
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  /* Su propio contexto de apilamiento: las capas de las cartas (z-index) se ordenan entre
+     ellas y nunca quedan por encima de la barra ni de las cartas laterales. */
+  z-index: 0;
+  overflow: scroll;
+  overscroll-behavior: none;
+  scrollbar-width: none;
+  cursor: grab;
+}
+.desk::-webkit-scrollbar { display: none; }
+.desk[hidden] { display: none; }
+.desk.panning { cursor: grabbing; user-select: none; }
+.desk-surface {
+  position: relative;
+  width: var(--desk-w, 100%);
+  height: var(--desk-h, 100%);
+  /* El zoom (solo alejar) encoge el lienzo desde su esquina con `transform: scale`; lo pone
+     notes.js y, a tamaño real, no hay transformación. */
+  transform-origin: 0 0;
+  /* Retícula de puntos que se mueve con el lienzo: se ve que uno se desplaza. */
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.07) 1px, transparent 1.2px) 0 0 / 22px 22px;
 }
 .desk-empty {
   position: absolute;
@@ -1935,27 +1953,14 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
   color: var(--faint);
   pointer-events: none;
 }
-.desk-empty[hidden] { display: none; }
+.desk-empty[hidden], body:not([data-scene="escritorio"]) .desk-empty { display: none; }
 .desk-empty svg { margin-bottom: 8px; }
 .desk-empty-title { margin: 0; font-size: 13px; color: var(--fg); }
 .desk-empty-text { margin: 0; max-width: 34ch; font-size: 13px; line-height: 1.5; color: var(--dim); }
-.desk-toolbar { margin-top: auto; }
-.desk-tool {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 44px;
-  padding: 0 16px;
-  border-radius: var(--r-lg);
-  color: rgba(245, 245, 245, 0.72);
-  transition: background 300ms var(--ease), color 300ms var(--ease);
-}
-.desk-tool:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); color: var(--fg); }
-.desk-count { padding: 0 8px; font-size: 11.5px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
-
 .desk-card {
   position: absolute;
   display: flex;
+  cursor: auto;
   flex-direction: column;
   min-width: 220px;
   min-height: 150px;
@@ -1975,9 +1980,6 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
 @keyframes card-pulse {
   0% { box-shadow: 0 0 0 0 rgba(175, 136, 250, 0.5), 0 12px 30px rgba(0, 0, 0, 0.5); }
   100% { box-shadow: 0 0 0 14px rgba(175, 136, 250, 0), 0 12px 30px rgba(0, 0, 0, 0.5); }
-}
-.desk-surface.arranging .desk-card {
-  transition: left 480ms var(--ease), top 480ms var(--ease), width 480ms var(--ease), height 480ms var(--ease);
 }
 .desk-card-head {
   display: grid;
@@ -2066,10 +2068,14 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
   padding: 8px 14px 4px 6px;
   font-size: 13px;
   color: rgba(245, 245, 245, 0.9);
-  overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
 }
+/* La rueda sobre una nota larga la desplaza a ella y, al llegar al final, no arrastra al
+   lienzo. Si la nota no tiene nada que desplazar (`can-scroll` lo pone notes.js), la rueda
+   mueve el lienzo: las cartas ocupan casi toda la vista y si no, no habría por dónde. De
+   lado siempre lo mueve. */
+.desk-card-body.can-scroll, .desk-editor.can-scroll { overscroll-behavior-y: contain; }
 .desk-editor {
   flex: 1 1 auto;
   min-height: 0;
@@ -2102,6 +2108,217 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
   transition: opacity 250ms var(--ease);
 }
 .desk-card:hover .desk-resize { opacity: 1; }
+
+/* ---------- Lienzo de notas: minimapa y gestor de escritorios (barra superior) ----------
+   Flanquean el selector de vistas y miden lo mismo de alto que él: el minimapa a su
+   izquierda (dónde está uno en el lienzo, con un recuadro por lo que se ve) y el gestor de
+   escritorios a su derecha. Solo están en la vista Notas. */
+.desk-map {
+  position: relative;
+  flex-shrink: 0;
+  width: 120px;
+  height: 54px;
+  margin-left: auto;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--glass-bar);
+  cursor: pointer;
+  touch-action: none;
+}
+.desk-map[hidden], .desk-manager[hidden], .desk-zoom[hidden] { display: none; }
+.desk-map-world { position: absolute; inset: 0; pointer-events: none; }
+.desk-map-card { position: absolute; min-width: 2px; min-height: 2px; border-radius: 1.5px; background: rgba(245, 245, 245, 0.55); }
+.desk-map-card.is-front { background: var(--fg); }
+/* Lo que se ve: el único trazo con el acento del mapa. */
+.desk-map-view { position: absolute; min-width: 6px; min-height: 4px; border-radius: 3px; border: 1.5px solid var(--accent-soft); background: var(--accent-wash); }
+
+/* El gestor y el zoom van juntos, pegados al selector de vistas; lo demás, al borde. Si no
+   hay sitio, encoge el nombre del escritorio (se recorta); la barra del zoom se acorta con
+   la ventana en las más estrechas (ver el final de esta parte). */
+.desk-manager { flex: 0 1 auto; min-width: 58px; margin-right: 8px; }
+.desk-zoom {
+  display: flex;
+  align-items: center;
+  flex: 0 1 auto;
+  /* Encoge hasta lo que ocupan sus botones y la barra al mínimo, nunca menos: si no, su
+     contenido se saldría por encima de lo de al lado. */
+  min-width: min-content;
+  gap: 2px;
+  height: 54px;
+  margin-right: auto;
+  padding: 0 6px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--glass-bar);
+}
+.desk-zoom-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  color: rgba(245, 245, 245, 0.85);
+  transition-property: scale, background-color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+.desk-zoom-btn:disabled { opacity: 0.35; }
+.desk-zoom-value {
+  flex-shrink: 0;
+  min-width: 58px;
+  height: 32px;
+  padding: 0 6px;
+  border-radius: var(--r-sm);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  color: var(--fg);
+  transition-property: scale, background-color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+/* La barra: una pista fina y un tirador con el acento. */
+.desk-zoom-range {
+  flex: 1 1 92px;
+  width: 92px;
+  min-width: 40px;
+  height: 32px;
+  margin: 0 4px;
+  background: transparent;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+.desk-zoom-range::-webkit-slider-runnable-track { height: 4px; border-radius: var(--r-full); background: rgba(255, 255, 255, 0.18); }
+.desk-zoom-range::-moz-range-track { height: 4px; border-radius: var(--r-full); background: rgba(255, 255, 255, 0.18); }
+.desk-zoom-range::-webkit-slider-thumb { width: 14px; height: 14px; margin-top: -5px; border: 0; border-radius: var(--r-full); background: var(--accent-soft); -webkit-appearance: none; appearance: none; }
+.desk-zoom-range::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: var(--r-full); background: var(--accent-soft); }
+.desk-zoom-range:focus-visible { outline-offset: 0; }
+.desks-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 54px;
+  max-width: min(230px, 100%);
+  padding: 0 12px 0 14px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--glass-bar);
+  font-size: 13px;
+  transition-property: scale, border-color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+.desks-button svg { flex-shrink: 0; color: var(--dim); }
+.desks-button[aria-expanded="true"] { border-color: var(--accent-line); }
+.desks-current { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* El menú está al principio de la zona derecha: se abre hacia la derecha, como los de la izquierda. */
+.top-end .desk-manager .vault-menu { left: 0; right: auto; }
+.desks-menu { width: 340px; min-width: 0; max-width: calc(100vw - 40px); max-height: calc(100dvh - 96px); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.14) transparent; }
+.desks-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.desks-count { font-family: var(--mono); font-size: 11px; font-weight: 400; letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+.desks-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.desks-list:empty { display: none; }
+/* El radio de la fila es el del menú menos su margen. */
+.desks-row { display: flex; align-items: center; gap: 2px; padding-right: 4px; border-radius: var(--r-md); }
+.desks-row.is-active { background: rgba(255, 255, 255, 0.07); }
+.desks-pick {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 1px 8px;
+  min-height: 44px;
+  padding: 6px 8px 6px 10px;
+  border-radius: var(--r-md);
+  text-align: left;
+}
+.desks-pick:disabled { opacity: 1; }
+.desks-check { display: flex; color: var(--accent-soft); visibility: hidden; }
+.desks-row.is-active .desks-check { visibility: visible; }
+.desks-name { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+.desks-meta { grid-column: 2; font-size: 11.5px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.desks-act {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  color: var(--dim);
+  transition-property: scale, background-color, color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+.desks-load { width: auto; padding: 0 10px; border: 1px solid var(--line-strong); font-size: 12px; color: var(--fg); }
+.desks-act:disabled { opacity: 0.4; }
+.desks-rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 36px;
+  margin: 4px 0 4px 4px;
+  padding: 0 10px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--accent-line);
+  background: rgba(255, 255, 255, 0.05);
+  outline: none;
+  font-size: 13px;
+}
+.desks-new[aria-disabled="true"] { cursor: default; }
+.desks-new[aria-disabled="true"] > span { color: var(--dim); }
+.desks-empty { margin: 2px 12px 8px; font-size: 11.5px; line-height: 1.45; color: var(--dim); }
+.desks-empty[hidden] { display: none; }
+.desks-button:not(:disabled):active, .desks-act:not(:disabled):active, .desk-zoom-btn:not(:disabled):active, .desk-zoom-value:active { scale: 0.96; }
+@media (hover: hover) {
+  .desks-button:hover { border-color: rgba(255, 255, 255, 0.24); }
+  .desks-row:hover, .desks-row:focus-within { background: rgba(255, 255, 255, 0.07); }
+  .desks-act:not(:disabled):hover { background: rgba(255, 255, 255, 0.1); color: var(--fg); }
+  .desk-map:hover { border-color: rgba(255, 255, 255, 0.24); }
+  .desk-zoom-btn:not(:disabled):hover, .desk-zoom-value:hover { background: rgba(255, 255, 255, 0.1); }
+}
+/* Con menos movimiento, el menú solo aparece (sin el desplazamiento de entrada) y las cartas
+   laterales se minimizan y restauran de golpe, sin deslizarse. */
+@keyframes fade-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .panel, .stage { transition-duration: 0s; }
+  .desks-menu { animation: fade-in 150ms ease-out both; }
+  .desks-button, .desks-act, .desk-zoom-btn, .desk-zoom-value { transition-property: background-color, color, border-color; }
+  .desks-button:active, .desks-act:active, .desk-zoom-btn:active, .desk-zoom-value:active { scale: none; }
+}
+
+/* En Notas la barra lleva tres piezas más (minimapa, escritorios y zoom). Según se estrecha
+   la ventana: el reloj enseña solo la hora y después se oculta; Buscar, Conexiones y la
+   marca se quedan en su icono (el nombre sigue para lectores de pantalla) y el minimapa
+   encoge. El gestor y la barra del zoom encogen solos (ver arriba). */
+body[data-view="notas"] .clock-date { display: none; }
+@media (max-width: 1760px) {
+  body[data-view="notas"] #search-button .top-label, body[data-view="notas"] #search-button kbd { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+@media (max-width: 1560px) {
+  body[data-view="notas"] #conn-button .top-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+}
+@media (max-width: 1500px) {
+  body[data-view="notas"] .clock { display: none; }
+}
+@media (max-width: 1160px) {
+  body[data-view="notas"] .brand > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  body[data-view="notas"] .brand { padding-right: 8px; }
+  body[data-view="notas"] .desk-map { width: 92px; }
+  body[data-view="notas"] .desk-zoom { padding: 0 4px; }
+  body[data-view="notas"] .desk-zoom-value { min-width: 0; padding: 0 4px; }
+  /* La zona derecha mide media ventana menos el selector: la barra del zoom se lleva lo que
+     queda tras las demás piezas (40 px a 1024 de ancho, los 92 de siempre desde unos 1130). */
+  body[data-view="notas"] .desk-zoom-range { flex: 0 0 auto; width: clamp(40px, calc(50vw - 474px), 92px); }
+  /* Un nombre recortado a dos letras no dice nada: el gestor se queda en su icono. */
+  body[data-view="notas"] .desks-current { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  body[data-view="notas"] .desks-button { padding: 0 10px; }
+}
 
 /* ---------- Editor de notas por bloques (note-editor.js) ----------
    Una fila por línea del Markdown. A la izquierda queda un margen para el «+», que se ve
@@ -2319,7 +2536,9 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 14px 0;
+  /* El primer botón del riel cae donde estaba el de minimizar de la carta abierta: mismo
+     margen de arriba que su cabecera y, con 70 px de ancho, el mismo de lado. */
+  padding: 22px 0 14px;
 }
 .panel-rail[hidden] { display: none; }
 .rail-sep { width: 20px; height: 1px; margin: 2px 0; background: var(--line-strong); }
@@ -2341,10 +2560,14 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
   color: var(--dim);
 }
 @media (min-width: 768px) {
-  .layout.min-right #terminal-panel { flex: 0 0 66px; }
+  .layout.min-right #terminal-panel { flex: 0 0 70px; }
+  .layout.min-left #sources-panel { flex: 0 0 70px; }
+  /* La carta izquierda cambia de contenido con la vista (cada núcleo lleva su `hidden`):
+     minimizada se ocultan todos con una clase, sin tocar cuál está a la vista. */
+  #sources-panel.is-min > .panel-core { display: none; }
 }
 @media (max-width: 767px) {
-  /* Apiladas, la terminal no se minimiza. */
+  /* Apiladas, las cartas no se minimizan. */
   .minimize-btn, .panel-rail { display: none !important; }
   #terminal-panel > .panel-core[hidden] { display: flex; }
 }
