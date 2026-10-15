@@ -1,0 +1,12 @@
+---
+paths:
+  - "src/galaxy.js"
+  - "tests/galaxy-*.test.mjs"
+---
+
+# La galaxia inicial
+
+`ORBIT` está en `skills.js` (ver `skills-y-agentes.md`) y lo que no debe hacer un lienzo que se repinta siempre, en `rendimiento.md`.
+
+- `galaxy.js`: la galaxia inicial. ~22 000 puntos (núcleo, disco tenue, un aro ancho con grumos y halo; `LOOK` y `makePoints`, deterministas), blancos y con los tintes del acento (`TINTS`: lila, violeta, azul y rosa, repartidos por grupo con los pesos `tint`/`warm` de `LOOK`; el tinte de cada punto sale de su fase, sin gastar números de la semilla), dibujados con **WebGL en un solo `drawArrays`**: la órbita de cada punto la calcula el shader con el tiempo, así que la CPU no hace nada por fotograma. Sin WebGL (pintado por CPU) usa un canvas 2D con un tercio de los puntos. Hay **dos lienzos** dentro de `.galaxy-layer` y solo uno a la vista: cambiar el tamaño de un lienzo que se ve hacía parpadear la galaxia (al terminar de recogerse al abrir la ventana y durante toda la transición al minimizar el chat), así que el visible nunca cambia de tamaño; cuando hace falta otro se prepara el de reserva (`.is-spare`, casi transparente pero ya compuesto) y se intercambian a los dos fotogramas. `planBox` decide la caja: todo el contenedor mientras se dispersa, lo justo en reposo y, mientras el hueco se mueve, una de tamaño fijo que solo cambia de posición. `open()`/`close()` dispersan o recogen los puntos (`u_spread`), `contains()` es la zona clicable y `onFrame` avisa cuando cambian centro o tamaño (los toma del `#stage`; `main.js` lo usa también para centrar la luz de fondo, `--glow-x`/`--glow-y` de `.backdrop`). El tamaño sale de `frameFor` (ancho del hueco ÷ 2,85, con un tope en huecos estrechos para que las skills de los lados no pisen el anillo) y va a juego con `ORBIT` de `skills.js`: si cambia uno, revisar el otro.
+- **Temas**: los tintes no son fijos. Cada tema trae en `themes.js` sus cinco tintes (en el orden de `TINTS`), su mezcla y su `gain`; `setPalette` los pasa a los dos lienzos y `recolor` rehace solo los colores desde el `tone` de cada punto, sin tocar la forma. En los temas oscuros la luz se suma (`gl.ONE, gl.ONE`; `lighter` en 2D); en los claros, sumar luz no se ve sobre blanco y los puntos son tinta encima (`gl.ONE, gl.ONE_MINUS_SRC_ALPHA`, colores premultiplicados; `source-over`), más tenues (`u_gain`) para que el núcleo no sea una mancha.

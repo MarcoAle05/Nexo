@@ -25,6 +25,8 @@ import { colorFor, createGraph } from './graph.js';
 import { createNotes } from './notes.js';
 import { renderMarkdown, resolveLink } from './note-view.js';
 import { commandFor, createSkills } from './skills.js';
+import { createSettings } from './settings.js';
+import { currentTheme, onTheme } from './themes.js';
 
 const $ = (id) => document.getElementById(id);
 const desktop = isTauri();
@@ -1528,6 +1530,22 @@ galaxy.onFrame(({ cx, cy }) => {
   backdrop.style.setProperty('--glow-x', `${Math.round(cx)}px`);
   backdrop.style.setProperty('--glow-y', `${Math.round(cy)}px`);
 });
+
+// ---------------------------------------------------------------- configuración y tema
+// Los lienzos no heredan el CSS: toman la paleta del tema al arrancar y en cada cambio. Lo que
+// pinta la carta con el color de un nodo (su estrella, sus conexiones) se repinta también.
+function paintTheme(theme) {
+  graph.setPalette(theme.graph);
+  galaxy.setPalette(theme.galaxy);
+}
+paintTheme(currentTheme());
+onTheme((theme) => {
+  paintTheme(theme);
+  nodeShown = '';
+  renderNode();
+  if (!$('search-menu').hidden) renderSearch();
+});
+createSettings({ button: $('settings-button'), dialog: $('settings'), groups: $('theme-groups'), closeButton: $('settings-close') });
 
 function renderScene() {
   const next = view === 'notas' ? 'escritorio' : view === 'agentes' ? 'registro' : plane;

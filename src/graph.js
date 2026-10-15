@@ -5,14 +5,21 @@ import 'd3-transition';
 import { zoom, zoomIdentity } from 'd3-zoom';
 
 const FONT = "'Inter Variable', 'Inter', system-ui, sans-serif";
-const WHITE = (a) => `rgba(255,255,255,${a})`;
 
-// Paleta galaxia: neones desaturados, luminosos pero suaves sobre el negro.
-const NEBULA = ['#b69cff', '#7fe7ff', '#ff8ad8', '#7dffcf', '#8fa8ff', '#ffb0c8', '#c9a8ff', '#9ff0ff'];
-const STAR = '#ffd89a'; // fuentes: ámbar estelar
-const NOVA = '#d6f4ff'; // conversaciones guardadas: blanco azulado con anillo
-const CORE = '#ece6ff'; // notas de la raíz e índice maestro
-const GHOST = '#a99bd6'; // enlaces a notas que aún no existen
+// Paleta galaxia (la del tema, ver `graph` en themes.js): `nebula` son los neones de cada tema
+// de la wiki; `star` las fuentes (ámbar estelar), `nova` las conversaciones guardadas, `core`
+// las notas de la raíz e índice maestro y `ghost` los enlaces a notas que aún no existen.
+// `spark` es el núcleo de cada estrella (null: el propio color) e `ink`, el RGB de las etiquetas.
+let palette = {
+  nebula: ['#b69cff', '#7fe7ff', '#ff8ad8', '#7dffcf', '#8fa8ff', '#ffb0c8', '#c9a8ff', '#9ff0ff'],
+  star: '#ffd89a',
+  nova: '#d6f4ff',
+  core: '#ece6ff',
+  ghost: '#a99bd6',
+  spark: '#ffffff',
+  ink: [255, 255, 255],
+};
+const ink = (a) => `rgba(${palette.ink.join(',')},${a})`;
 
 function hexToRgb(hex) {
   const n = parseInt(hex.slice(1), 16);
@@ -32,11 +39,11 @@ const GALAXIES = new Set(['fuentes/_index.md', 'conversaciones/_index.md', 'nota
 const isGalaxy = (d) => GALAXIES.has(d.id);
 
 export function colorFor(d) {
-  if (d.kind === 'source') return STAR;
-  if (d.kind === 'conversation') return NOVA;
-  if (d.kind === 'missing') return GHOST;
-  if (!d.group) return CORE;
-  return NEBULA[hashString(d.group) % NEBULA.length];
+  if (d.kind === 'source') return palette.star;
+  if (d.kind === 'conversation') return palette.nova;
+  if (d.kind === 'missing') return palette.ghost;
+  if (!d.group) return palette.core;
+  return palette.nebula[hashString(d.group) % palette.nebula.length];
 }
 
 
@@ -163,7 +170,7 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
     c.fill();
 
     const core = c.createRadialGradient(0, 0, 0, 0, 0, r);
-    core.addColorStop(0, `rgba(255,255,255,${0.95 * a})`);
+    core.addColorStop(0, rgba(palette.spark ?? color, 0.95 * a));
     core.addColorStop(0.55, rgba(color, 0.95 * a));
     core.addColorStop(1, rgba(color, 0.55 * a));
     c.fillStyle = core;
@@ -209,14 +216,14 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
         const jitter = (((hashString(`${id}:${arm}:${i}`) % 100) / 100) - 0.5) * r * 0.45;
         c.beginPath();
         c.arc(Math.cos(angle) * (dist + jitter), Math.sin(angle) * (dist + jitter), Math.max(0.35, r * 0.2 * (1 - t * 0.7)), 0, Math.PI * 2);
-        c.fillStyle = rgba(i % 5 === 0 ? '#ffffff' : color, (0.85 - t * 0.7) * a);
+        c.fillStyle = rgba(i % 5 === 0 ? (palette.spark ?? color) : color, (0.85 - t * 0.7) * a);
         c.fill();
       }
     }
     c.restore();
 
     const core = c.createRadialGradient(0, 0, 0, 0, 0, r * 0.95);
-    core.addColorStop(0, `rgba(255,255,255,${0.97 * a})`);
+    core.addColorStop(0, rgba(palette.spark ?? color, 0.97 * a));
     core.addColorStop(0.5, rgba(color, 0.9 * a));
     core.addColorStop(1, rgba(color, 0));
     c.fillStyle = core;
@@ -453,7 +460,7 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
         if (next !== font) ctx.font = font = next;
         const strong = d.kind === 'index' || d.kind === 'source' || d.kind === 'conversation' || inFocus;
         ctx.fillStyle = d.kind === 'note' || d.kind === 'missing'
-          ? WHITE(highlight && !inFocus ? 0.35 : strong ? 0.92 : 0.6)
+          ? ink(highlight && !inFocus ? 0.35 : strong ? 0.92 : 0.6)
           : rgba(colorFor(d), highlight && !inFocus ? 0.4 : 0.95);
         ctx.fillText(d.label, box[0] + 2, box[1] + h / 2);
       }
@@ -622,6 +629,12 @@ export function createGraph(canvas, { getViewport, onSelect, onOpen }) {
   }
 
   return {
+    // Cambia de paleta con el tema: los sprites se pintaron con la anterior.
+    setPalette(next) {
+      palette = next;
+      sprites.clear();
+      requestDraw();
+    },
     setData({ nodes: rawNodes, edges }) {
       // La wiki cambia a menudo sin tocar el grafo (p. ej. al guardar una nota sin enlaces
       // nuevos): si nodos y aristas son los mismos, no se reinicia la simulación.

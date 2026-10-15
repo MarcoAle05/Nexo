@@ -33,17 +33,18 @@ export function formatUsd(usd) {
 export const totalTokens = (t) => (t ? t.input + t.output + t.cache_read + t.cache_write : 0);
 
 // Categorías de /context (los nombres que da Claude Code) → etiqueta y color de nexo.
-// Los colores son neones suaves; la conversación, blanca.
+// Los colores son tokens del tema (`--ctx-*` en styles.css): neones suaves en los oscuros y
+// tonos más hondos en los claros; la conversación, del color del texto.
 export const CATEGORY = {
-  'System prompt': { label: 'Instrucciones del sistema', color: '#bfa3fe' },
-  'System tools': { label: 'Herramientas', color: '#60d9ff' },
-  'MCP tools': { label: 'Herramientas MCP', color: '#8fa8ff' },
-  'MCP server instructions': { label: 'Instrucciones MCP', color: '#9ff0ff' },
-  'Custom agents': { label: 'Agentes', color: '#fd80c9' },
-  'Memory files': { label: 'Memoria', color: '#ffdbe5' },
-  Skills: { label: 'Skills', color: '#6ef8d0' },
-  'Initial context': { label: 'Al empezar', color: '#c9a8ff' },
-  Messages: { label: 'Conversación', color: '#fdfdfe' },
+  'System prompt': { label: 'Instrucciones del sistema', color: 'var(--ctx-system)' },
+  'System tools': { label: 'Herramientas', color: 'var(--ctx-tools)' },
+  'MCP tools': { label: 'Herramientas MCP', color: 'var(--ctx-mcp)' },
+  'MCP server instructions': { label: 'Instrucciones MCP', color: 'var(--ctx-mcp-info)' },
+  'Custom agents': { label: 'Agentes', color: 'var(--ctx-agents)' },
+  'Memory files': { label: 'Memoria', color: 'var(--ctx-memory)' },
+  Skills: { label: 'Skills', color: 'var(--ctx-skills)' },
+  'Initial context': { label: 'Al empezar', color: 'var(--ctx-initial)' },
+  Messages: { label: 'Conversación', color: 'var(--ctx-messages)' },
   'Autocompact buffer': { label: 'Reserva para compactar' },
   'Compact buffer': { label: 'Reserva para compactar' },
   'Free space': { label: 'Libre' },
@@ -406,7 +407,7 @@ export function createAgentLog({ invoke, fail }) {
     const li = document.createElement('li');
     li.className = 'log-ctx-item';
     li.innerHTML = '<span class="log-swatch" aria-hidden="true"></span><span class="log-ctx-name"></span><span class="log-ctx-nums"><b></b><span class="mono"></span></span>';
-    li.firstChild.style.setProperty('--c', CATEGORY[c.name]?.color ?? '#f5f5f5');
+    li.firstChild.style.setProperty('--c', CATEGORY[c.name]?.color ?? 'var(--fg)');
     const label = categoryLabel(c.name, kind);
     li.children[1].textContent = label;
     li.children[1].title = label;
@@ -449,7 +450,7 @@ export function createAgentLog({ invoke, fail }) {
       const span = document.createElement('span');
       span.className = `log-seg ${seg.kind}`;
       span.style.width = `${seg.pct}%`;
-      if (seg.kind === 'used') span.style.setProperty('--c', CATEGORY[seg.name]?.color ?? '#f5f5f5');
+      if (seg.kind === 'used') span.style.setProperty('--c', CATEGORY[seg.name]?.color ?? 'var(--fg)');
       span.title = categoryLabel(seg.name, kind);
       if (seg.kind === 'buffer') {
         const free = document.createElement('span');
