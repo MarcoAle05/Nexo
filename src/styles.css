@@ -47,8 +47,8 @@
    `--paper-rgb`/`--bar-rgb`/`--raised-rgb` las tarjetas (cartas y menús, barras, lo que flota) y
    `--accent-rgb` los lavados y bordes del acento. Cada tarjeta cambia sus canales por los `--s-*`
    del tema, que por defecto son los del fondo: solo los cambian los temas con tarjetas de la otra
-   polaridad (blancas sobre negro, negras sobre blanco o sobre gris), donde el texto de las
-   tarjetas no puede ser el del fondo.
+   polaridad (negras sobre blanco o sobre gris), donde el texto de las tarjetas no puede ser el
+   del fondo.
    El tema va en `data-theme` de <html> (lo pone `public/tema.js` antes de pintar y `themes.js`
    al elegirlo; sin él, Órbita). Los bloques valen para cualquier elemento con `data-theme` y los
    `--s-*` se heredan, así cada miniatura del selector se pinta con su tema aunque esté dentro de
@@ -103,6 +103,11 @@
   --check-mark: var(--s-check-mark);
 }
 
+/* La carta del chat lleva el tono más hondo de las tarjetas: así la app no es de un solo tono. */
+#terminal-panel {
+  --paper-rgb: var(--paper-deep-rgb);
+}
+
 /* Órbita (el tema por defecto) y lo común. */
 :root, [data-theme] {
   --scheme: dark;
@@ -114,6 +119,9 @@
   --paper-rgb: 12, 12, 16;
   --bar-rgb: 16, 16, 21;
   --raised-rgb: 19, 19, 25;
+  /* El tono más hondo de las tarjetas: el de la carta del chat (la de la derecha). Por defecto,
+     el mismo que las demás; los temas oscuros con tarjetas de color lo bajan un escalón. */
+  --paper-deep-rgb: var(--paper-rgb);
   --accent-rgb: 175, 136, 250;
   /* Opacidad del texto tenue y del más claro: cada tema la ajusta para que pasen de 4,5:1. */
   --dim-a: 0.6;
@@ -225,34 +233,23 @@
   --s-well-soft: rgba(0, 0, 0, 0.28);
   --s-check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2.5 6.2 2.3 2.3 4.7-5' fill='none' stroke='%23050507' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
-/* Negro con blanco: fondo negro y tarjetas blancas, con el texto y el acento negros. */
+/* Negro con gris: fondo negro y tarjetas grises neutras, sin color (las mismas luminosidades
+   OKLCH que los temas de color: fondo 0,14, carta 0,285, chat 0,21, texto 0,96, acento 0,78). */
 [data-theme="negro"] {
-  --deep-rgb: 0, 0, 0;
-  --paper-rgb: 242, 242, 242;
-  --bar-rgb: 242, 242, 242;
-  --raised-rgb: 250, 250, 250;
-  --accent-rgb: 245, 245, 245;
-  --accent: #f5f5f5;
-  --accent-press: #d4d4d8;
-  --on-accent: #0a0a0a;
-  --accent-soft: #f5f5f5;
-  --accent-gradient: linear-gradient(90deg, #f5f5f5, #8e8e93);
-  --s-scheme: light;
-  --s-fg-rgb: 10, 10, 10;
-  --s-ink-rgb: 0, 0, 0;
-  --s-ink-inv-rgb: 255, 255, 255;
-  --s-deep-rgb: var(--paper-rgb);
-  --s-dim-a: 0.64;
-  --s-faint-a: 0.6;
-  --s-accent-rgb: 10, 10, 10;
-  --s-accent: #0a0a0a;
-  --s-accent-press: #262626;
-  --s-on-accent: #fff;
-  --s-accent-soft: #0a0a0a;
-  --s-accent-gradient: linear-gradient(90deg, #0a0a0a, #8e8e93);
-  --s-well: rgba(0, 0, 0, 0.05);
-  --s-well-soft: rgba(0, 0, 0, 0.04);
-  --s-check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2.5 6.2 2.3 2.3 4.7-5' fill='none' stroke='%23ffffff' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --fg-rgb: 242, 242, 242;
+  --deep-rgb: 9, 9, 9;
+  --paper-rgb: 42, 42, 42;
+  --paper-deep-rgb: 24, 24, 24;
+  --bar-rgb: 42, 42, 42;
+  --raised-rgb: 51, 51, 51;
+  --accent-rgb: 196, 196, 196;
+  --dim-a: 0.7;
+  --faint-a: 0.6;
+  --accent: #b7b7b7;
+  --accent-press: #a4a4a4;
+  --on-accent: #1b1b1b;
+  --accent-soft: #c4c4c4;
+  --accent-gradient: linear-gradient(90deg, #a4a4a4, #c4c4c4);
 }
 /* Negro claro con gris: fondo casi negro y tarjetas grises, con los grises, el naranja, el verde
    y el rojo de una captura de referencia que dio el usuario (texto #cecece, «Enviar» #c1c1c1 con
@@ -261,6 +258,7 @@
   --fg-rgb: 206, 206, 206;
   --deep-rgb: 17, 17, 17;
   --paper-rgb: 38, 38, 38;
+  --paper-deep-rgb: 27, 27, 27;
   --bar-rgb: 38, 38, 38;
   --raised-rgb: 46, 46, 46;
   --accent-rgb: 252, 140, 69;
@@ -284,69 +282,100 @@
   --ctx-initial: #989898;
   --ctx-messages: #cecece;
 }
-/* Negro con azul: tarjetas azul marino y un azul claro de acento. */
-[data-theme="azul"] {
-  --fg-rgb: 237, 242, 250;
-  --deep-rgb: 6, 9, 14;
-  --paper-rgb: 19, 43, 72;
-  --bar-rgb: 19, 43, 72;
-  --raised-rgb: 25, 51, 85;
-  --accent-rgb: 157, 199, 254;
+/* Paletas oscuras de color: cada una es la rampa de un tono en OKLCH con el tono constante y,
+   en cada paso, la misma proporción del croma máximo que cabe en sRGB: fondo L 0,16, carta de la
+   izquierda L 0,25, notas y menús L 0,29, la carta del chat casi negra (L 0,12, la regla del
+   usuario: el chat, negro o casi negro), texto L 0,96 y el acento L 0,75 con el texto oscuro. */
+/* Índigo: tarjetas índigo oscuro, el chat casi negro y un lila azulado de acento. */
+[data-theme="indigo"] {
+  --fg-rgb: 241, 242, 245;
+  --deep-rgb: 9, 12, 28;
+  --paper-rgb: 23, 27, 74;
+  --paper-deep-rgb: 4, 5, 13;
+  --bar-rgb: 23, 27, 74;
+  --raised-rgb: 31, 35, 92;
+  --accent-rgb: 186, 194, 229;
   --dim-a: 0.7;
   --faint-a: 0.6;
-  --accent: #89bafa;
-  --accent-press: #77a7e5;
-  --on-accent: #0f1b2b;
-  --accent-soft: #9dc7fe;
-  --accent-gradient: linear-gradient(90deg, #77a7e5, #9dc7fe);
+  --accent: #9daae7;
+  --accent-press: #8795e2;
+  --on-accent: #10132c;
+  --accent-soft: #bac2e5;
+  --accent-gradient: linear-gradient(90deg, #8795e2, #bac2e5);
 }
-/* Negro con verde: tarjetas verde bosque y un verde menta de acento. */
-[data-theme="verde"] {
-  --fg-rgb: 235, 244, 239;
-  --deep-rgb: 5, 11, 8;
-  --paper-rgb: 3, 51, 31;
-  --bar-rgb: 3, 51, 31;
-  --raised-rgb: 6, 61, 38;
-  --accent-rgb: 136, 216, 174;
+/* Petróleo: tarjetas verde azulado oscuro, el chat casi negro y un turquesa de acento. */
+[data-theme="petroleo"] {
+  --fg-rgb: 234, 244, 245;
+  --deep-rgb: 8, 15, 15;
+  --paper-rgb: 19, 37, 39;
+  --paper-deep-rgb: 4, 6, 6;
+  --bar-rgb: 19, 37, 39;
+  --raised-rgb: 26, 47, 50;
+  --accent-rgb: 134, 211, 220;
   --dim-a: 0.7;
   --faint-a: 0.6;
-  --accent: #6bcf9d;
-  --accent-press: #57bc8a;
-  --on-accent: #0a2015;
-  --accent-soft: #88d8ae;
-  --accent-gradient: linear-gradient(90deg, #57bc8a, #88d8ae);
+  --accent: #61bfc9;
+  --accent-press: #56aab4;
+  --on-accent: #0f1819;
+  --accent-soft: #86d3dc;
+  --accent-gradient: linear-gradient(90deg, #56aab4, #86d3dc);
 }
-/* Negro con vino: tarjetas color vino y un rosa de acento. */
-[data-theme="vino"] {
-  --fg-rgb: 250, 239, 239;
-  --deep-rgb: 14, 7, 8;
-  --paper-rgb: 68, 28, 32;
-  --bar-rgb: 68, 28, 32;
-  --raised-rgb: 80, 35, 39;
-  --accent-rgb: 254, 169, 175;
+/* Berenjena: tarjetas berenjena, el chat casi negro y un orquídea de acento. */
+[data-theme="berenjena"] {
+  --fg-rgb: 245, 240, 244;
+  --deep-rgb: 19, 9, 18;
+  --paper-rgb: 50, 21, 48;
+  --paper-deep-rgb: 8, 4, 8;
+  --bar-rgb: 50, 21, 48;
+  --raised-rgb: 63, 28, 60;
+  --accent-rgb: 230, 175, 224;
   --dim-a: 0.7;
   --faint-a: 0.6;
-  --accent: #fa969f;
-  --accent-press: #e5848c;
-  --on-accent: #291415;
-  --accent-soft: #fea9af;
-  --accent-gradient: linear-gradient(90deg, #e5848c, #fea9af);
+  --accent: #e981e1;
+  --accent-press: #e25cdb;
+  --on-accent: #1f101e;
+  --accent-soft: #e6afe0;
+  --accent-gradient: linear-gradient(90deg, #e25cdb, #e6afe0);
 }
-/* Negro con ámbar: tarjetas café y un ámbar de acento. */
-[data-theme="ambar"] {
-  --fg-rgb: 247, 241, 233;
-  --deep-rgb: 12, 8, 5;
-  --paper-rgb: 56, 38, 15;
-  --bar-rgb: 56, 38, 15;
-  --raised-rgb: 67, 46, 19;
-  --accent-rgb: 238, 185, 123;
+/* Musgo: tarjetas verde musgo, el chat casi negro y un verde lima de acento. */
+[data-theme="musgo"] {
+  --fg-rgb: 237, 245, 226;
+  --deep-rgb: 12, 14, 8;
+  --paper-rgb: 30, 37, 18;
+  --paper-deep-rgb: 5, 6, 4;
+  --bar-rgb: 30, 37, 18;
+  --raised-rgb: 39, 47, 24;
+  --accent-rgb: 179, 209, 126;
   --dim-a: 0.7;
   --faint-a: 0.6;
-  --accent: #eca851;
-  --accent-press: #d8953d;
-  --on-accent: #251807;
-  --accent-soft: #eeb97b;
-  --accent-gradient: linear-gradient(90deg, #d8953d, #eeb97b);
+  --accent: #9bbc5a;
+  --accent-press: #8aa84f;
+  --on-accent: #14180e;
+  --accent-soft: #b3d17e;
+  --accent-gradient: linear-gradient(90deg, #8aa84f, #b3d17e);
+}
+/* Claude: la paleta de la app de Claude en oscuro, medida en una captura que dio el usuario:
+   grises cálidos (fondo #111111 de su barra lateral, la carta de la izquierda en el #151515 de su
+   zona principal), con lo demás más hondo de lo que medía la captura, como lo quiso el usuario
+   (la carta del chat casi negra, #0a0a0a; lo que flota #1c1c1b; las barras #1a1a1a), el texto
+   #f0efec y el coral #d97757 del asterisco. «Enviar» lleva el coral con el texto oscuro (blanco no llega a 4,5:1). */
+[data-theme="coral"] {
+  --fg-rgb: 240, 239, 236;
+  --deep-rgb: 17, 17, 17;
+  --paper-rgb: 21, 21, 21;
+  --paper-deep-rgb: 10, 10, 10;
+  --bar-rgb: 26, 26, 26;
+  --raised-rgb: 28, 28, 27;
+  --accent-rgb: 217, 119, 87;
+  --dim-a: 0.75;
+  --faint-a: 0.6;
+  --accent-line-a: 0.85;
+  --accent: #d97757;
+  --accent-press: #c6613f;
+  --on-accent: #141413;
+  --accent-soft: #d97757;
+  --accent-gradient: linear-gradient(90deg, #c6613f, #e8a387);
+  --glow-a: 0.05;
 }
 /* Gris con negro: fondo gris medio y tarjetas negras. */
 [data-theme="gris"] {
@@ -691,8 +720,9 @@ kbd {
 .tp-line { height: 3px; width: 78%; border-radius: 2px; background: var(--fg); }
 .tp-line.tp-dim { width: 54%; background: var(--dim); }
 .tp-pill { margin-top: auto; height: 7px; width: 62%; border-radius: 2px; background: var(--accent); }
-.tp-orbit { position: absolute; top: 47%; left: 54%; width: 38%; height: 22%; border-radius: 50%; border: 1px solid var(--accent-line); rotate: -24deg; }
-.tp-core { position: absolute; top: calc(58% - 3px); left: calc(73% - 3px); width: 6px; height: 6px; border-radius: 50%; background: var(--accent-soft); box-shadow: 0 0 6px var(--accent-glow); }
+.tp-side { position: absolute; top: 25%; bottom: 8%; right: 6%; width: 22%; border-radius: 4px; border: 1px solid var(--line); background: rgba(var(--paper-deep-rgb), 0.94); }
+.tp-orbit { position: absolute; top: 49%; left: 45%; width: 24%; height: 18%; border-radius: 50%; border: 1px solid var(--accent-line); rotate: -24deg; }
+.tp-core { position: absolute; top: calc(58% - 3px); left: calc(57% - 3px); width: 6px; height: 6px; border-radius: 50%; background: var(--accent-soft); box-shadow: 0 0 6px var(--accent-glow); }
 
 /* ---------- Layout ---------- */
 .layout {

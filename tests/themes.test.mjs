@@ -48,6 +48,9 @@ function tokensOf(theme) {
   return compute(raw, {});
 }
 const cardTokensOf = (theme) => compute({ ...FORMULAS.tokens, ...CARDS.tokens }, tokensOf(theme));
+// La carta del chat (`#terminal-panel`): una tarjeta con el tono más hondo de las tarjetas.
+const CHAT = BLOCKS.find((b) => b.selector === '#terminal-panel');
+const chatTokensOf = (theme) => compute({ ...FORMULAS.tokens, ...CARDS.tokens, ...CHAT.tokens }, tokensOf(theme));
 
 // Un color ya resuelto (hex o rgb/rgba) a [r, g, b, a].
 function color(value) {
@@ -86,7 +89,7 @@ test('cada tema de la lista tiene su bloque en styles.css, y al revés', () => {
 });
 
 test('los temas pasan los contrastes de WCAG 2 en el fondo y en las tarjetas', () => {
-  assert.ok(FORMULAS && CARDS, 'faltan las fórmulas o el bloque de las tarjetas');
+  assert.ok(FORMULAS && CARDS && CHAT, 'faltan las fórmulas, el bloque de las tarjetas o el de la carta del chat');
   for (const theme of THEMES) {
     const g = tokensOf(theme);
     const t = cardTokensOf(theme);
@@ -106,11 +109,15 @@ test('los temas pasan los contrastes de WCAG 2 en el fondo y en las tarjetas', (
     const card = over(color(t['--glass']), bg);
     const menu = over(color(t['--menu']), bg);
     const raised = color(t['--raised']);
+    const c = chatTokensOf(theme);
+    const chat = over(color(c['--glass']), bg);
     for (const name of ['--fg', '--dim', '--faint']) {
       text(t, name, card, 'la tarjeta');
       text(t, name, menu, 'el menú');
       text(t, name, raised, 'una nota');
+      text(c, name, chat, 'la carta del chat');
     }
+    mark(color(c['--accent-line']), chat, '--accent-line (foco) sobre la carta del chat');
     const onAccent = ratio(color(t['--on-accent']), color(t['--accent']));
     assert.ok(onAccent >= 4.5, `${theme.id}: --on-accent sobre --accent da ${onAccent.toFixed(2)}:1`);
     mark(color(t['--accent-soft']), card, '--accent-soft (marcas) sobre la tarjeta');

@@ -38,6 +38,18 @@ const GRAPH_GRAFITO = {
   ink: [206, 206, 206],
 };
 
+// Claude toma la paleta de la app de Claude: el coral de su asterisco y tonos apagados que lo
+// acompañan, sobre grises cálidos.
+const GRAPH_CORAL = {
+  nebula: ['#d97757', '#e8a387', '#8fb6a0', '#b49cd9', '#d9b26a', '#7fb3d5', '#e09f9f', '#c3c2b7'],
+  star: '#d9b26a',
+  nova: '#c3c2b7',
+  core: '#f0efec',
+  ghost: '#898781',
+  spark: '#ffffff',
+  ink: [240, 239, 236],
+};
+
 // Galaxia: tintes de los puntos (RGB lineal de 0 a 1, en el orden de TINTS de galaxy.js:
 // blanco, lila, violeta, azul y rosa en Órbita), cómo se mezclan y cuánto se apagan. Sobre un
 // fondo oscuro la luz se suma (`add`); sobre uno claro, sumar luz no se ve, así que los puntos
@@ -56,8 +68,8 @@ export const THEMES = [
   },
   {
     id: 'negro',
-    name: 'Negro con blanco',
-    hint: 'Tarjetas blancas sobre negro',
+    name: 'Negro con gris',
+    hint: 'Tarjetas grises, sin color',
     scheme: 'dark',
     galaxy: galaxy('add', 1, [[1, 1, 1], [0.86, 0.86, 0.9], [0.72, 0.72, 0.76], [0.6, 0.62, 0.68], [0.92, 0.92, 0.94]]),
     graph: GRAPH_DARK,
@@ -71,36 +83,44 @@ export const THEMES = [
     graph: GRAPH_GRAFITO,
   },
   {
-    id: 'azul',
-    name: 'Negro con azul',
-    hint: 'Tarjetas azul marino',
+    id: 'indigo',
+    name: 'Índigo',
+    hint: 'Tarjetas índigo, chat casi negro',
     scheme: 'dark',
-    galaxy: galaxy('add', 1, [[0.93, 0.95, 1], [0.62, 0.78, 1], [0.45, 0.65, 1], [0.3, 0.5, 0.95], [0.75, 0.85, 1]]),
+    galaxy: galaxy('add', 1, [[0.96, 0.96, 0.97], [0.77, 0.8, 0.91], [0.61, 0.66, 0.92], [0.4, 0.46, 0.85], [0.85, 0.87, 0.92]]),
     graph: GRAPH_DARK,
   },
   {
-    id: 'verde',
-    name: 'Negro con verde',
-    hint: 'Tarjetas verde bosque',
+    id: 'petroleo',
+    name: 'Petróleo',
+    hint: 'Tarjetas verde azulado, chat casi negro',
     scheme: 'dark',
-    galaxy: galaxy('add', 1, [[0.92, 1, 0.95], [0.55, 0.9, 0.72], [0.42, 0.82, 0.62], [0.3, 0.65, 0.5], [0.75, 0.95, 0.85]]),
+    galaxy: galaxy('add', 1, [[0.95, 0.96, 0.97], [0.55, 0.87, 0.91], [0.35, 0.75, 0.8], [0.27, 0.55, 0.58], [0.76, 0.9, 0.92]]),
     graph: GRAPH_DARK,
   },
   {
-    id: 'vino',
-    name: 'Negro con vino',
-    hint: 'Tarjetas color vino',
+    id: 'berenjena',
+    name: 'Berenjena',
+    hint: 'Tarjetas berenjena, chat casi negro',
     scheme: 'dark',
-    galaxy: galaxy('add', 1, [[1, 0.94, 0.94], [1, 0.66, 0.7], [0.95, 0.5, 0.56], [0.75, 0.35, 0.42], [1, 0.8, 0.82]]),
+    galaxy: galaxy('add', 1, [[0.97, 0.96, 0.97], [0.92, 0.74, 0.9], [0.93, 0.49, 0.9], [0.74, 0.29, 0.71], [0.92, 0.84, 0.91]]),
     graph: GRAPH_DARK,
   },
   {
-    id: 'ambar',
-    name: 'Negro con ámbar',
-    hint: 'Tarjetas café con ámbar',
+    id: 'musgo',
+    name: 'Musgo',
+    hint: 'Tarjetas verde musgo, chat casi negro',
     scheme: 'dark',
-    galaxy: galaxy('add', 1, [[1, 0.96, 0.9], [0.95, 0.75, 0.45], [0.93, 0.66, 0.32], [0.75, 0.5, 0.25], [1, 0.86, 0.66]]),
+    galaxy: galaxy('add', 1, [[0.95, 0.97, 0.93], [0.74, 0.86, 0.52], [0.6, 0.74, 0.32], [0.45, 0.55, 0.25], [0.82, 0.91, 0.68]]),
     graph: GRAPH_DARK,
+  },
+  {
+    id: 'coral',
+    name: 'Claude',
+    hint: 'Grises cálidos con coral',
+    scheme: 'dark',
+    galaxy: galaxy('add', 0.95, [[0.94, 0.94, 0.92], [0.76, 0.76, 0.72], [0.85, 0.47, 0.34], [0.54, 0.53, 0.51], [0.95, 0.75, 0.65]]),
+    graph: GRAPH_CORAL,
   },
   {
     id: 'gris',

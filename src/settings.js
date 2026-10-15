@@ -10,7 +10,8 @@ const GROUPS = [
 ];
 
 // Una tarjeta por tema: una miniatura de la app pintada con los tokens de ese tema (su
-// `data-theme` le da los colores; ver styles.css) y el nombre. La radio de verdad va dentro,
+// `data-theme` le da los colores; ver styles.css: la barra, la carta de la izquierda, la del chat
+// con su tono más hondo y la galaxia) y el nombre. La radio de verdad va dentro,
 // oculta: las flechas recorren todos los temas y el lector de pantalla los anuncia como grupo.
 function themeOption(theme) {
   const label = document.createElement('label');
@@ -26,7 +27,7 @@ function themeOption(theme) {
   preview.className = 'theme-preview';
   preview.dataset.theme = theme.id;
   preview.setAttribute('aria-hidden', 'true');
-  preview.innerHTML = '<span class="tp-bar"></span><span class="tp-card"><span class="tp-line"></span><span class="tp-line tp-dim"></span><span class="tp-pill"></span></span><span class="tp-orbit"></span><span class="tp-core"></span>';
+  preview.innerHTML = '<span class="tp-bar"></span><span class="tp-card"><span class="tp-line"></span><span class="tp-line tp-dim"></span><span class="tp-pill"></span></span><span class="tp-side"></span><span class="tp-orbit"></span><span class="tp-core"></span>';
   const check = document.createElement('span');
   check.className = 'theme-check';
   check.setAttribute('aria-hidden', 'true');
