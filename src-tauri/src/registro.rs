@@ -348,14 +348,9 @@ struct Found {
     place: Option<String>,
 }
 
-/// Transcripciones de todas las carpetas de `~/.claude/projects` escritas desde `since`.
-#[cfg(test)]
-fn find_transcripts(projects: &Path, vault_dir: &Path, since: i64) -> Vec<Found> {
-    find_transcripts_with(projects, vault_dir, &[], since)
-}
-
-/// Igual, contando también como de nexo las carpetas de sus workspaces (`extra`: carpeta de
-/// `~/.claude/projects` y nombre del workspace).
+/// Transcripciones de todas las carpetas de `~/.claude/projects` escritas desde `since`. Las
+/// del vault y las de los workspaces de nexo (`extra`: carpeta de `~/.claude/projects` y
+/// nombre del workspace) son de nexo.
 fn find_transcripts_with(
     projects: &Path,
     vault_dir: &Path,
