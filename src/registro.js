@@ -216,7 +216,8 @@ export function createAgentLog({ invoke, fail }) {
       </button>`;
     li.querySelector('.log-name-text').textContent = agent.name;
     li.querySelector('.log-model').textContent = modelLabel(agent.model);
-    const sub = [agent.title, timeLabel(agent)].filter(Boolean).join(' · ');
+    // Los de un workspace dicen cuál (los del vault no llevan nada).
+    const sub = [log?.places?.[agent.id], agent.title, timeLabel(agent)].filter(Boolean).join(' · ');
     li.querySelector('.log-sub').textContent = sub;
     li.querySelector('.log-sub').title = sub;
     li.querySelector('.log-tokens b').textContent = formatTokens(totalTokens(agent.tokens));
@@ -237,7 +238,7 @@ export function createAgentLog({ invoke, fail }) {
     const opts = {
       key: (a) => a.id,
       sig: (a) =>
-        [a.name, a.model, a.title, a.active, a.calls, a.share?.toFixed(2), totalTokens(a.tokens), a.last, log?.used].join('|'),
+        [a.name, a.model, a.title, a.active, a.calls, a.share?.toFixed(2), totalTokens(a.tokens), a.last, log?.used, log?.places?.[a.id]].join('|'),
       build: row,
     };
     reconcile($('log-active'), running, opts);
@@ -360,7 +361,7 @@ export function createAgentLog({ invoke, fail }) {
       ...(agent.kind === 'sub' ? [chip(effortLabel(agent.effort))] : []),
       agent.active ? chip('Activo', 'status on') : chip('Terminado', 'status'),
     );
-    $('ld-title').textContent = [agent.title, timeLabel(agent)].filter(Boolean).join(' · ');
+    $('ld-title').textContent = [log?.places?.[agent.id] && `Workspace ${log.places[agent.id]}`, agent.title, timeLabel(agent)].filter(Boolean).join(' · ');
 
     $('ld-share').textContent = `${formatShare(agent.share)} de la sesión`;
     const t = agent.tokens;

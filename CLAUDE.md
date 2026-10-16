@@ -6,7 +6,7 @@ Aquí solo va lo que vale en cualquier tarea. Lo de cada zona del código está 
 
 ## Qué es
 
-**nexo**: un "NotebookLM propio" de escritorio (Tauri 2 + Vite, JS sin framework). Interfaz en español. Tres zonas: fuentes a la izquierda, en el centro (a pantalla completa, detrás de los paneles) la **galaxia** de puntos con las skills alrededor, el **grafo** de la wiki o (en la vista Agentes) el **registro de agentes**, y a la derecha el **chat con Claude**: Claude Code con la suscripción del usuario, sin terminal, pintado con el diseño de la app. Lo que va por la API de Anthropic (Nexo: compilar, preguntar, la clave) ya no tiene pestaña propia: se lanza desde el menú «/» de ese chat. Todo gira en torno a un vault de Obsidian elegido por el usuario (`raw/` → `wiki/` → `output/`, ver `backend.md`). Los comentarios, mensajes y textos de UI se escriben en español.
+**nexo**: un "NotebookLM propio" de escritorio (Tauri 2 + Vite, JS sin framework). Interfaz en español. Tres zonas: fuentes a la izquierda, en el centro (a pantalla completa, detrás de los paneles) la **galaxia** de puntos con las skills alrededor, el **grafo** de la wiki o (en la vista Agentes) el **registro de agentes** o las ventanas de un **workspace** (una carpeta de proyecto con su orquestador y sus agentes), y a la derecha el **chat con Claude**: Claude Code con la suscripción del usuario, sin terminal, pintado con el diseño de la app. Lo que va por la API de Anthropic (Nexo: compilar, preguntar, la clave) ya no tiene pestaña propia: se lanza desde el menú «/» de ese chat. Todo gira en torno a un vault de Obsidian elegido por el usuario (`raw/` → `wiki/` → `output/`, ver `backend.md`). Los comentarios, mensajes y textos de UI se escriben en español.
 
 Backend en `src-tauri/src/` (crate `app`) y `crates/` (`nexo-core`, `nexo-mcp`); frontend en `src/` e `index.html`; pruebas de la interfaz en `tests/`.
 
@@ -47,13 +47,14 @@ Si `cargo` no está en el PATH de la sesión: `source ~/.cargo/env`.
 | `api-nexo.md` | Messages API, el asistente Nexo (`compile`, `ask`), Conexiones | `claude.rs`, `nexo.rs`, `connections.rs` |
 | `claude-code.md` | El chat con Claude Code: proceso, protocolo, vista, sesiones y recargas | `claude_code.rs`, `chat-model.js`, `chat.js` y sus pruebas |
 | `uso-y-registro.md` | Límites de uso y registro de agentes | `usage.rs`, `registro.rs`, `registro.js` |
-| `render.md` | Cómo pinta WebKitGTK (GPU, `drmWaitVBlank`, `render-cpu`) | `render.rs`, `main.rs`, `build.rs` |
+| `render.md` | Cómo pinta WebKitGTK (por CPU de momento, recarga si cae, `drmWaitVBlank`) | `render.rs`, `main.rs`, `build.rs` |
 | `rendimiento.md` | Rendimiento de lo que se pinta en WebKitGTK | `styles.css`, `galaxy.js`, `graph.js`, `notes.js`, `render.rs` |
 | `skills-y-agentes.md` | Skills y agentes del vault, su órbita y la carta Agentes | `skills.rs`, `agents.rs`, `skills.js`, `agents.js` |
+| `workspace.md` | Workspaces de la vista Agentes: carpetas de proyecto, su orquestador, el registro de sus agentes, los extras, las pestañas y las ventanas | `workspace.rs`, `workspace_run.rs`, `workspace.js`, `ws-*.js` y sus pruebas |
 | `galaxia.md` | La galaxia inicial (WebGL, dos lienzos, `frameFor`) | `galaxy.js` y sus pruebas |
 | `grafo-vista.md` | El grafo en canvas y la vista de notas en Markdown | `graph.js`, `note-view.js` |
 | `notas.md` | Apartado Notas: datos, editor, lienzo, zoom y escritorios | `notes.js`, `note-editor.js`, `desk-layout.js`, `desks.js`, `notas.rs` |
-| `interfaz.md` | `main.js`, barra superior, Configuración, vistas y escenas, cartas minimizadas y expandibles | `main.js`, `dom.js`, `settings.js`, `index.html`, `styles.css` |
+| `interfaz.md` | `main.js`, barra superior, Configuración, vistas y escenas, cartas minimizadas y expandibles | `main.js`, `dom.js`, `settings.js`, `modal.js`, `index.html`, `styles.css` |
 | `estilos.md` | Temas y sus tokens, tipografía, paleta, radios, contraste, anchos y alturas | `styles.css`, `index.html`, `themes.js`, `public/tema.js`, `tests/themes.test.mjs` |
 
 ## Siempre

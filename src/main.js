@@ -16,7 +16,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { ask, open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
-import { createChat } from './chat.js';
+import { createChat, mountChat } from './chat.js';
 import { reconcile } from './dom.js';
 import { createAgents } from './agents.js';
 import { createGalaxy } from './galaxy.js';
@@ -27,6 +27,9 @@ import { renderMarkdown, resolveLink } from './note-view.js';
 import { commandFor, createSkills } from './skills.js';
 import { createSettings } from './settings.js';
 import { currentTheme, onTheme } from './themes.js';
+import { activity, createWorkspace } from './workspace.js';
+import { formatTokens } from './registro.js';
+import { STATE_LABEL as AGENT_STATE } from './ws-stream.js';
 
 const $ = (id) => document.getElementById(id);
 const desktop = isTauri();
@@ -89,6 +92,13 @@ const LEFT_CARD = {
   notas: { label: 'Notas', card: 'la carta de notas' },
   agentes: { label: 'Agentes', card: 'la carta de agentes' },
 };
+const WS_CARD = { label: 'Workspace', card: 'la carta del workspace' };
+// La vista Agentes tiene dos paneles: el de nexo (skills, agentes del vault y el registro) y el
+// de un workspace (su carpeta, sus agentes y sus ventanas). Se recuerda cuál se dejó.
+let agentsMode = 'nexo';
+try {
+  if (localStorage.getItem('nexo.agentsMode') === 'workspace') agentsMode = 'workspace';
+} catch {}
 
 function renderExpanded() {
   const layout = $('layout');
@@ -107,7 +117,7 @@ function renderExpanded() {
   // todos con una clase (ver styles.css), sin perder cuál toca enseñar al volver.
   $('sources-panel').classList.toggle('is-min', minimizedLeft);
   $('left-rail').hidden = !minimizedLeft;
-  const leftName = LEFT_CARD[document.body.dataset.view] ?? LEFT_CARD.grafo;
+  const leftName = document.body.dataset.view === 'agentes' && agentsMode === 'workspace' ? WS_CARD : (LEFT_CARD[document.body.dataset.view] ?? LEFT_CARD.grafo);
   $('left-rail-label').textContent = leftName.label;
   for (const [button, verb] of [[$('left-restore'), 'Restaurar'], ...[...document.querySelectorAll('.left-minimize')].map((b) => [b, 'Minimizar'])]) {
     button.setAttribute('aria-label', `${verb} ${leftName.card}`);
@@ -122,7 +132,9 @@ function renderExpanded() {
           ? 'la carta de notas'
           : b.closest('#agents-core')
             ? 'la carta de agentes'
-            : 'la carta de fuentes';
+            : b.closest('#ws-core')
+              ? 'la carta del workspace'
+              : 'la carta de fuentes';
     b.setAttribute('aria-pressed', String(on));
     b.setAttribute('aria-label', `${on ? 'Contraer' : 'Expandir'} ${what}`);
     b.title = `${on ? 'Contraer' : 'Expandir'} ${what}`;
@@ -230,17 +242,35 @@ const LOCAL_COMMANDS = [
   { name: 'nueva', description: 'Empieza una conversación nueva con Claude', run: () => chat.reset() },
 ];
 
+// El workspace de la vista Agentes (se crea más abajo; el chat de Nexo le avisa de su estado).
+let workspace = null;
+
+async function pickFiles() {
+  const picked = await open({ multiple: true, title: 'Adjuntar archivos al mensaje' });
+  return picked ? [picked].flat() : [];
+}
+
+mountChat($('chat-view'), 'chat');
 const chat = createChat({
-  invoke,
-  Channel,
-  desktop,
-  getVault: () => vault,
-  async pickFiles() {
-    const picked = await open({ multiple: true, title: 'Adjuntar archivos al mensaje' });
-    return picked ? [picked].flat() : [];
+  transport: {
+    start({ options, replay, onEvent }) {
+      const channel = new Channel();
+      channel.onmessage = onEvent;
+      return invoke('claude_code_start', { options, replay, channel });
+    },
+    send: (line, record) => invoke('claude_code_send', { line, record }),
+    reset: () => invoke('claude_code_reset'),
   },
+  desktop,
+  blocked: () => (vault ? null : 'no-vault'),
+  getCwd: () => vault?.path ?? '',
+  pickFiles,
   onLink: (link) => followLink(link, ''),
   localCommands: () => LOCAL_COMMANDS,
+  onState: ({ busy }) => {
+    $('rail-working').hidden = !busy;
+    workspace?.nexoChanged();
+  },
 });
 
 // ---------------------------------------------------------------- Nexo por la API
@@ -896,31 +926,21 @@ function renderConnections(list) {
   connButton.title = list.map((c) => `${c.name}: ${STATE_LABEL[c.state] ?? '…'}`).join(' · ');
 }
 
-// Gráficos: si WebKit pinta por GPU (y a qué refresco) o volvió a la CPU tras un fallo.
+// Gráficos: cómo pinta WebKit. Por ahora siempre por CPU (render.rs): por GPU, el driver de
+// NVIDIA hacía caer la interfaz.
 async function refreshRender() {
   try {
     const info = await invoke('render_info');
-    $('render-dot').dataset.state = info.gpu ? 'ok' : 'warn';
+    $('render-dot').dataset.state = 'ok';
     $('render-state').textContent = info.gpu ? 'GPU' : 'CPU';
     $('render-detail').textContent = info.gpu
-      ? `WebKit pinta con la tarjeta gráfica${info.hz ? `, a ${info.hz} Hz como tu monitor` : ''}.`
-      : info.fallback
-        ? 'La GPU falló y nexo volvió a pintar por CPU: va más lento.'
-        : 'Una variable de entorno de WebKit obliga a pintar por CPU.';
-    $('render-retry').hidden = !info.fallback;
+      ? `WebKit pinta con la tarjeta gráfica${info.hz ? `, a ${info.hz} Hz como tu monitor` : ''} (forzado al arrancar).`
+      : 'nexo pinta por CPU: por GPU, el driver de NVIDIA hacía caer la interfaz.';
   } catch (error) {
     $('render-state').textContent = 'Error';
     $('render-detail').textContent = String(error);
   }
 }
-$('render-retry').addEventListener('click', async () => {
-  const ok = await ask('nexo se reiniciará para volver a pintar con la tarjeta gráfica. Si vuelve a fallar, regresará a la CPU.', {
-    title: 'Volver a probar la GPU',
-    okLabel: 'Reiniciar',
-    cancelLabel: 'Cancelar',
-  });
-  if (ok) invoke('render_retry_gpu').catch(fail);
-});
 
 async function refreshConnections() {
   if (!desktop) return;
@@ -1548,13 +1568,13 @@ onTheme((theme) => {
 createSettings({ button: $('settings-button'), dialog: $('settings'), groups: $('theme-groups'), closeButton: $('settings-close') });
 
 function renderScene() {
-  const next = view === 'notas' ? 'escritorio' : view === 'agentes' ? 'registro' : plane;
+  const next = view === 'notas' ? 'escritorio' : view === 'agentes' ? (agentsMode === 'workspace' ? 'workspace' : 'registro') : plane;
   const before = scene;
   scene = next;
   document.body.dataset.scene = scene;
   $('stage').setAttribute(
     'aria-label',
-    { escritorio: 'Escritorio de notas', grafo: 'Grafo de conocimiento', registro: 'Registro de agentes' }[scene] ?? 'Galaxia y skills',
+    { escritorio: 'Escritorio de notas', grafo: 'Grafo de conocimiento', registro: 'Registro de agentes', workspace: 'Ventanas del workspace' }[scene] ?? 'Galaxia y skills',
   );
   syncGraphActive();
   if (before === next) return;
@@ -1651,6 +1671,125 @@ const agentLog = createAgentLog({
   fail,
 });
 
+// ---------------------------------------------------------------- workspace
+// La vista Agentes en modo workspace: una carpeta de proyecto con su orquestador y sus agentes
+// (workspace.js). Nexo sigue en la carta derecha y también sale en la lista de agentes.
+workspace = createWorkspace({
+  invoke: (cmd, args) => (desktop ? invoke(cmd, args) : Promise.reject('Los workspaces solo funcionan en la app de escritorio.')),
+  Channel,
+  desktop,
+  pickFolder: async (title) => (desktop ? open({ directory: true, multiple: false, title }) : null),
+  pickFiles,
+  ask: (message, options) => (desktop ? ask(message, options) : Promise.resolve(window.confirm(message))),
+  fail,
+  renderMarkdown,
+  onLink: (link) => followLink(link, ''),
+  nexo: {
+    info: () => ({ state: chat.waiting ? 'waiting' : chat.busy ? 'active' : 'idle' }),
+    focus() {
+      if (minimized) setMinimized(false);
+      if (activityOpen) showActivity(false);
+      chat.focus();
+    },
+  },
+  onMode: setAgentsMode,
+  onChange: renderWorkspaceSummary,
+});
+
+function setAgentsMode(mode) {
+  const next = mode === 'workspace' ? 'workspace' : 'nexo';
+  const changed = next !== agentsMode;
+  agentsMode = next;
+  try {
+    localStorage.setItem('nexo.agentsMode', agentsMode);
+  } catch {}
+  if (view !== 'agentes') setView('agentes');
+  else if (changed) setView('agentes');
+  if (changed) {
+    revealLeft();
+    // El foco sigue al panel que aparece: el botón para volver o la entrada al workspace.
+    requestAnimationFrame(() => (agentsMode === 'workspace' ? $('ws-back') : $('ws-entry')).focus());
+  }
+}
+
+$('ws-entry').addEventListener('click', (event) => {
+  if (workspace.current) setAgentsMode('workspace');
+  else workspace.openDialog(event.currentTarget);
+});
+
+// El panel de Agentes de nexo enseña también el workspace: su entrada y, con su nombre, los
+// subapartados de sus agentes (los que desplegó el orquestador) y de sus skills.
+function renderWorkspaceSummary(ws, summary = workspace?.summary()) {
+  $('ws-entry-name').textContent = ws ? ws.name : 'Abre o crea una carpeta de proyecto';
+  $('ws-entry-name').title = ws?.path ?? '';
+  const agentsNow = summary?.agents ?? [];
+  const now = summary?.main ? activity([summary.main, ...agentsNow]) : '';
+  $('ws-entry-meta').textContent = ws ? `${agentsNow.length + 1} ${agentsNow.length ? 'agentes' : 'agente'}${now ? ` · ${now}` : ''}` : '';
+  $('ws-entry').setAttribute('aria-label', ws ? `Workspace ${ws.name}: abrirlo${$('ws-entry-meta').textContent ? `. ${$('ws-entry-meta').textContent}` : ''}` : 'Workspace: abrir o crear una carpeta de proyecto');
+
+  const label = (id, text, count) => {
+    const h = $(id);
+    h.hidden = !ws;
+    h.replaceChildren(document.createTextNode(text), Object.assign(document.createElement('span'), { className: 'ws-sub-count', textContent: ` · ${count}` }));
+  };
+  const agentsList = $('agents-ws-list');
+  const skillsList = $('skills-ws-list');
+  agentsList.hidden = skillsList.hidden = !ws;
+  $('agents-label').textContent = ws ? 'Del vault' : 'Agentes';
+  $('skills-label').textContent = ws ? 'Del vault' : 'Skills';
+  if (!ws) {
+    $('agents-ws-label').hidden = $('skills-ws-label').hidden = true;
+    return;
+  }
+  const rows = [{ ...summary.main, key: 'main', badge: 'Principal' }, ...agentsNow];
+  label('agents-ws-label', ws.name, rows.length);
+  reconcile(agentsList, rows, {
+    key: (a) => a.key,
+    sig: (a) => [a.name, a.role, a.state, a.type, a.tokens ? formatTokens(a.tokens) : ''].join('|'),
+    build: (a) => {
+      const li = document.createElement('li');
+      li.className = 'agent-row ws-sub-agent';
+      li.innerHTML = '<button type="button" class="agent-main"><span class="row-icon"><span class="ws-state"></span></span><span class="agent-text"><span class="agent-name"><span class="agent-name-text"></span></span><span class="agent-specs"></span><span class="agent-desc"></span></span></button>';
+      li.querySelector('.ws-state').dataset.state = a.state;
+      li.querySelector('.agent-name-text').textContent = a.name;
+      if (a.badge) li.querySelector('.agent-name').append(Object.assign(document.createElement('span'), { className: 'agent-badge', textContent: a.badge }));
+      const specs = li.querySelector('.agent-specs');
+      for (const text of [AGENT_STATE[a.state], a.type && a.key !== 'main' ? a.type : '', a.tokens ? `${formatTokens(a.tokens)} tokens` : ''].filter(Boolean)) {
+        specs.append(Object.assign(document.createElement('span'), { className: 'agent-spec', textContent: text }));
+      }
+      li.querySelector('.agent-desc').textContent = a.role || '';
+      const button = li.querySelector('.agent-main');
+      button.title = `Abrir su ventana en el workspace ${ws.name}`;
+      button.addEventListener('click', () => {
+        setAgentsMode('workspace');
+        if (a.key === 'main') workspace.openAgent(null);
+        else workspace.openAgent(a.task);
+      });
+      return li;
+    },
+  });
+  const wsSkills = summary.skills ?? [];
+  label('skills-ws-label', ws.name, wsSkills.length);
+  reconcile(skillsList, wsSkills.length ? wsSkills : [{ id: '', name: '', description: '' }], {
+    key: (sk) => sk.id || 'vacío',
+    sig: (sk) => [sk.name, sk.description].join('|'),
+    build: (sk) => {
+      const li = document.createElement('li');
+      if (!sk.id) {
+        li.className = 'ws-sub-empty';
+        li.textContent = 'Sin skills propias: las de su carpeta .claude/skills/ saldrán aquí.';
+        return li;
+      }
+      li.className = 'notes-row skill-row';
+      li.innerHTML = '<div class="row-main"><span class="row-icon"><svg width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="4.5"/><path d="M10 6.5v7M6.5 10h7"/></svg></span><span class="row-text"><span class="row-title"></span><span class="row-meta"><span class="row-meta-text"></span></span></span></div>';
+      li.querySelector('.row-title').textContent = sk.name;
+      li.querySelector('.row-meta-text').textContent = sk.description;
+      li.title = sk.description;
+      return li;
+    },
+  });
+}
+
 // ---------------------------------------------------------------- vistas: Grafo / Notas
 // Notas cambia la carta de la izquierda por temas y notas y el grafo por el escritorio
 // de notas; el chat de la derecha no cambia.
@@ -1684,7 +1823,8 @@ function setView(next) {
   const inAgents = view === 'agentes';
   document.querySelector('#sources-panel > .panel-core.sources').hidden = inNotes || inAgents;
   $('notes-core').hidden = !inNotes;
-  $('agents-core').hidden = !inAgents;
+  $('agents-core').hidden = !inAgents || agentsMode === 'workspace';
+  $('ws-core').hidden = !inAgents || agentsMode !== 'workspace';
   // El lienzo de notas, su minimapa, el gestor de escritorios y el zoom solo existen en Notas.
   $('desk').hidden = !inNotes;
   $('desk-map').hidden = !inNotes;
@@ -1717,6 +1857,7 @@ syncGraphActive = () => {
   graph.setActive(scene === 'grafo' && open);
   galaxy.setActive(scene === 'galaxia' && open);
   agentLog.activate(scene === 'registro' && open);
+  workspace?.setVisible(scene === 'workspace');
 };
 document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
 {
@@ -1955,6 +2096,8 @@ if (desktop) {
     try {
       vault = await invoke('get_vault');
       refreshConnections();
+      // El workspace que estaba abierto vuelve (no depende del vault).
+      workspace.init();
       detected = await invoke('detect_vaults');
       // Primer arranque con un único vault de Obsidian: se usa directamente.
       if (!vault && detected.length === 1) return useVault(detected[0].path);

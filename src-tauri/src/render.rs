@@ -1,10 +1,14 @@
 //! Cómo pinta WebKitGTK la interfaz en Linux y a cuántos fotogramas por segundo.
 //!
-//! - **GPU con memoria compartida.** El renderizador DMA-BUF de WebKitGTK falla con NVIDIA en
-//!   Wayland («Error 71»). Antes se desactivaba entero (`WEBKIT_DISABLE_DMABUF_RENDERER`) y
-//!   WebKit pintaba todo por CPU: el grafo animado y los paneles costaban más de un núcleo y
-//!   no pasaban de ~40 fps. Con `WEBKIT_DMABUF_RENDERER_FORCE_SHM` la página se pinta por GPU
-//!   y solo el resultado pasa por memoria compartida, que no tiene ese fallo.
+//! - **Por CPU, por ahora.** Por GPU (`WEBKIT_DMABUF_RENDERER_FORCE_SHM`) el proceso web de
+//!   WebKitGTK 2.52 se cae a menudo dentro del driver de NVIDIA 615 (`libnvidia-eglcore`, en el
+//!   hilo `SkiaGPUWorker` que rasteriza la página y en el principal): nexo pinta siempre por CPU
+//!   (`WEBKIT_DISABLE_DMABUF_RENDERER`). El renderizador DMA-BUF además da «Error 71» con
+//!   NVIDIA en Wayland. Para volver a probar la GPU, arrancar nexo con
+//!   `WEBKIT_DMABUF_RENDERER_FORCE_SHM=1`.
+//! - **Si el proceso web se cae**, la vista se vuelve a cargar (como una recarga de Vite: el
+//!   backend sigue vivo y los chats se reconectan a sus procesos). Como mucho unas cuantas
+//!   veces por minuto, para no entrar en un bucle.
 //! - **El refresco del monitor (120 o 144 Hz).** WebKit marca el ritmo de los fotogramas con
 //!   `drmWaitVBlank`, que el driver de NVIDIA rechaza a las aplicaciones (`EOPNOTSUPP`); entonces
 //!   WebKit cae a un temporizador fijo de 60 Hz. nexo exporta su propio `drmWaitVBlank`: prueba
@@ -13,9 +17,6 @@
 //!   en 72).
 //! - **Al cerrar**, si el proceso web termina por su cuenta mientras pinta por GPU, el driver de
 //!   NVIDIA lo hace fallar (y queda un volcado de memoria): nexo lo termina antes.
-//! - Si el proceso web falla con la app en marcha usando la GPU, nexo deja una marca
-//!   (`<config>/render-cpu`), vuelve a pintar por CPU y se reinicia. Borrar ese archivo vuelve a
-//!   probar la GPU.
 //!
 //! Si `WEBKIT_DISABLE_DMABUF_RENDERER` o `WEBKIT_DMABUF_RENDERER_FORCE_SHM` ya vienen definidas,
 //! nexo no toca el renderizador.
@@ -26,10 +27,8 @@ pub use linux::*;
 /// Estado del pintado para la interfaz (Conexiones → Gráficos).
 #[derive(serde::Serialize)]
 pub struct RenderInfo {
-    /// WebKit pinta por GPU.
+    /// WebKit pinta por GPU (solo si se forzó con una variable de entorno).
     gpu: bool,
-    /// La GPU falló antes y nexo volvió a la CPU (`<config>/render-cpu`).
-    fallback: bool,
     /// Refresco que nexo le marca a WebKit (cuando el driver no da la señal), en Hz.
     hz: Option<u32>,
 }
@@ -44,13 +43,9 @@ mod other {
     pub fn render_info() -> super::RenderInfo {
         super::RenderInfo {
             gpu: true,
-            fallback: false,
             hz: None,
         }
     }
-
-    #[tauri::command]
-    pub fn render_retry_gpu() {}
 }
 #[cfg(not(target_os = "linux"))]
 pub use other::*;
@@ -58,25 +53,17 @@ pub use other::*;
 #[cfg(target_os = "linux")]
 mod linux {
     use std::env;
-    use std::path::PathBuf;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
 
     use tauri::Manager;
-
-    const IDENTIFIER: &str = "com.nexo.app";
-    const CPU_MARK: &str = "render-cpu";
 
     static GPU: AtomicBool = AtomicBool::new(false);
     static CLOSING: AtomicBool = AtomicBool::new(false);
 
-    /// La misma carpeta que `app_config_dir` de Tauri, sin necesitar la app (aún no existe).
-    fn config_dir() -> Option<PathBuf> {
-        env::var_os("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .filter(|p| p.is_absolute())
-            .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-            .map(|d| d.join(IDENTIFIER))
-    }
+    /// Recargas por caída del proceso web que se permiten en un minuto.
+    const RELOADS_PER_MINUTE: usize = 3;
 
     /// Antes de crear la ventana: elige cómo pinta WebKit.
     pub fn configure() {
@@ -95,23 +82,18 @@ mod linux {
             );
             return;
         }
-        let cpu = config_dir().is_some_and(|d| d.join(CPU_MARK).exists());
-        let var = if cpu {
-            "WEBKIT_DISABLE_DMABUF_RENDERER"
-        } else {
-            "WEBKIT_DMABUF_RENDERER_FORCE_SHM"
-        };
+        // Por CPU: por GPU, el driver de NVIDIA hace caer el proceso web (ver arriba).
         // SAFETY: se ejecuta al inicio de main, antes de crear cualquier hilo.
-        unsafe { env::set_var(var, "1") };
-        GPU.store(!cpu, Ordering::Relaxed);
+        unsafe { env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+        GPU.store(false, Ordering::Relaxed);
     }
 
-    /// Con la ventana creada: fotogramas al ritmo del monitor y vuelta a la CPU si la GPU falla.
+    /// Con la ventana creada: fotogramas al ritmo del monitor y, si el proceso web se cae, la
+    /// vista se vuelve a cargar.
     pub fn attach(app: &tauri::App) {
         let Some(window) = app.get_webview_window("main") else {
             return;
         };
-        let handle = app.handle().clone();
         let _ = window.with_webview(move |webview| {
             use webkit2gtk::{WebProcessTerminationReason, WebViewExt};
             let view = webview.inner();
@@ -121,24 +103,24 @@ mod linux {
                 // SAFETY: `ptr` es el WebKitSettings vivo de esta vista.
                 unsafe { features::disable(ptr.cast(), c"PreferPageRenderingUpdatesNear60FPS") };
             }
-            if GPU.load(Ordering::Relaxed) {
-                view.connect_web_process_terminated(move |_, reason| {
-                    if reason != WebProcessTerminationReason::Crashed
-                        || CLOSING.load(Ordering::Relaxed)
-                    {
-                        return;
-                    }
-                    if let Some(dir) = config_dir() {
-                        let _ = std::fs::create_dir_all(&dir);
-                        let _ = std::fs::write(
-                            dir.join(CPU_MARK),
-                            "El proceso de WebKit falló pintando por GPU: nexo usa la CPU.\n\
-                             Borra este archivo para volver a probar la GPU.\n",
-                        );
-                    }
-                    handle.restart();
-                });
-            }
+            static CRASHES: Mutex<Vec<Instant>> = Mutex::new(Vec::new());
+            view.connect_web_process_terminated(move |view, reason| {
+                if reason != WebProcessTerminationReason::Crashed || CLOSING.load(Ordering::Relaxed)
+                {
+                    return;
+                }
+                let Ok(mut crashes) = CRASHES.lock() else {
+                    return;
+                };
+                crashes.retain(|at| at.elapsed() < Duration::from_secs(60));
+                if crashes.len() >= RELOADS_PER_MINUTE {
+                    log::error!("El proceso de WebKit se cae una y otra vez: no se recarga más.");
+                    return;
+                }
+                crashes.push(Instant::now());
+                log::warn!("El proceso de WebKit se cayó: se vuelve a cargar la vista.");
+                view.reload();
+            });
         });
     }
 
@@ -147,18 +129,8 @@ mod linux {
         let period = super::vblank::LAST_PERIOD.load(Ordering::Relaxed);
         super::RenderInfo {
             gpu: GPU.load(Ordering::Relaxed),
-            fallback: config_dir().is_some_and(|d| d.join(CPU_MARK).exists()),
             hz: (period > 0).then(|| (1e9 / period as f64).round() as u32),
         }
-    }
-
-    /// Quita la marca de la CPU y reinicia nexo para volver a probar la GPU.
-    #[tauri::command]
-    pub fn render_retry_gpu(app: tauri::AppHandle) {
-        if let Some(dir) = config_dir() {
-            let _ = std::fs::remove_file(dir.join(CPU_MARK));
-        }
-        app.restart();
     }
 
     /// Al cerrar: termina los procesos de WebKit antes de que salgan por su cuenta.

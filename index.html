@@ -66,10 +66,6 @@
                 <span class="conn-state" id="render-state">Comprobando…</span>
                 <span class="conn-detail" id="render-detail"></span>
               </div>
-              <button type="button" class="vault-option browser-load" id="render-retry" hidden>
-                <span>Volver a probar la GPU</span>
-                <small>nexo se reinicia</small>
-              </button>
               <div class="vault-sep" aria-hidden="true"></div>
               <button type="button" class="vault-option" id="conn-refresh">Comprobar de nuevo</button>
             </div>
@@ -366,6 +362,16 @@
             </div>
           </div>
 
+          <button type="button" class="ws-entry" id="ws-entry">
+            <span class="ws-entry-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/></svg></span>
+            <span class="ws-entry-text">
+              <span class="ws-entry-label">Workspace</span>
+              <span class="ws-entry-name" id="ws-entry-name">Abre o crea una carpeta de proyecto</span>
+              <span class="ws-entry-meta" id="ws-entry-meta"></span>
+            </span>
+            <span class="ws-entry-chevron" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg></span>
+          </button>
+
           <div class="segmented small agents-tabs" role="group" aria-label="Apartado de agentes" data-segmented>
             <button type="button" aria-pressed="true" data-agents-tab="skills">Skills <span class="agents-tab-count" id="skills-count">0</span></button>
             <button type="button" aria-pressed="false" data-agents-tab="agentes">Agentes <span class="agents-tab-count" id="agents-count">0</span></button>
@@ -397,6 +403,8 @@
           <div class="notes-scroll" id="skills-scroll">
             <h3 class="notes-section-label" id="skills-label">Skills</h3>
             <ul class="notes-list" id="skills-list"></ul>
+            <h3 class="notes-section-label ws-sub-label" id="skills-ws-label" hidden></h3>
+            <ul class="notes-list" id="skills-ws-list" hidden></ul>
             <div class="empty notes-empty" id="skills-empty" hidden>
               <span class="empty-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="14" height="14" rx="4.5"/><path d="M10 6.5v7M6.5 10h7"/></svg></span>
               <p class="empty-title">Aún no hay skills</p>
@@ -445,6 +453,8 @@
             <div class="notes-scroll" id="agents-scroll">
               <h3 class="notes-section-label" id="agents-label">Agentes</h3>
               <ul class="notes-list agents-list" id="agents-list"></ul>
+              <h3 class="notes-section-label ws-sub-label" id="agents-ws-label" hidden></h3>
+              <ul class="notes-list agents-list" id="agents-ws-list" hidden></ul>
               <div class="empty notes-empty" id="agents-empty" hidden>
                 <span class="empty-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="7.5" r="3"/><path d="M4.5 16.5c.9-2.8 3-4.3 5.5-4.3s4.6 1.5 5.5 4.3"/></svg></span>
                 <p class="empty-title">Aún no hay agentes</p>
@@ -453,6 +463,83 @@
             </div>
           </div>
         </div>
+        <!-- Workspace (vista «Agentes»): una carpeta de proyecto con su orquestador. Explorador de
+             archivos, agentes y Extras del perfil global; los cambios en los extras se aplican al
+             reiniciar el espacio. -->
+        <div class="panel-core ws-core" id="ws-core" hidden>
+          <div class="panel-head">
+            <div class="panel-title">
+              <span class="eyebrow">Workspace</span>
+              <h2 class="ws-title" id="ws-title">Workspace</h2>
+              <span class="path ws-path" id="ws-path"></span>
+            </div>
+            <div class="head-actions">
+              <button type="button" class="icon-btn outline" id="ws-folder" aria-haspopup="dialog" aria-controls="ws-dialog" aria-label="Elegir o crear la carpeta del workspace" title="Elegir o crear carpeta"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/></svg></button>
+              <button type="button" class="icon-btn outline minimize-btn left-minimize" aria-label="Minimizar la carta" title="Minimizar la carta">
+                <svg width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 10h10"/></svg>
+              </button>
+              <button type="button" class="icon-btn outline expand-btn" data-expand="left" aria-pressed="false" aria-label="Expandir la carta del workspace" title="Expandir la carta del workspace">
+                <svg class="expand-icon" width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5h4.5V8M8 16.5H3.5V12M16.5 3.5l-5 5M3.5 16.5l5-5"/></svg>
+                <svg class="contract-icon" width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 8.5H11.5V4.5M4.5 11.5h4v4M11.5 8.5l5-5M8.5 11.5l-5 5"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <button type="button" class="back-btn ws-back" id="ws-back">
+            <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 6 10l6 6"/></svg>
+            Agentes de nexo
+          </button>
+
+          <div class="ws-sections" id="ws-sections">
+            <section class="ws-sec ws-sec-files" id="ws-sec-files" aria-labelledby="ws-sec-files-toggle">
+              <div class="ws-sec-head">
+                <button type="button" class="ws-sec-toggle" id="ws-sec-files-toggle" aria-expanded="true" aria-controls="ws-sec-files-body"><span class="ws-sec-chevron" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg></span>Archivos</button>
+                <button type="button" class="icon-btn ws-sec-btn" id="ws-files-refresh" aria-label="Volver a leer la carpeta" title="Volver a leer la carpeta"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
+                <button type="button" class="icon-btn ws-sec-btn" id="ws-files-collapse" aria-label="Plegar todas las carpetas" title="Plegar todas las carpetas"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 4 4 4 4-4M6 16l4-4 4 4"/></svg></button>
+              </div>
+              <div class="ws-sec-body" id="ws-sec-files-body">
+                <ul class="ws-tree" id="ws-tree" role="tree" aria-label="Archivos del workspace"></ul>
+              </div>
+            </section>
+
+            <section class="ws-sec ws-sec-agents" id="ws-sec-agents" aria-labelledby="ws-sec-agents-toggle">
+              <div class="ws-sec-head">
+                <button type="button" class="ws-sec-toggle" id="ws-sec-agents-toggle" aria-expanded="true" aria-controls="ws-sec-agents-body"><span class="ws-sec-chevron" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg></span>Agentes <span class="ws-sec-count" id="ws-agents-count">0</span></button>
+                <span class="ws-sec-aside" id="ws-agents-aside"></span>
+              </div>
+              <div class="ws-sec-body" id="ws-sec-agents-body">
+                <ul class="ws-agents" id="ws-agents" aria-label="Agentes del workspace"></ul>
+              </div>
+            </section>
+
+            <section class="ws-sec ws-sec-extras" id="ws-sec-extras" aria-labelledby="ws-sec-extras-toggle">
+              <div class="ws-sec-head">
+                <button type="button" class="ws-sec-toggle" id="ws-sec-extras-toggle" aria-expanded="true" aria-controls="ws-sec-extras-body"><span class="ws-sec-chevron" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg></span>Extras</button>
+                <span class="ws-sec-aside" id="ws-extras-aside"></span>
+                <button type="button" class="icon-btn ws-sec-btn" id="ws-extras-refresh" aria-label="Volver a leer tu perfil de Claude Code" title="Volver a leer tu perfil"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
+              </div>
+              <div class="ws-sec-body" id="ws-sec-extras-body">
+                <div class="ws-extras" id="ws-extras"></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="empty ws-none" id="ws-none" hidden>
+            <span class="empty-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/></svg></span>
+            <p class="empty-title">Elige la carpeta de un proyecto</p>
+            <p class="empty-text">Tendrá su propio orquestador y sus agentes, con los archivos a mano y los extras que enciendas.</p>
+            <button type="button" class="pill-btn" id="ws-none-open">Elegir o crear carpeta</button>
+          </div>
+
+          <div class="ws-foot" id="ws-foot" hidden>
+            <p class="ws-foot-text">Cambiaste los extras: el orquestador los tendrá al reiniciar.</p>
+            <button type="button" class="cta small ws-restart" id="ws-restart">
+              Reiniciar espacio de Workspace
+              <span class="cta-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></span>
+            </button>
+          </div>
+        </div>
+
         <!-- Carta izquierda minimizada: un riel con lo justo para volver -->
         <div class="panel-rail" id="left-rail" hidden>
           <button type="button" class="icon-btn outline" id="left-restore" aria-label="Restaurar la carta" title="Restaurar la carta">
@@ -538,7 +625,7 @@
               </div>
               <div class="log-bar" aria-hidden="true"><span class="log-bar-nexo" id="log-bar-nexo"></span><span class="log-bar-rest" id="log-bar-rest"></span></div>
               <div class="log-split">
-                <span class="log-key nexo" title="Lo que gastaron Claude Code y sus agentes en este vault">Agentes de nexo <b id="log-nexo">—</b></span>
+                <span class="log-key nexo" title="Lo que gastaron Claude Code y sus agentes en este vault y en tus workspaces">Agentes de nexo <b id="log-nexo">—</b></span>
                 <span class="log-key rest" title="Lo demás que gastó tu cuenta en esta sesión: Claude Code en otras carpetas, claude.ai u otros equipos">Resto de Claude <b id="log-rest">—</b></span>
               </div>
               <p class="log-note" id="log-note" hidden></p>
@@ -560,6 +647,40 @@
             </div>
             <div class="log-detail" id="log-detail" hidden></div>
           </div>
+        </div>
+
+        <!-- Workspace (vista «Agentes»): pestañas de los agentes y archivos y hasta 4 ventanas -->
+        <div class="ws-center" id="ws-center" hidden>
+          <div class="ws-bar" id="ws-bar" hidden>
+            <div class="ws-tabs-scroll" id="ws-tabs-scroll">
+              <ul class="ws-tabs" id="ws-tabs" aria-label="Pestañas del workspace"></ul>
+            </div>
+            <div class="ws-bar-tools">
+              <div class="vault-anchor ws-all-anchor">
+                <button type="button" class="ws-all" id="ws-all" aria-haspopup="dialog" aria-expanded="false" aria-controls="ws-overview" title="Ver todas las pestañas">
+                  <svg width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M3 8h14M8 4.5V8"/></svg>
+                  <span class="ws-all-count" id="ws-all-count">0</span>
+                </button>
+                <div class="vault-menu ws-overview" id="ws-overview" role="dialog" aria-label="Todas las pestañas" hidden></div>
+              </div>
+              <button type="button" class="switch-btn ws-mode" id="ws-mode" role="switch" aria-checked="true" title="Encendido: hasta 4 ventanas juntas. Apagado: cada ventana ocupa todo el centro.">
+                <span class="ws-mode-label">Mosaico</span> <span class="switch" aria-hidden="true"><span></span></span>
+              </button>
+            </div>
+          </div>
+          <div class="ws-windows" id="ws-windows"></div>
+          <div class="ws-empty" id="ws-empty" hidden>
+            <svg width="40" height="40" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M3 8h14M8 4.5V8"/></svg>
+            <p class="desk-empty-title">Ninguna ventana a la vista</p>
+            <p class="desk-empty-text">Las pestañas de arriba siguen ahí: pulsa una para volver a verla, o abre un archivo del explorador o un agente de la carta.</p>
+            <button type="button" class="pill-btn" id="ws-empty-files">Ir al explorador</button>
+          </div>
+          <div class="ws-loading" id="ws-loading" role="status" hidden>
+            <span class="ws-loading-mark" aria-hidden="true"><svg width="34" height="34" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1"><circle cx="11" cy="11" r="3" fill="currentColor" stroke="none"/><ellipse cx="11" cy="11" rx="9.5" ry="4" transform="rotate(-24 11 11)"/></svg></span>
+            <p class="ws-loading-title" id="ws-loading-title">Abriendo el workspace…</p>
+            <p class="ws-loading-step" id="ws-loading-step"></p>
+          </div>
+          <p class="visually-hidden" role="status" id="ws-live"></p>
         </div>
       </section>
 
@@ -608,64 +729,10 @@
             <p class="activity-empty" id="activity-empty">Antigravity todavía no ha trabajado en esta sesión. Pega un enlace o añade una fuente y verás aquí cada paso.</p>
           </div>
 
-          <!-- Chat con Claude Code: la conversación y sus procesos, con el diseño de la app -->
-          <div class="chat-view" id="chat-view">
-            <div class="chat-scroll">
-              <div class="chat-log" id="chat-log">
-                <div class="empty chat-empty" id="chat-empty">
-                  <span class="empty-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3c.7 4 3 6.3 7 7-4 .7-6.3 3-7 7-.7-4-3-6.3-7-7 4-.7 6.3-3 7-7z"/></svg></span>
-                  <p class="empty-title" id="chat-empty-title">Claude está listo</p>
-                  <p class="empty-text" id="chat-empty-text">Pregunta por tus fuentes y tu wiki, o escribe / para ver los comandos y las skills.</p>
-                  <button type="button" class="pill-btn" id="chat-retry" hidden>Abrir de nuevo</button>
-                </div>
-                <ol class="chat-list" id="chat-list" aria-label="Conversación con Claude"></ol>
-                <p class="chat-working" id="chat-working" hidden><span class="chat-working-dot" aria-hidden="true"></span><span id="chat-working-text">Claude está trabajando…</span></p>
-              </div>
-              <button type="button" class="chat-jump" id="chat-jump" hidden>
-                <svg width="13" height="13" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4v12M5 11l5 5 5-5"/></svg> Ir al final
-              </button>
-            </div>
-            <!-- Lo que cambia sin que el foco se mueva se anuncia aquí; los errores, en la alerta. -->
-            <p class="visually-hidden" role="status" id="chat-live"></p>
-            <p class="visually-hidden" role="alert" id="chat-alert"></p>
-
-            <div class="chat-banner" id="chat-banner" hidden>
-              <p id="chat-banner-text"></p>
-              <button type="button" class="pill-btn" id="chat-restart">Abrir de nuevo</button>
-            </div>
-
-            <form class="chat-composer" id="chat-form">
-              <div class="chat-menu" id="chat-commands" role="listbox" aria-label="Comandos" hidden></div>
-              <div class="chat-menu" id="chat-model-menu" role="menu" aria-label="Modelo" hidden></div>
-              <div class="chat-menu" id="chat-effort-menu" role="menu" aria-label="Esfuerzo" hidden></div>
-              <div class="chat-menu" id="chat-access-menu" role="menu" aria-label="Permisos" hidden></div>
-              <ul class="chat-files" id="chat-files" aria-label="Archivos adjuntos" hidden></ul>
-              <label class="visually-hidden" for="chat-input">Mensaje para Claude</label>
-              <textarea id="chat-input" rows="1" placeholder="Escríbele a Claude…" autocomplete="off" spellcheck="true" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="chat-commands" aria-describedby="chat-hint"></textarea>
-              <span class="visually-hidden" id="chat-hint">Intro envía, Mayúsculas+Intro salta de línea, la barra abre los comandos y Escape detiene a Claude.</span>
-              <div class="chat-bar" id="chat-bar">
-                <button type="button" class="chat-btn chat-icon" id="chat-attach" aria-label="Adjuntar archivos" title="Adjuntar archivos">
-                  <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15.5 9.5-5.6 5.6a3.4 3.4 0 0 1-4.8-4.8l6-6a2.3 2.3 0 0 1 3.2 3.2l-5.9 6a1.1 1.1 0 0 1-1.6-1.6l5.2-5.3"/></svg>
-                </button>
-                <button type="button" class="chat-btn" id="chat-model" aria-haspopup="menu" aria-expanded="false" aria-controls="chat-model-menu" title="Modelo">
-                  <span id="chat-model-label">Modelo</span><span class="visually-hidden">, modelo</span><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg>
-                </button>
-                <button type="button" class="chat-btn" id="chat-effort" aria-haspopup="menu" aria-expanded="false" aria-controls="chat-effort-menu" title="Esfuerzo">
-                  <span id="chat-effort-label">Esfuerzo</span><span class="visually-hidden">, esfuerzo</span><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg>
-                </button>
-                <button type="button" class="chat-btn" id="chat-access" aria-haspopup="menu" aria-expanded="false" aria-controls="chat-access-menu" title="Permisos">
-                  <span id="chat-access-label">Preguntar</span><span class="visually-hidden">, permisos</span><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg>
-                </button>
-                <span class="chat-bar-space" aria-hidden="true"></span>
-                <button type="button" class="chat-btn chat-icon chat-slash" id="chat-slash" aria-label="Comandos" title="Comandos (/)" aria-haspopup="listbox" aria-expanded="false" aria-controls="chat-commands">/</button>
-                <button type="submit" class="chat-send" id="chat-send" data-state="send">
-                  <span class="chat-send-label" id="chat-send-label">Enviar</span>
-                  <svg class="chat-send-enter" width="13" height="13" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4.5v5a2 2 0 0 1-2 2H4.5M8 8l-3.5 3.5L8 15"/></svg>
-                  <svg class="chat-send-stop" width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor"/></svg>
-                </button>
-              </div>
-            </form>
-          </div>
+          <!-- Chat con Claude Code: la conversación y sus procesos, con el diseño de la app. Sus
+               piezas salen de #chat-template (chat.js, mountChat), igual que las de las ventanas
+               de los agentes de un workspace. -->
+          <div class="chat-view" id="chat-view"></div>
         </div>
 
         <!-- Chat minimizado: un riel con lo justo para volver -->
@@ -703,6 +770,117 @@
       </div>
     </div>
   </dialog>
+
+  <!-- Carpeta del workspace: elegir una que ya exista, crear otra o volver a una reciente. Se
+       abre como Configuración (modal.js). -->
+  <dialog class="settings ws-dialog" id="ws-dialog" aria-labelledby="ws-dialog-title">
+    <div class="settings-panel">
+      <div class="settings-head">
+        <h2 id="ws-dialog-title">Workspace</h2>
+        <button type="button" class="icon-btn outline settings-close" id="ws-dialog-close" aria-label="Cerrar" title="Cerrar">
+          <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m5 5 10 10M15 5 5 15"/></svg>
+        </button>
+      </div>
+      <div class="settings-body">
+        <p class="settings-section-hint ws-dialog-hint">Una carpeta de proyecto con su propio orquestador: despliega agentes, que verás en el centro, y trabaja con sus archivos.</p>
+        <div class="ws-choices">
+          <button type="button" class="ws-choice" id="ws-pick">
+            <span class="ws-choice-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 15.5V5.5H8l1.5 2h6.5v2"/><path d="M2.5 15.5 5 9.5h12.5l-2.5 6z"/></svg></span>
+            <span class="ws-choice-name">Elegir carpeta</span>
+            <span class="ws-choice-hint">Abre una que ya tengas</span>
+          </button>
+          <button type="button" class="ws-choice" id="ws-new" aria-expanded="false" aria-controls="ws-create">
+            <span class="ws-choice-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/><path d="M10 9.5v4M8 11.5h4"/></svg></span>
+            <span class="ws-choice-name">Crear carpeta</span>
+            <span class="ws-choice-hint">Una nueva para un proyecto</span>
+          </button>
+        </div>
+        <form class="ws-create" id="ws-create" hidden>
+          <label class="ws-field">
+            <span class="ws-field-label">Nombre</span>
+            <input type="text" id="ws-create-name" autocomplete="off" spellcheck="false" placeholder="mi-proyecto">
+          </label>
+          <div class="ws-field">
+            <span class="ws-field-label" id="ws-create-where-label">Ubicación</span>
+            <div class="ws-where" role="group" aria-labelledby="ws-create-where-label">
+              <code class="ws-where-path" id="ws-create-parent"></code>
+              <button type="button" class="chip" id="ws-create-browse">Cambiar…</button>
+            </div>
+          </div>
+          <p class="ws-create-preview" id="ws-create-preview"></p>
+          <p class="ws-create-error" id="ws-create-error" role="alert" hidden></p>
+          <div class="notes-create-actions">
+            <button type="button" class="chip" id="ws-create-cancel">Cancelar</button>
+            <button type="submit" class="chip notes-create-ok">Crear y abrir</button>
+          </div>
+        </form>
+        <div class="ws-recent-box" id="ws-recent-box" hidden>
+          <h3 class="settings-section-title">Recientes</h3>
+          <ul class="ws-recent" id="ws-recent"></ul>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- Plantilla del chat: la vista de una conversación con Claude Code (la carta derecha y cada
+       ventana de agente). mountChat la copia con sus ids bajo un prefijo («chat-…» aquí). -->
+  <template id="chat-template">
+    <div class="chat-scroll">
+      <div class="chat-log" id="chat-log">
+        <div class="empty chat-empty" id="chat-empty">
+          <span class="empty-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 3c.7 4 3 6.3 7 7-4 .7-6.3 3-7 7-.7-4-3-6.3-7-7 4-.7 6.3-3 7-7z"/></svg></span>
+          <p class="empty-title" id="chat-empty-title">Claude está listo</p>
+          <p class="empty-text" id="chat-empty-text">Pregunta por tus fuentes y tu wiki, o escribe / para ver los comandos y las skills.</p>
+          <button type="button" class="pill-btn" id="chat-retry" hidden>Abrir de nuevo</button>
+        </div>
+        <ol class="chat-list" id="chat-list" aria-label="Conversación con Claude"></ol>
+        <p class="chat-working" id="chat-working" hidden><span class="chat-working-dot" aria-hidden="true"></span><span id="chat-working-text">Claude está trabajando…</span></p>
+      </div>
+      <button type="button" class="chat-jump" id="chat-jump" hidden>
+        <svg width="13" height="13" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4v12M5 11l5 5 5-5"/></svg> Ir al final
+      </button>
+    </div>
+    <!-- Lo que cambia sin que el foco se mueva se anuncia aquí; los errores, en la alerta. -->
+    <p class="visually-hidden" role="status" id="chat-live"></p>
+    <p class="visually-hidden" role="alert" id="chat-alert"></p>
+
+    <div class="chat-banner" id="chat-banner" hidden>
+      <p id="chat-banner-text"></p>
+      <button type="button" class="pill-btn" id="chat-restart">Abrir de nuevo</button>
+    </div>
+
+    <form class="chat-composer" id="chat-form">
+      <div class="chat-menu" id="chat-commands" role="listbox" aria-label="Comandos" hidden></div>
+      <div class="chat-menu" id="chat-model-menu" role="menu" aria-label="Modelo" hidden></div>
+      <div class="chat-menu" id="chat-effort-menu" role="menu" aria-label="Esfuerzo" hidden></div>
+      <div class="chat-menu" id="chat-access-menu" role="menu" aria-label="Permisos" hidden></div>
+      <ul class="chat-files" id="chat-files" aria-label="Archivos adjuntos" hidden></ul>
+      <label class="visually-hidden" for="chat-input">Mensaje para Claude</label>
+      <textarea class="chat-input" id="chat-input" rows="1" placeholder="Escríbele a Claude…" autocomplete="off" spellcheck="true" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-expanded="false" aria-controls="chat-commands" aria-describedby="chat-hint"></textarea>
+      <span class="visually-hidden" id="chat-hint">Intro envía, Mayúsculas+Intro salta de línea, la barra abre los comandos y Escape detiene a Claude.</span>
+      <div class="chat-bar" id="chat-bar">
+        <button type="button" class="chat-btn chat-icon" id="chat-attach" aria-label="Adjuntar archivos" title="Adjuntar archivos">
+          <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="m15.5 9.5-5.6 5.6a3.4 3.4 0 0 1-4.8-4.8l6-6a2.3 2.3 0 0 1 3.2 3.2l-5.9 6a1.1 1.1 0 0 1-1.6-1.6l5.2-5.3"/></svg>
+        </button>
+        <button type="button" class="chat-btn chat-pick" id="chat-model" aria-haspopup="menu" aria-expanded="false" aria-controls="chat-model-menu" title="Modelo">
+          <span id="chat-model-label">Modelo</span><span class="visually-hidden">, modelo</span><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg>
+        </button>
+        <button type="button" class="chat-btn chat-pick" id="chat-effort" aria-haspopup="menu" aria-expanded="false" aria-controls="chat-effort-menu" title="Esfuerzo">
+          <span id="chat-effort-label">Esfuerzo</span><span class="visually-hidden">, esfuerzo</span><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg>
+        </button>
+        <button type="button" class="chat-btn chat-pick" id="chat-access" aria-haspopup="menu" aria-expanded="false" aria-controls="chat-access-menu" title="Permisos">
+          <span id="chat-access-label">Preguntar</span><span class="visually-hidden">, permisos</span><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg>
+        </button>
+        <span class="chat-bar-space" aria-hidden="true"></span>
+        <button type="button" class="chat-btn chat-icon chat-slash" id="chat-slash" aria-label="Comandos" title="Comandos (/)" aria-haspopup="listbox" aria-expanded="false" aria-controls="chat-commands">/</button>
+        <button type="submit" class="chat-send" id="chat-send" data-state="send">
+          <span class="chat-send-label" id="chat-send-label">Enviar</span>
+          <svg class="chat-send-enter" width="13" height="13" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4.5v5a2 2 0 0 1-2 2H4.5M8 8l-3.5 3.5L8 15"/></svg>
+          <svg class="chat-send-stop" width="11" height="11" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="10" height="10" rx="2" fill="currentColor"/></svg>
+        </button>
+      </div>
+    </form>
+  </template>
 
   <script type="module" src="/src/main.js"></script>
 </body>

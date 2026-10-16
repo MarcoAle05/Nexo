@@ -120,7 +120,9 @@ export function effortLevels(models, applied, chosen) {
   return model?.supportedEffortLevels ?? (model && !model.supportsEffort ? [] : Object.keys(EFFORT_LABELS));
 }
 
-export function createChatModel() {
+// Con `prompts`, lo que el orquestador le dice a un agente (mensajes del usuario en texto, que
+// en el chat de Nexo nunca llegan por la salida) se pinta como suyo: es la ventana del agente.
+export function createChatModel({ prompts = false } = {}) {
   const state = {
     items: [],
     busy: false,
@@ -228,6 +230,13 @@ export function createChatModel() {
 
   function onUser(msg) {
     const content = msg.message?.content;
+    if (prompts && !msg.isMeta) {
+      const text = typeof content === 'string' ? content : Array.isArray(content) && !content.some((b) => b?.type === 'tool_result') ? content.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') : '';
+      if (text.trim() && !/^\s*<(system-reminder|command-|local-command|task-notification)/.test(text)) {
+        add({ kind: 'user', text: text.trim(), files: [], from: 'Orquestador' });
+        return;
+      }
+    }
     if (!Array.isArray(content)) return;
     for (const block of content) {
       if (block?.type !== 'tool_result') continue;
@@ -384,8 +393,8 @@ export function createChatModel() {
           break;
         }
         case 'nexo_user':
-          add({ kind: 'user', text: String(msg.text ?? ''), files: Array.isArray(msg.files) ? msg.files : [] });
-          state.busy = true;
+          add({ kind: 'user', text: String(msg.text ?? ''), files: Array.isArray(msg.files) ? msg.files : [], to: msg.to ?? null, toName: msg.toName ?? null });
+          if (!msg.local) state.busy = true;
           break;
         case 'nexo_permission':
           answer(msg.request_id, msg.decision);
@@ -397,9 +406,15 @@ export function createChatModel() {
 
     // Mensaje del usuario recién enviado. Con `local`, no va a Claude Code (es para la API de
     // nexo): se pinta, pero no empieza ningún turno suyo.
-    addUser(text, files = [], { local = false } = {}) {
+    addUser(text, files = [], { local = false, to = null, toName = null } = {}) {
       if (!local) state.busy = true;
-      return add({ kind: 'user', text, files });
+      return add({ kind: 'user', text, files, to, toName });
+    },
+
+    // Vuelve a pintar un proceso (cambió algo de fuera que se ve en él, como su agente).
+    touchTool(id) {
+      const item = tools.get(id);
+      if (item) touch(item);
     },
 
     // Respuesta que no viene de Claude Code sino de la API de nexo (`/preguntar`): una pieza de

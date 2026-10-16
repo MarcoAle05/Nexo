@@ -57,7 +57,7 @@
    los lienzos, que no heredan el CSS, están en `themes.js`. */
 
 /* Fórmulas: en la raíz, en cada [data-theme] y en cada tarjeta, que las recalcula con sus canales. */
-:root, [data-theme], .segmented.views, .settings, .tp-bar, .tp-card, .panel, .toolbar, .focus-pill, .vault-menu, .desk-card, .desk-map, .desk-zoom, .desks-button, .ne-menu, .plane-open, .skill-pill, .skill-pop {
+:root, [data-theme], .segmented.views, .settings, .tp-bar, .tp-card, .panel, .toolbar, .focus-pill, .vault-menu, .desk-card, .desk-map, .desk-zoom, .desks-button, .ne-menu, .plane-open, .skill-pill, .skill-pop, .ws-bar, .ws-win, .ws-loading {
   --bg: rgb(var(--deep-rgb));
   --fg: rgb(var(--fg-rgb));
   --dim: rgba(var(--fg-rgb), var(--dim-a));
@@ -80,7 +80,7 @@
 }
 
 /* TARJETAS: toman los canales de tarjeta del tema. */
-.segmented.views, .settings, .tp-bar, .tp-card, .panel, .toolbar, .focus-pill, .vault-menu, .desk-card, .desk-map, .desk-zoom, .desks-button, .ne-menu, .plane-open, .skill-pill, .skill-pop {
+.segmented.views, .settings, .tp-bar, .tp-card, .panel, .toolbar, .focus-pill, .vault-menu, .desk-card, .desk-map, .desk-zoom, .desks-button, .ne-menu, .plane-open, .skill-pill, .skill-pop, .ws-bar, .ws-win, .ws-loading {
   /* El texto que no pone color propio lo hereda: si no se fija aquí, sería el del fondo. */
   color: var(--fg);
   color-scheme: var(--s-scheme);
@@ -101,10 +101,22 @@
   --well: var(--s-well);
   --well-soft: var(--s-well-soft);
   --check-mark: var(--s-check-mark);
+  --code-keyword: var(--s-code-keyword);
+  --code-string: var(--s-code-string);
+  --code-number: var(--s-code-number);
+  --code-function: var(--s-code-function);
+  --code-type: var(--s-code-type);
+  --code-attr: var(--s-code-attr);
+  --code-meta: var(--s-code-meta);
+  --state-on: var(--s-state-on);
 }
 
 /* La carta del chat lleva el tono más hondo de las tarjetas: así la app no es de un solo tono. */
 #terminal-panel {
+  --paper-rgb: var(--paper-deep-rgb);
+}
+/* Las ventanas del workspace (los chats de los agentes y el lector de archivos), también. */
+.ws-win {
   --paper-rgb: var(--paper-deep-rgb);
 }
 
@@ -165,6 +177,16 @@
   --ctx-skills: #6ef8d0;
   --ctx-initial: #c9a8ff;
   --ctx-messages: #fdfdfe;
+  /* Código en el lector de archivos del workspace (los comentarios van en --faint). */
+  --code-keyword: #c9a6ff;
+  --code-string: #8ee6b4;
+  --code-number: #ffb68c;
+  --code-function: #8cc8ff;
+  --code-type: #f5d38a;
+  --code-attr: #f4a8d6;
+  --code-meta: #a9b6c6;
+  /* El punto de un agente activo en el workspace (en tarjetas: sigue su polaridad). */
+  --state-on: var(--log-on);
   /* Las tarjetas: por defecto, los mismos canales que el fondo. */
   --s-scheme: var(--scheme);
   --s-fg-rgb: var(--fg-rgb);
@@ -184,6 +206,14 @@
   --s-well: var(--well);
   --s-well-soft: var(--well-soft);
   --s-check-mark: var(--check-mark);
+  --s-code-keyword: var(--code-keyword);
+  --s-code-string: var(--code-string);
+  --s-code-number: var(--code-number);
+  --s-code-function: var(--code-function);
+  --s-code-type: var(--code-type);
+  --s-code-attr: var(--code-attr);
+  --s-code-meta: var(--code-meta);
+  --s-state-on: var(--state-on);
 }
 /* Lo común a los fondos claros. */
 :is([data-theme="gris"], [data-theme="niebla"], [data-theme="blanco"], [data-theme="claro"]) {
@@ -207,6 +237,14 @@
   --ctx-skills: #0e9c74;
   --ctx-initial: #8a5cd8;
   --ctx-messages: #48484d;
+  --code-keyword: #6b2fc4;
+  --code-string: #0f7448;
+  --code-number: #a2440a;
+  --code-function: #1d5fb8;
+  --code-type: #845300;
+  --code-attr: #a12e6c;
+  --code-meta: #4d5c70;
+  --state-on: #0b7a55;
 }
 /* Tarjetas negras sobre un fondo claro (Gris con negro, Blanco con negro): texto blanco y el
    blanco de acento dentro de ellas; lo que va sobre el fondo, en negro. */
@@ -232,6 +270,15 @@
   --s-well: rgba(0, 0, 0, 0.35);
   --s-well-soft: rgba(0, 0, 0, 0.28);
   --s-check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2.5 6.2 2.3 2.3 4.7-5' fill='none' stroke='%23050507' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  /* El código, dentro de las tarjetas negras, con los colores de los temas oscuros. */
+  --s-code-keyword: #c9a6ff;
+  --s-code-string: #8ee6b4;
+  --s-code-number: #ffb68c;
+  --s-code-function: #8cc8ff;
+  --s-code-type: #f5d38a;
+  --s-code-attr: #f4a8d6;
+  --s-code-meta: #a9b6c6;
+  --s-state-on: #5ffcc0;
 }
 /* Negro con gris: fondo negro y tarjetas grises neutras, sin color (las mismas luminosidades
    OKLCH que los temas de color: fondo 0,14, carta 0,285, chat 0,21, texto 0,96, acento 0,78). */
@@ -1455,8 +1502,8 @@ kbd {
   transition: border-color 200ms var(--ease);
 }
 /* El campo no lleva su propio contorno: el foco lo marca el borde del compositor, en lila. */
-.chat-composer:has(#chat-input:focus-visible) { border-color: var(--accent-soft); }
-#chat-input {
+.chat-composer:has(.chat-input:focus-visible) { border-color: var(--accent-soft); }
+.chat-input {
   display: block;
   width: 100%;
   min-height: 46px;
@@ -1473,7 +1520,7 @@ kbd {
   line-height: 1.5;
   scrollbar-width: thin;
 }
-#chat-input::placeholder { color: rgba(var(--fg-rgb), 0.55); }
+.chat-input::placeholder { color: rgba(var(--fg-rgb), 0.55); }
 .chat-files { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 8px 8px 0; list-style: none; }
 .chat-files[hidden] { display: none; }
 .chat-bar { display: flex; align-items: center; gap: 2px; padding: 5px 5px 5px; border-top: 1px solid var(--line); }
@@ -3490,3 +3537,507 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .log-group[open] summary svg { transform: rotate(180deg); }
 .log-group .log-rows { padding: 2px 0 10px 14px; }
 .log-group .log-rows li { padding: 4px 0; font-size: 13px; }
+
+/* ---------- Workspace (vista Agentes) ----------
+   La carta de la izquierda: explorador, agentes y extras en secciones plegables a sangre,
+   separadas por costuras, con el pie «Reiniciar espacio de Workspace» cuando hace falta. El
+   centro: una barra de pestañas (carrusel que no encoge las pestañas) y hasta cuatro ventanas
+   en rejilla (workspace.js las coloca con tileLayout). Las ventanas son tarjetas con el tono
+   del chat. Solo se anima el punto de los agentes activos, un rectángulo diminuto. */
+
+/* Entrada al workspace en el panel de Agentes de nexo. */
+.ws-entry {
+  flex-shrink: 0;
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+  padding: 8px 12px 8px 8px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line-strong);
+  background: rgba(var(--ink-rgb), 0.03);
+  text-align: start;
+  transition-property: background-color, border-color, scale;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+.ws-entry:active { scale: 0.99; }
+@media (hover: hover) {
+  .ws-entry:hover { background: rgba(var(--ink-rgb), 0.06); border-color: var(--accent-line); }
+}
+.ws-entry-icon { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: var(--r-sm); background: rgba(var(--ink-rgb), 0.06); color: var(--accent-soft); }
+.ws-entry-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ws-entry-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); }
+.ws-entry-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 14px; font-weight: 500; }
+.ws-entry-meta { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.ws-entry-meta:empty { display: none; }
+.ws-entry-chevron { display: flex; color: var(--faint); }
+.ws-sub-label { margin-top: 18px; }
+.ws-sub-label[hidden], .ws-sub-empty[hidden] { display: none; }
+.ws-sub-count { color: var(--faint); font-weight: 500; }
+.ws-sub-empty { padding: 6px 8px 10px; font-size: 12px; line-height: 1.5; color: var(--faint); }
+.ws-sub-agent .row-icon { display: flex; align-items: center; justify-content: center; }
+
+/* La carta del workspace. */
+.ws-core { gap: 12px; padding: 24px 22px 0; }
+.ws-core > * { flex-shrink: 0; }
+.ws-core .panel-title { gap: 6px; }
+.ws-title { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ws-path:empty { display: none; }
+.ws-back { margin: -4px 0 0 -2px; }
+.ws-sections[hidden], .ws-none[hidden], .ws-foot[hidden] { display: none; }
+.ws-sections {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 0 -22px;
+  border-top: 1px solid var(--seam);
+}
+.ws-sec { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--seam); }
+.ws-sec:last-child { border-bottom: 0; }
+.ws-sec-files { flex: 1 1 0; min-height: 120px; }
+.ws-sec-agents { flex: 0 1 auto; max-height: 30%; }
+.ws-sec-extras { flex: 0 1 auto; max-height: 28%; }
+/* Plegado el explorador, lo demás se reparte el sitio. */
+.ws-sections:has(.ws-sec-files.is-folded) .ws-sec:not(.is-folded) { flex: 1 1 0; max-height: none; }
+.ws-sec.is-folded { flex: 0 0 auto; min-height: 0; }
+.ws-sec.is-folded .ws-sec-body { display: none; }
+/* Expandida (o en una ventana muy ancha), la carta pone sus tres secciones lado a lado. */
+.ws-core { container: ws-card / inline-size; }
+@container ws-card (min-width: 760px) {
+  .ws-sections { flex-direction: row; }
+  .ws-sections > .ws-sec { flex: 1 1 0; min-width: 0; max-height: none; border-bottom: 0; border-right: 1px solid var(--seam); }
+  .ws-sections > .ws-sec:last-child { border-right: 0; }
+  .ws-sections > .ws-sec-files { flex-grow: 1.4; }
+  .ws-sections > .ws-sec.is-folded { flex: 0 0 auto; }
+}
+.ws-sec-head { flex-shrink: 0; display: flex; align-items: center; gap: 2px; min-height: 44px; padding: 0 12px 0 14px; }
+.ws-sec-toggle {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 36px;
+  padding: 0 8px 0 6px;
+  border-radius: var(--r-sm);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--dim);
+  text-align: start;
+  transition: color 150ms ease-out, background-color 150ms ease-out;
+}
+@media (hover: hover) {
+  .ws-sec-toggle:hover { color: var(--fg); background: rgba(var(--ink-rgb), 0.04); }
+}
+.ws-sec-chevron { display: flex; color: var(--faint); transition: rotate 200ms var(--ease); }
+.ws-sec-toggle[aria-expanded="true"] .ws-sec-chevron { rotate: 90deg; }
+.ws-sec-count { margin-left: 2px; font-family: var(--sans); font-weight: 500; letter-spacing: 0; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ws-sec-aside { flex-shrink: 0; padding: 0 6px; font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ws-sec-aside:empty { display: none; }
+.icon-btn.ws-sec-btn { width: 32px; height: 32px; border-radius: var(--r-sm); color: var(--faint); transition-property: transform, background-color, color; }
+@media (hover: hover) {
+  .icon-btn.ws-sec-btn:hover { color: var(--fg); background: rgba(var(--ink-rgb), 0.06); }
+}
+.ws-sec-btn.loading svg { animation: breathe 1.2s var(--ease) infinite; }
+.ws-sec-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 10px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--ink-rgb), 0.14) transparent;
+}
+.ws-sec-note { margin: 2px 6px 8px; font-size: 12px; line-height: 1.5; color: var(--dim); text-wrap: pretty; }
+.ws-sec-note.is-waiting { animation: breathe 1.4s var(--ease) infinite; }
+.ws-core.is-loading .ws-sec-body { opacity: 0.4; transition: opacity 200ms ease-out; }
+
+/* Explorador: filas densas, sangradas por nivel, con la flecha de las carpetas. */
+.ws-tree { margin: 0; padding: 0; list-style: none; }
+.ws-tree-item {
+  display: grid;
+  grid-template-columns: 12px 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding-inline: calc(6px + (var(--level, 1) - 1) * 14px) 8px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  color: rgba(var(--fg-rgb), 0.86);
+  cursor: pointer;
+  user-select: none;
+}
+.ws-tree-item:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -2px; }
+@media (hover: hover) {
+  .ws-tree-item:hover { background: rgba(var(--ink-rgb), 0.05); color: var(--fg); }
+}
+.ws-tree-item[aria-selected="true"] { background: var(--accent-wash); color: var(--fg); }
+.ws-tree-twist { display: flex; color: var(--faint); transition: rotate 150ms ease-out; }
+.ws-tree-item[aria-expanded="true"] .ws-tree-twist { rotate: 90deg; }
+.ws-tree-icon { display: flex; color: var(--dim); }
+.ws-tree-item[data-dir="1"] .ws-tree-icon { color: var(--accent-soft); }
+.ws-tree-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ws-tree-link { font-size: 11px; color: var(--faint); }
+.ws-tree-note { display: flex; align-items: center; min-height: 28px; padding-inline: calc(30px + (var(--level, 1) - 1) * 14px) 8px; font-size: 12px; color: var(--faint); }
+
+/* Punto de estado de un agente. La forma dice el estado sin el color: hueco (inactivo),
+   anillo con su centro (esperando respuesta) y lleno (activo). */
+.ws-state { flex-shrink: 0; width: 10px; height: 10px; border-radius: var(--r-full); border: 1.5px solid rgba(var(--ink-rgb), 0.4); }
+.ws-state[data-state="active"] { border: 0; background: var(--state-on); }
+.ws-state[data-state="waiting"] { border: 2px solid var(--accent-soft); background: radial-gradient(circle, var(--accent-soft) 0 1.6px, transparent 2.2px); }
+@media (prefers-reduced-motion: no-preference) {
+  .ws-state[data-state="active"] { animation: breathe 1.8s var(--ease) infinite; }
+}
+
+/* Agentes de la carta. */
+.ws-agents { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.ws-agent-main {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 6px 10px 6px 12px;
+  border-radius: var(--r-md);
+  text-align: start;
+  transition: background-color 150ms ease-out;
+}
+@media (hover: hover) {
+  .ws-agent-main:hover { background: rgba(var(--ink-rgb), 0.05); }
+}
+.ws-agent-main[aria-current="true"] { background: rgba(var(--ink-rgb), 0.08); }
+.ws-agent-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ws-agent-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 500; }
+.ws-agent-name-text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ws-agent-role { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--dim); }
+.ws-agent-role:empty { display: none; }
+.ws-agent-num { font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.ws-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--r-xs);
+  border: 1px solid var(--line-strong);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* Extras: interruptores, apagados de serie. */
+.ws-extras-group { margin-top: 10px; }
+.ws-extras-h { display: flex; justify-content: space-between; gap: 8px; margin: 0 0 4px; padding: 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); }
+.ws-extras-n { font-weight: 500; letter-spacing: 0; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ws-extras-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.ws-extra {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 10px;
+  border-radius: var(--r-md);
+  text-align: start;
+  transition: background-color 150ms ease-out;
+}
+@media (hover: hover) {
+  .ws-extra:hover { background: rgba(var(--ink-rgb), 0.05); }
+}
+.ws-extra-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ws-extra-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 500; }
+.ws-extra-detail { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 12px; line-height: 1.45; color: var(--dim); }
+.ws-extra-detail:empty { display: none; }
+.ws-extra[aria-checked="true"] .switch { background: var(--accent-soft); }
+.ws-extra[aria-checked="true"] .switch span { transform: translateX(14px); background: var(--bg); }
+
+/* Pie: reiniciar para aplicar los extras. */
+.ws-foot { display: flex; flex-direction: column; gap: 10px; margin: 0 -22px; padding: 14px 22px 18px; border-top: 1px solid var(--seam); }
+.ws-foot-text { margin: 0 4px; font-size: 12px; line-height: 1.5; color: var(--dim); text-wrap: pretty; }
+.ws-restart.working .cta-icon svg { animation: breathe 1.2s var(--ease) infinite; }
+.ws-restart:disabled { opacity: 0.6; }
+.ws-none { padding-bottom: 24px; }
+
+/* El centro: la barra de pestañas arriba y las ventanas debajo. */
+.ws-center { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 12px; pointer-events: auto; }
+.ws-center[hidden] { display: none; }
+.ws-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px;
+  border-radius: calc(var(--r-lg) + 4px);
+  border: 1px solid var(--line-strong);
+  background: var(--glass-bar);
+}
+.ws-bar[hidden] { display: none; }
+.ws-tabs-scroll { flex: 1 1 auto; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; overscroll-behavior-x: contain; }
+.ws-tabs-scroll::-webkit-scrollbar { display: none; }
+/* Lo que no cabe se desvanece en el borde: así se ve que hay más pestañas a ese lado. */
+.ws-tabs-scroll.fade-end { mask-image: linear-gradient(90deg, #000 calc(100% - 32px), transparent); }
+.ws-tabs-scroll.fade-start { mask-image: linear-gradient(90deg, transparent, #000 32px); }
+.ws-tabs-scroll.fade-start.fade-end { mask-image: linear-gradient(90deg, transparent, #000 32px, #000 calc(100% - 32px), transparent); }
+.ws-tabs { display: flex; gap: 2px; width: max-content; margin: 0; padding: 0; list-style: none; }
+.ws-tab {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  height: 40px;
+  border-radius: var(--r-lg);
+  color: var(--dim);
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+@media (hover: hover) {
+  .ws-tab:hover { background: rgba(var(--ink-rgb), 0.05); color: var(--fg); }
+}
+.ws-tab.is-shown { background: rgba(var(--ink-rgb), 0.07); color: var(--fg); }
+/* La activa lleva la marca del acento debajo de su nombre. */
+.ws-tab.is-active::after { content: ''; position: absolute; inset-inline: 12px; bottom: 3px; height: 2px; border-radius: var(--r-full); background: var(--accent-soft); }
+.ws-tab-main { display: flex; align-items: center; gap: 8px; height: 100%; max-width: 220px; padding: 0 12px 0 11px; border-radius: inherit; font-size: 12.5px; font-weight: 500; }
+.ws-tab-main:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -2px; }
+.ws-tab[data-kind="file"] .ws-tab-main { padding-right: 4px; }
+.ws-tab-icon { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 16px; color: var(--dim); }
+.ws-tab-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ws-tab-close { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 26px; height: 26px; margin-right: 7px; border-radius: var(--r-xs); color: var(--faint); transition: background-color 150ms ease-out, color 150ms ease-out; }
+@media (hover: hover) {
+  .ws-tab-close:hover { background: rgba(var(--ink-rgb), 0.1); color: var(--fg); }
+}
+.ws-bar-tools { flex-shrink: 0; display: flex; align-items: center; gap: 2px; padding-left: 4px; border-left: 1px solid var(--line); }
+.ws-all { display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px; border-radius: var(--r-lg); font-size: 12.5px; font-weight: 500; color: var(--dim); transition: background-color 150ms ease-out, color 150ms ease-out; }
+.ws-all[aria-expanded="true"] { background: rgba(var(--ink-rgb), 0.08); color: var(--fg); }
+@media (hover: hover) {
+  .ws-all:hover { background: rgba(var(--ink-rgb), 0.06); color: var(--fg); }
+}
+.ws-all-count { font-variant-numeric: tabular-nums; }
+.switch-btn.ws-mode { height: 40px; font-size: 12.5px; color: var(--dim); }
+.ws-mode[aria-checked="true"] { color: var(--fg); }
+.ws-all-anchor { position: relative; }
+.vault-menu.ws-overview { left: auto; right: 0; width: min(360px, calc(100vw - 32px)); max-height: min(520px, 60dvh); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.ws-overview-title { display: flex; justify-content: space-between; gap: 12px; }
+.ws-overview-count { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); font-variant-numeric: tabular-nums; }
+.ws-overview-group { padding: 10px 12px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--faint); }
+.ws-overview-list { margin: 0; padding: 0; list-style: none; }
+.vault-option.ws-overview-item { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.ws-overview-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ws-overview-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ws-overview-text small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--sans); }
+.ws-overview-text small.is-path { font-family: var(--mono); }
+.ws-overview-where { font-size: 11.5px; color: var(--faint); white-space: nowrap; }
+
+.ws-windows { position: relative; flex: 1 1 auto; min-height: 0; display: grid; gap: 12px; }
+.ws-empty { position: absolute; inset: 64px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; color: var(--faint); pointer-events: none; }
+.ws-empty[hidden] { display: none; }
+.ws-empty .pill-btn { pointer-events: auto; }
+.ws-empty svg { margin-bottom: 8px; }
+
+/* Una ventana: cabecera con su icono o su estado, su nombre y lo que se sabe de ella, y a la
+   derecha minimizar (y cerrar, en los archivos). */
+.ws-win {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: var(--r-card);
+  border: 1px solid var(--seam);
+  background: var(--glass);
+  transition: border-color 150ms ease-out;
+}
+.ws-win.is-active { border-color: var(--accent-line); }
+.ws-win-head { flex-shrink: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 52px; padding: 6px 10px 6px 16px; border-bottom: 1px solid var(--seam); }
+.ws-win-icon { display: flex; align-items: center; justify-content: center; color: var(--dim); }
+.ws-win-heading { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ws-win-title { margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--display); font-size: 14px; font-weight: 600; line-height: 1.3; letter-spacing: -0.01em; }
+.ws-win-sub { margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.ws-win[data-kind="file"] .ws-win-sub { font-family: var(--mono); font-size: 11.5px; }
+.ws-win-actions { display: flex; align-items: center; gap: 2px; }
+.icon-btn.ws-win-btn { width: 32px; height: 32px; border-radius: var(--r-sm); color: var(--dim); transition-property: transform, background-color, color; }
+@media (hover: hover) {
+  .icon-btn.ws-win-btn:hover { background: rgba(var(--ink-rgb), 0.08); color: var(--fg); }
+}
+.ws-win-chip { display: flex; align-items: center; gap: 6px; height: 32px; margin-right: 4px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--line); font-size: 12px; color: var(--dim); transition: background-color 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out; }
+.ws-win-chip[aria-pressed="true"] { border-color: var(--accent-line); background: var(--accent-wash); color: var(--fg); }
+@media (hover: hover) {
+  .ws-win-chip:hover { color: var(--fg); }
+}
+.ws-win-body { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.ws-win .chat-log { padding: 14px 16px 8px; }
+.ws-win .chat-composer { margin: 8px 10px 10px; }
+.ws-win .chat-banner { margin: 0 10px; }
+/* El chat de un subagente va a través del orquestador: sin selectores ni comandos propios, y
+   con el campo y sus dos botones en una sola fila (las ventanas en mosaico van justas de alto). */
+.chat-view[data-feed] :is(.chat-pick, .chat-slash, .chat-bar-space) { display: none; }
+.chat-view[data-feed] .chat-composer { display: flex; flex-wrap: wrap; align-items: flex-end; }
+.chat-view[data-feed] .chat-files { flex: 1 0 100%; }
+.chat-view[data-feed] .chat-input { flex: 1 1 0; width: auto; min-width: 0; min-height: 44px; padding: 12px 6px 10px 14px; }
+.chat-view[data-feed] .chat-bar { flex-shrink: 0; border-top: 0; padding: 6px; }
+
+/* En la conversación: a quién iba un mensaje (o quién lo dijo, en la ventana de un agente). */
+.chat-user-tag { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--dim); }
+/* Bajo el proceso de Agent, el botón que abre la ventana del agente. */
+.chat-proc-open { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 30px; margin-top: 6px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); font-size: 12px; color: var(--dim); transition: color 150ms ease-out, border-color 150ms ease-out; }
+@media (hover: hover) {
+  .chat-proc-open:hover { color: var(--fg); border-color: var(--accent-line); }
+}
+
+.chat-proc-open svg { flex-shrink: 0; }
+.chat-proc-open span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* Lector de archivos: números de línea fijos a la izquierda y el código coloreado. */
+.ws-code {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font: 400 12.5px/1.65 var(--mono);
+  font-variant-ligatures: none;
+  tab-size: 4;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--ink-rgb), 0.18) transparent;
+}
+.ws-code:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -2px; }
+.ws-code-gutter {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-height: 100%;
+  margin: 0;
+  padding: 12px 12px 16px 16px;
+  border-right: 1px solid var(--line);
+  background: rgb(var(--paper-rgb));
+  color: var(--faint);
+  font: inherit;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+.ws-code-text { margin: 0; padding: 12px 24px 16px 14px; font: inherit; white-space: pre; color: rgba(var(--fg-rgb), 0.9); }
+.ws-code-text code { font: inherit; }
+.ws-code-text ::selection, .ws-preview ::selection { background: var(--accent-wash-strong); }
+.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-doctag, .hljs-section { color: var(--code-keyword); }
+.hljs-string, .hljs-regexp, .hljs-addition, .hljs-symbol, .hljs-bullet { color: var(--code-string); }
+.hljs-number, .hljs-variable.constant_ { color: var(--code-number); }
+.hljs-title, .hljs-title.function_ { color: var(--code-function); }
+.hljs-type, .hljs-built_in, .hljs-title.class_ { color: var(--code-type); }
+.hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-class, .hljs-selector-id, .hljs-selector-attr, .hljs-template-variable, .hljs-name, .hljs-tag { color: var(--code-attr); }
+.hljs-meta, .hljs-deletion, .hljs-link { color: var(--code-meta); }
+.hljs-comment, .hljs-quote { color: var(--faint); font-style: italic; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 700; }
+.ws-preview { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 18px 24px 28px; scrollbar-width: thin; }
+.ws-preview > * { max-width: 72ch; }
+.ws-code-note { margin: auto; padding: 24px; text-align: center; font-size: 12.5px; line-height: 1.5; color: var(--dim); }
+.ws-code-note p { margin: 0; }
+.ws-code-note-title { margin-bottom: 4px !important; font-size: 13.5px; color: var(--fg); }
+.ws-code-loading { margin: auto; font-size: 12.5px; color: var(--dim); }
+.ws-code-cut { flex-shrink: 0; margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--faint); }
+
+/* Pantalla de carga al abrir un workspace: el logo respira sobre las ventanas, apagadas. */
+.ws-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: var(--r-card);
+  border: 1px solid var(--seam);
+  background: var(--glass);
+}
+.ws-loading[hidden] { display: none; }
+.ws-loading-mark { display: flex; margin-bottom: 10px; color: var(--accent-soft); }
+.ws-loading-title { margin: 0; font-family: var(--display); font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.ws-loading-step { margin: 0; font-size: 12.5px; color: var(--dim); }
+@media (prefers-reduced-motion: no-preference) {
+  .ws-loading { animation: source-in 300ms ease-out both; }
+  .ws-loading-mark { animation: breathe 1.6s var(--ease) infinite; }
+  .ws-win { animation: ws-win-in 300ms ease-out both; }
+}
+@keyframes ws-win-in {
+  from { opacity: 0; translate: 0 12px; filter: blur(4px); }
+}
+
+/* Menú de carpetas (se abre como Configuración). */
+.settings.ws-dialog { width: min(540px, calc(100vw - 32px)); }
+.ws-dialog-hint { margin-top: 0; }
+.ws-choices { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.ws-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+  padding: 14px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line-strong);
+  background: rgba(var(--ink-rgb), 0.03);
+  text-align: start;
+  transition-property: background-color, border-color, scale;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+.ws-choice:active { scale: 0.96; }
+.ws-choice[aria-expanded="true"] { border-color: var(--accent-line); background: var(--accent-wash); }
+@media (hover: hover) {
+  .ws-choice:hover { background: rgba(var(--ink-rgb), 0.06); }
+  .ws-choice[aria-expanded="true"]:hover { background: var(--accent-wash); }
+}
+.ws-choice-icon { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; margin-bottom: 10px; border-radius: var(--r-sm); background: rgba(var(--ink-rgb), 0.06); color: var(--accent-soft); }
+.ws-choice-name { font-size: 14px; font-weight: 500; }
+.ws-choice-hint { font-size: 12px; line-height: 1.4; color: var(--dim); }
+.ws-create { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; padding: 14px; border-radius: var(--r-lg); border: 1px solid var(--line); }
+.ws-create[hidden] { display: none; }
+.ws-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ws-field-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); }
+.ws-field input {
+  height: 44px;
+  padding: 0 14px;
+  border-radius: var(--r-sm);
+  border: 1px solid rgba(var(--ink-rgb), 0.18);
+  background: rgba(var(--ink-rgb), 0.05);
+  outline: none;
+  color: inherit;
+  font: inherit;
+  font-size: 14px;
+  transition: border-color 150ms ease-out;
+}
+.ws-field input:focus { border-color: var(--accent-line); }
+.ws-field input::placeholder { color: rgba(var(--fg-rgb), 0.5); }
+.ws-where { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ws-where-path { flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; height: 44px; padding: 0 12px; border-radius: var(--r-sm); background: var(--well-soft); font-family: var(--mono); font-size: 12px; line-height: 44px; color: var(--dim); }
+.ws-create-preview { margin: 0; font-size: 12px; line-height: 1.5; color: var(--faint); overflow-wrap: anywhere; }
+.ws-create-error { margin: 0; padding-left: 12px; border-left: 2px dashed var(--fg); font-size: 12.5px; line-height: 1.5; color: var(--fg); }
+.ws-create-error[hidden] { display: none; }
+.ws-recent-box { margin-top: 20px; }
+.ws-recent-box[hidden] { display: none; }
+.ws-recent { display: flex; flex-direction: column; gap: 2px; margin: 8px 0 0; padding: 0; list-style: none; }
+.ws-recent-item { display: flex; align-items: center; gap: 2px; }
+.ws-recent-open { flex: 1 1 auto; min-width: 0; display: grid; grid-template-columns: 20px minmax(0, 1fr); align-items: center; gap: 12px; min-height: 52px; padding: 6px 10px; border-radius: var(--r-md); text-align: start; transition: background-color 150ms ease-out; }
+@media (hover: hover) {
+  .ws-recent-open:hover { background: rgba(var(--ink-rgb), 0.06); }
+}
+.ws-recent-icon { display: flex; color: var(--dim); }
+.ws-recent-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ws-recent-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13.5px; font-weight: 500; }
+.ws-recent-path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+.icon-btn.ws-recent-forget { width: 36px; height: 36px; border-radius: var(--r-sm); color: var(--faint); transition-property: transform, background-color, color; }
+@media (hover: hover) {
+  .icon-btn.ws-recent-forget:hover { background: rgba(var(--ink-rgb), 0.08); color: var(--fg); }
+}
+@media (max-width: 520px) {
+  .ws-choices { grid-template-columns: minmax(0, 1fr); }
+}

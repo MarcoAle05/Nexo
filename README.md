@@ -13,6 +13,7 @@ Un «NotebookLM propio» de escritorio: vuelcas tus fuentes en un vault de Obsid
 - **Notas.** Un lienzo que ocupa toda la app, donde cada nota es una carta con un editor por bloques al estilo de Notion que guarda Markdown normal dentro del vault. Tiene minimapa, zoom para alejarse hasta ver el triple y varios escritorios, que se pueden archivar y volver a cargar.
 - **Claude, de dos maneras.** Claude Code corre dentro de la app con tu suscripción y se ve como un chat con el diseño de nexo: sus respuestas, sus procesos y los permisos que pide; hace de orquestador y eliges su modelo, su esfuerzo y su modo de permisos desde el propio chat. Nexo (la API) compila fuentes en la wiki y responde preguntas con ella: se lanza desde el menú «/» de ese chat (`/compilar`, `/preguntar`).
 - **Skills y agentes.** Las skills y los subagentes de Claude Code del vault se ven y se crean desde la app. El registro muestra qué agente gastó qué parte de tu sesión de 5 horas.
+- **Workspaces.** En Agentes eliges o creas la carpeta de un proyecto y tiene su propio orquestador de Claude Code. A la izquierda, un explorador de archivos, sus agentes y los extras de tu perfil (plugins, MCP, conexiones y skills), apagados hasta que los enciendes. En el centro, una pestaña por agente o archivo y hasta cuatro ventanas a la vez: el chat de cada agente que despliega el orquestador, con su estado y sus tokens, y el código con colores y números de línea. Al volver a abrirlo, todo sigue como lo dejaste.
 - **Temas.** Doce en Configuración (el engranaje de arriba a la derecha), cada uno un fondo con sus tarjetas: Órbita, la de siempre; fondo negro con tarjetas grises (neutras o con naranja); paletas oscuras de índigo, petróleo, berenjena y musgo con el chat casi negro; uno con la paleta de Claude, grises cálidos con coral; y fondos claros con tarjetas negras, azul claro o blancas a lo Apple. Se aplican al momento, también a la galaxia y al grafo.
 - **Lectura de webs.** Antigravity o Playwright leen la página; Claude Code puede usar un Chrome con tus sesiones y pide confirmación antes de cualquier acción con efectos.
 
@@ -21,7 +22,7 @@ Todo vive en archivos Markdown de tu vault (`raw/` → `wiki/` → `output/`), a
 ## Stack
 
 - **Escritorio:** Tauri 2 con backend en Rust.
-- **Interfaz:** Vite y JavaScript sin framework; galaxia en WebGL, grafo en canvas con d3-force y d3-zoom, Markdown con marked y DOMPurify.
+- **Interfaz:** Vite y JavaScript sin framework; galaxia en WebGL, grafo en canvas con d3-force y d3-zoom, Markdown con marked y DOMPurify, y el código de los workspaces con highlight.js.
 - **IA:** la Messages API de Claude, Claude Code (sin terminal, por su protocolo `stream-json`) y Antigravity como CLI, y los servidores MCP de MarkItDown y Playwright.
 
 ## Cómo correrlo

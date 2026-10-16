@@ -142,3 +142,30 @@ test('las paletas de los lienzos tienen lo que esperan galaxy.js y graph.js', ()
   // Órbita se recolorea igual que se generó.
   assert.deepEqual([...recolor(points, themeById('orbita').galaxy.tints)], [...points.color]);
 });
+
+// Workspace: el código del lector y los puntos de estado de los agentes, en cada tema. Las
+// ventanas son tarjetas con el tono del chat (`.ws-win`), así que el código va sobre ese fondo.
+const WIN = BLOCKS.find((b) => b.selector === '.ws-win');
+const winTokensOf = (theme) => compute({ ...FORMULAS.tokens, ...CARDS.tokens, ...WIN.tokens }, tokensOf(theme));
+const CODE = ['--code-keyword', '--code-string', '--code-number', '--code-function', '--code-type', '--code-attr', '--code-meta'];
+
+test('el código del lector y los puntos de los agentes se leen en todos los temas', () => {
+  assert.ok(WIN, 'falta el bloque de las ventanas del workspace');
+  for (const theme of THEMES) {
+    const bg = color(tokensOf(theme)['--bg']);
+    const w = winTokensOf(theme);
+    const win = over(color(w['--glass']), bg);
+    for (const name of [...CODE, '--faint']) {
+      const r = ratio(over(color(w[name]), win), win);
+      assert.ok(r >= 4.5, `${theme.id}: ${name} sobre una ventana da ${r.toFixed(2)}:1 (hace falta 4,5)`);
+    }
+    const t = cardTokensOf(theme);
+    const card = over(color(t['--glass']), bg);
+    for (const [label, on, tokens] of [['una ventana', win, w], ['la tarjeta', card, t]]) {
+      for (const name of ['--state-on', '--accent-soft']) {
+        const r = ratio(over(color(tokens[name]), on), on);
+        assert.ok(r >= 3, `${theme.id}: ${name} (punto de estado) sobre ${label} da ${r.toFixed(2)}:1 (hace falta 3)`);
+      }
+    }
+  }
+});

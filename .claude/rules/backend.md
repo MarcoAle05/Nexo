@@ -21,7 +21,7 @@ paths:
 
 - `vault.rs`: configuración, elección del vault, detección de vaults de Obsidian (lee `obsidian.json`) y creación de la estructura.
 
-Cada módulo está descrito en la regla de su zona: `vault.rs` aquí; `graph.rs` en `grafo-datos.md`; `sources.rs`, `fichas.rs`, `mcp.rs`, `markitdown.rs`, `playwright.rs`, `agy.rs` y `browser.rs` en `fuentes.md`; `claude.rs`, `nexo.rs` y `connections.rs` en `api-nexo.md`; `vaultgit` en `vaultgit.md`; `claude_code.rs` en `claude-code.md`; `usage.rs` y `registro.rs` en `uso-y-registro.md`; `notas.rs` en `notas.md`; `render.rs` en `render.md`; `skills.rs` y `agents.rs` en `skills-y-agentes.md`.
+Cada módulo está descrito en la regla de su zona: `vault.rs` aquí; `graph.rs` en `grafo-datos.md`; `sources.rs`, `fichas.rs`, `mcp.rs`, `markitdown.rs`, `playwright.rs`, `agy.rs` y `browser.rs` en `fuentes.md`; `claude.rs`, `nexo.rs` y `connections.rs` en `api-nexo.md`; `vaultgit` en `vaultgit.md`; `claude_code.rs` en `claude-code.md`; `usage.rs` y `registro.rs` en `uso-y-registro.md`; `workspace.rs` y `workspace_run.rs` en `workspace.md`; `notas.rs` en `notas.md`; `render.rs` en `render.md`; `skills.rs` y `agents.rs` en `skills-y-agentes.md`.
 
 El streaming hacia la interfaz usa `tauri::ipc::Channel` (eventos `{kind, text}`); la única excepción es `agy-activity`, un evento global porque el panel de actividad escucha todas las tareas de Antigravity.
 
@@ -40,4 +40,6 @@ Todo gira en torno a un vault de Obsidian elegido por el usuario (ruta guardada 
 - `.nexo/compiled.json`: manifiesto de fuentes ya compiladas (tamaño:mtime) para no recompilar.
 - `.claude/skills/<nombre>/SKILL.md` y `.claude/agents/*.md`: las skills y los agentes del vault (ver `skills-y-agentes.md`).
 
-Toda ruta que llega desde la interfaz o desde herramientas del modelo pasa por un guardián que impide salir del vault. `vault::resolve_inside` (fuentes y grafo) y `wiki::wiki_path` (herramientas de compile, cuyas rutas las escribe el modelo), los dos en `nexo-core`, resuelven además los enlaces simbólicos: uno dentro del vault que apunte fuera se rechaza. `notas::resolve` y `agents::agent_file` solo miran el texto de la ruta; sus rutas vienen de la interfaz.
+Los **workspaces** (vista Agentes) son otras carpetas, de proyecto, fuera del vault: su lista está en la configuración de nexo y lo de cada uno en su propio `.nexo/` (ver `workspace.md`). Sus rutas pasan por `workspace::ws_root` y `resolve_inside`.
+
+Toda ruta que llega desde la interfaz o desde herramientas del modelo pasa por un guardián que impide salir del vault. `vault::resolve_inside` (fuentes y grafo) y `wiki::wiki_path` (herramientas de compile, cuyas rutas las escribe el modelo), los dos en `nexo-core`, resuelven además los enlaces simbólicos: uno dentro del vault que apunte fuera se rechaza. `notas::resolve` y `agents::agent_file` solo miran el texto de la ruta; sus rutas vienen de la interfaz. En un workspace, `ws_root` solo acepta carpetas de su lista y `resolve_inside` hace lo mismo que en el vault.
