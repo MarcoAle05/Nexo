@@ -66,7 +66,7 @@ fn parse_ts(text: &str) -> Option<i64> {
 
 /// Carpeta de `~/.claude/projects` de una ruta: Claude Code cambia por `-` todo lo que no
 /// sea letra o número ASCII (`/home/ana/mi_vault` → `-home-ana-mi-vault`).
-fn project_dir_name(root: &Path) -> String {
+pub(crate) fn project_dir_name(root: &Path) -> String {
     root.to_string_lossy()
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -340,48 +340,67 @@ struct Found {
     session: String,
     /// Id del subagente; `None` en la conversación principal de la sesión.
     agent: Option<String>,
-    /// Es del vault (si no, solo cuenta para el total del equipo).
+    /// Es del vault o de un workspace de nexo (si no, solo cuenta para el total del equipo).
     vault: bool,
+    /// Carpeta de `~/.claude/projects` en la que está (la de su sesión principal).
+    home: PathBuf,
+    /// Nombre del workspace, si no es del vault.
+    place: Option<String>,
 }
 
-/// Transcripciones de todas las carpetas de `~/.claude/projects` escritas desde `since`.
-fn find_transcripts(projects: &Path, vault_dir: &Path, since: i64) -> Vec<Found> {
+/// Transcripciones de todas las carpetas de `~/.claude/projects` escritas desde `since`. Las
+/// del vault y las de los workspaces de nexo (`extra`: carpeta de `~/.claude/projects` y
+/// nombre del workspace) son de nexo.
+fn find_transcripts_with(
+    projects: &Path,
+    vault_dir: &Path,
+    extra: &[(PathBuf, String)],
+    since: i64,
+) -> Vec<Found> {
     let mut out = Vec::new();
-    let push =
-        |out: &mut Vec<Found>, path: PathBuf, session: &str, agent: Option<&str>, vault: bool| {
-            let Ok(meta) = fs::metadata(&path) else {
-                return;
-            };
-            let modified = meta.modified().map(millis).unwrap_or(0);
-            if modified >= since {
-                out.push(Found {
-                    path,
-                    len: meta.len(),
-                    modified,
-                    session: session.to_string(),
-                    agent: agent.map(String::from),
-                    vault,
-                });
-            }
+    let push = |out: &mut Vec<Found>,
+                path: PathBuf,
+                session: &str,
+                agent: Option<&str>,
+                home: &Path,
+                place: Option<&String>,
+                vault: bool| {
+        let Ok(meta) = fs::metadata(&path) else {
+            return;
         };
+        let modified = meta.modified().map(millis).unwrap_or(0);
+        if modified >= since {
+            out.push(Found {
+                path,
+                len: meta.len(),
+                modified,
+                session: session.to_string(),
+                agent: agent.map(String::from),
+                vault,
+                home: home.to_path_buf(),
+                place: place.cloned(),
+            });
+        }
+    };
     let Ok(dirs) = fs::read_dir(projects) else {
         return out;
     };
     for dir in dirs.flatten() {
         let dir = dir.path();
-        let vault = dir == vault_dir;
+        let place = extra.iter().find(|(d, _)| *d == dir).map(|(_, name)| name);
+        let vault = dir == vault_dir || place.is_some();
         let Ok(entries) = fs::read_dir(&dir) else {
             continue;
         };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
             if let Some(session) = name.strip_suffix(".jsonl") {
-                push(&mut out, entry.path(), session, None, vault);
+                push(&mut out, entry.path(), session, None, &dir, place, vault);
             } else if entry.file_type().is_ok_and(|t| t.is_dir()) {
                 let mut agents = Vec::new();
                 find_agents(&entry.path().join("subagents"), 3, &mut agents);
                 for (path, agent) in agents {
-                    push(&mut out, path, &name, Some(&agent), vault);
+                    push(&mut out, path, &name, Some(&agent), &dir, place, vault);
                 }
             }
         }
@@ -506,6 +525,8 @@ pub struct AgentLog {
     nexo_cost: f64,
     nexo_share: Option<f64>,
     agents: Vec<AgentUse>,
+    /// Agente → workspace de nexo en el que trabaja (los del vault no están).
+    places: HashMap<String, String>,
 }
 
 /// Lo que dijo Claude de la sesión de 5 h, quizá hace unos minutos.
@@ -557,7 +578,10 @@ fn agent_use(
     let (kind, id, name, title, effort, active) = match &found.agent {
         None => {
             let title = title.map(String::from);
-            let nexo = title.as_deref().is_some_and(|t| t.starts_with("Nexo"));
+            // «Nexo · fecha» (el chat del vault) o «<carpeta> · nexo» (un workspace).
+            let nexo = title
+                .as_deref()
+                .is_some_and(|t| t.starts_with("Nexo") || t.ends_with(" · nexo"));
             let active = match ours {
                 Some((_, running)) => *running,
                 None => quiet < RECENT_MS,
@@ -670,11 +694,14 @@ struct Built {
     /// …y hasta que Claude dio el porcentaje.
     machine_at: f64,
     agents: Vec<AgentUse>,
+    /// Agente → workspace en el que trabaja (los del vault no están).
+    places: HashMap<String, String>,
 }
 
 /// Lee (lo nuevo de) las transcripciones, sitúa la sesión de 5 h y devuelve el coste de todo
 /// Claude Code del equipo en ella y los agentes del vault, activos primero y luego del más
 /// reciente.
+#[cfg(test)]
 fn build(
     cache: &mut HashMap<PathBuf, Transcript>,
     projects: &Path,
@@ -684,8 +711,23 @@ fn build(
     efforts: &HashMap<String, Option<String>>,
     now: i64,
 ) -> Built {
+    build_with(cache, projects, vault_dir, &[], snap, current, efforts, now)
+}
+
+/// Igual, con los agentes de los workspaces de nexo (`extra`) también como de nexo.
+#[allow(clippy::too_many_arguments)]
+fn build_with(
+    cache: &mut HashMap<PathBuf, Transcript>,
+    projects: &Path,
+    vault_dir: &Path,
+    extra: &[(PathBuf, String)],
+    snap: Option<&Snapshot>,
+    current: &Current,
+    efforts: &HashMap<String, Option<String>>,
+    now: i64,
+) -> Built {
     let since = now - LOOKBACK_MS;
-    let mut found = find_transcripts(projects, vault_dir, since);
+    let mut found = find_transcripts_with(projects, vault_dir, extra, since);
     // Las del vault primero: si una respuesta está en dos archivos (una sesión bifurcada
     // copia su historia), cuenta una vez y para nexo.
     found.sort_by_key(|f| (!f.vault, f.modified));
@@ -722,6 +764,7 @@ fn build(
         machine: 0.0,
         machine_at: 0.0,
         agents: Vec::new(),
+        places: HashMap::new(),
     };
     let Some(window) = window else {
         return built;
@@ -743,8 +786,8 @@ fn build(
         let parent = f
             .agent
             .as_ref()
-            .and_then(|_| cache.get(&vault_dir.join(format!("{}.jsonl", f.session))));
-        built.agents.push(agent_use(
+            .and_then(|_| cache.get(&f.home.join(format!("{}.jsonl", f.session))));
+        let agent = agent_use(
             f,
             transcript.title.as_deref(),
             &calls,
@@ -752,7 +795,11 @@ fn build(
             current,
             efforts,
             now,
-        ));
+        );
+        if let Some(place) = &f.place {
+            built.places.insert(agent.id.clone(), place.clone());
+        }
+        built.agents.push(agent);
     }
     built
         .agents
@@ -825,14 +872,21 @@ pub async fn agent_log(app: AppHandle, force: bool) -> Result<AgentLog, String> 
         .collect();
     let projects = home.join(".claude/projects");
     let vault_dir = projects.join(project_dir_name(&root));
+    // Los workspaces de nexo también son de nexo: sus orquestadores y sus agentes.
+    let extra: Vec<(PathBuf, String)> = crate::workspace::known(&app)
+        .into_iter()
+        .map(|(path, name)| (projects.join(project_dir_name(&path)), name))
+        .filter(|(dir, _)| *dir != vault_dir)
+        .collect();
     let handle = app.clone();
     let mut built = tauri::async_runtime::spawn_blocking(move || {
         let state = handle.state::<RegistroState>();
         let mut cache = state.transcripts.lock().map_err(|e| e.to_string())?;
-        Ok::<_, String>(build(
+        Ok::<_, String>(build_with(
             &mut cache,
             &projects,
             &vault_dir,
+            &extra,
             snap.as_ref(),
             &current,
             &efforts,
@@ -859,6 +913,7 @@ pub async fn agent_log(app: AppHandle, force: bool) -> Result<AgentLog, String> 
         nexo_cost: built.agents.iter().map(|a| a.cost).sum(),
         nexo_share,
         agents: built.agents,
+        places: built.places,
     })
 }
 
@@ -1033,7 +1088,17 @@ pub async fn agent_context(
     let claude = crate::claude_code::find_claude(&app)
         .ok_or("No encontré Claude Code para medir el contexto.")?;
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    let vault_dir = home.join(".claude/projects").join(project_dir_name(&root));
+    let projects = home.join(".claude/projects");
+    let vault_dir = projects.join(project_dir_name(&root));
+    // La sesión puede ser del vault o de un workspace: su carpeta y dónde lanzar el sondeo.
+    let places: Vec<(PathBuf, PathBuf, bool)> =
+        std::iter::once((vault_dir.clone(), root.clone(), false))
+            .chain(
+                crate::workspace::known(&app)
+                    .into_iter()
+                    .map(|(path, _)| (projects.join(project_dir_name(&path)), path, true)),
+            )
+            .collect();
     let mut cache = state.context.lock().await;
     if let Some((at, value)) = cache.get(&id)
         && at.elapsed() < Duration::from_secs(10)
@@ -1044,10 +1109,14 @@ pub async fn agent_context(
         if !safe_id(session) {
             return Err("Sesión no válida.".into());
         }
-        let file = vault_dir.join(format!("{session}.jsonl"));
-        if !file.is_file() {
+        let Some((dir, cwd, workspace)) = places
+            .iter()
+            .find(|(dir, ..)| dir.join(format!("{session}.jsonl")).is_file())
+            .cloned()
+        else {
             return Err("Esa sesión ya no existe.".into());
-        }
+        };
+        let file = dir.join(format!("{session}.jsonl"));
         let mut transcript = Transcript::default();
         let len = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
         let _ = transcript.update(&file, len);
@@ -1057,11 +1126,14 @@ pub async fn agent_context(
             "--fork-session".into(),
         ];
         // Las sesiones de nexo llevan el prompt del orquestador: cuenta en el contexto.
-        if let Some(title) = transcript.title.filter(|t| t.starts_with("Nexo")) {
+        if workspace {
+            args.push("--append-system-prompt".into());
+            args.push(crate::workspace_run::orchestrator_prompt(&cwd));
+        } else if let Some(title) = transcript.title.filter(|t| t.starts_with("Nexo")) {
             args.push("--append-system-prompt".into());
             args.push(crate::claude_code::orchestrator_prompt(&root, &title));
         }
-        let mut value = tauri::async_runtime::spawn_blocking(move || probe(&claude, &root, &args))
+        let mut value = tauri::async_runtime::spawn_blocking(move || probe(&claude, &cwd, &args))
             .await
             .map_err(|e| e.to_string())??;
         if let Some(obj) = value.as_object_mut() {
@@ -1073,7 +1145,12 @@ pub async fn agent_context(
         if !safe_id(session) || !safe_id(agent) {
             return Err("Agente no válido.".into());
         }
-        let subagents = vault_dir.join(session).join("subagents");
+        let (dir, cwd) = places
+            .iter()
+            .find(|(dir, ..)| dir.join(session).join("subagents").is_dir())
+            .map(|(dir, cwd, _)| (dir.clone(), cwd.clone()))
+            .unwrap_or((vault_dir.clone(), root.clone()));
+        let subagents = dir.join(session).join("subagents");
         let mut file = subagents.join(format!("agent-{agent}.jsonl"));
         if !file.is_file() {
             let mut all = Vec::new();
@@ -1097,7 +1174,7 @@ pub async fn agent_context(
         let probed = match agent_type {
             Some(t) if !t.starts_with('-') => {
                 let args = vec!["--agent".to_string(), t];
-                tauri::async_runtime::spawn_blocking(move || probe(&claude, &root, &args))
+                tauri::async_runtime::spawn_blocking(move || probe(&claude, &cwd, &args))
                     .await
                     .ok()
                     .and_then(Result::ok)

@@ -59,9 +59,9 @@ pub struct ClaudeCodeState {
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatOptions {
-    model: Option<String>,
-    effort: Option<String>,
-    permission_mode: Option<String>,
+    pub(crate) model: Option<String>,
+    pub(crate) effort: Option<String>,
+    pub(crate) permission_mode: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -75,7 +75,7 @@ pub struct Started {
 }
 
 /// Líneas que se guardan como mucho para volver a pintar la conversación.
-const BACKLOG_MAX: usize = 6000;
+pub(crate) const BACKLOG_MAX: usize = 6000;
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// Modos de permiso que ofrece nexo. `bypassPermissions` y `dontAsk` quedan fuera a
 /// propósito: Claude Code tiene aquí el navegador con las sesiones del usuario.
@@ -286,7 +286,7 @@ fn stop(session: Option<Session>) {
 
 /// Un modelo es un alias (`opus`) o un id (`claude-opus-5-5`, `opus[1m]`): nada que pueda
 /// pasar por otra opción de la línea de órdenes.
-fn valid_model(model: &str) -> bool {
+pub(crate) fn valid_model(model: &str) -> bool {
     !model.is_empty()
         && model.len() <= 80
         && !model.starts_with('-')
@@ -333,6 +333,15 @@ fn launch_args(
     if let Some(config) = mcp_config {
         args.extend(["--mcp-config".into(), config.to_string_lossy().into_owned()]);
     }
+    args.extend(option_args(options)?);
+    Ok(args)
+}
+
+/// Modelo, esfuerzo y modo de permisos elegidos en la interfaz, validados: solo se pasan si
+/// el usuario los eligió y nunca un modo que se salte los permisos. Los usa también el
+/// orquestador de los workspaces (`workspace_run.rs`).
+pub(crate) fn option_args(options: &ChatOptions) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
     if let Some(model) = options.model.as_deref().filter(|m| *m != "default") {
         if !valid_model(model) {
             return Err(format!("Modelo no válido: {model}"));
@@ -359,7 +368,7 @@ fn launch_args(
 
 /// Lo que no hace falta para volver a pintar la conversación: los trozos del streaming (el
 /// mensaje completo llega después), los hooks y los contadores que van cambiando.
-fn keep_in_backlog(line: &str) -> bool {
+pub(crate) fn keep_in_backlog(line: &str) -> bool {
     const SKIP: &[&str] = &[
         r#"{"type":"stream_event""#,
         r#"{"type":"system","subtype":"hook_"#,

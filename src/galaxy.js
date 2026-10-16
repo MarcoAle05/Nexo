@@ -127,6 +127,14 @@ export function makePoints(look = LOOK) {
   return { orbit, style, color, tone, count: n };
 }
 
+// Los colores de los puntos con otros tintes (los de un tema, ver themes.js), en el mismo
+// orden que TINTS: cada punto conserva su `tone` y la forma de la galaxia no cambia.
+export function recolor(points, tints) {
+  const color = new Float32Array(points.count * 3);
+  for (let i = 0; i < points.count; i++) color.set(tints[points.tone[i]] ?? tints[0], i * 3);
+  return color;
+}
+
 // Semiejes (en unidades de la galaxia) del rectángulo que ocupa la galaxia en pantalla,
 // sea cual sea el giro de cada punto: la órbita proyectada de un punto es una elipse cuya
 // caja se calcula directamente.
@@ -201,6 +209,7 @@ uniform vec2 u_turn;
 uniform float u_dpr;
 uniform float u_core;
 uniform float u_twinkle;
+uniform float u_gain;
 varying float v_alpha;
 varying vec3 v_color;
 void main() {
@@ -225,7 +234,7 @@ void main() {
   a *= 1.0 + u_glow * 0.3;
   // En una galaxia pequeña los puntos (1 px como mínimo) se amontonan y saturan: se apagan un poco.
   a *= clamp(u_scale / (300.0 * u_dpr), 0.55, 1.0);
-  v_alpha = a * pow(1.0 - u_spread, 1.5);
+  v_alpha = a * pow(1.0 - u_spread, 1.5) * u_gain;
   v_color = a_color;
 }`;
 
@@ -268,17 +277,28 @@ function webglRenderer(canvas, points) {
     const at = gl.getAttribLocation(program, name);
     gl.enableVertexAttribArray(at);
     gl.vertexAttribPointer(at, size, gl.FLOAT, false, 0, 0);
+    return buffer;
   };
   attribute('a_orbit', points.orbit);
   attribute('a_style', points.style);
-  attribute('a_color', points.color, 3);
+  const colors = attribute('a_color', points.color, 3);
   const u = {};
-  for (const name of ['res', 'center', 'scale', 'time', 'spread', 'glow', 'tilt', 'turn', 'dpr', 'core', 'twinkle']) u[name] = gl.getUniformLocation(program, `u_${name}`);
+  for (const name of ['res', 'center', 'scale', 'time', 'spread', 'glow', 'tilt', 'turn', 'dpr', 'core', 'twinkle', 'gain']) u[name] = gl.getUniformLocation(program, `u_${name}`);
   gl.enable(gl.BLEND);
-  gl.blendFunc(gl.ONE, gl.ONE); // luz que se suma: el núcleo denso brilla solo y sus tintes dan blanco
   gl.clearColor(0, 0, 0, 0);
+  let gain = 1;
+  // `add`: luz que se suma (el núcleo denso brilla solo y sus tintes dan blanco), para los
+  // fondos oscuros; `over`: tinta que se pinta encima (los colores ya van premultiplicados).
+  const blend = (mode) => (mode === 'over' ? gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA) : gl.blendFunc(gl.ONE, gl.ONE));
+  blend('add');
   return {
     kind: 'webgl',
+    palette(p) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, colors);
+      gl.bufferData(gl.ARRAY_BUFFER, recolor(points, p.tints), gl.STATIC_DRAW);
+      blend(p.blend);
+      gain = p.gain;
+    },
     draw(state) {
       gl.viewport(0, 0, canvas.width, canvas.height);
       gl.clear(gl.COLOR_BUFFER_BIT);
@@ -294,6 +314,7 @@ function webglRenderer(canvas, points) {
       gl.uniform1f(u.dpr, state.dpr);
       gl.uniform1f(u.core, state.look.core.radius);
       gl.uniform1f(u.twinkle, state.look.twinkle);
+      gl.uniform1f(u.gain, gain);
       gl.drawArrays(gl.POINTS, 0, points.count);
     },
   };
@@ -308,15 +329,23 @@ function canvasRenderer(canvas, points) {
   for (let i = 0; i < points.count; i += step) ids.push(i);
   const bucket = new Uint8Array(points.count);
   for (const i of ids) bucket[i] = Math.min(BUCKETS - 1, Math.floor(points.style[i * 4 + 1] * BUCKETS)) + points.tone[i] * BUCKETS;
-  const fills = TINTS.map((t) => `rgb(${t.map((v) => Math.round(v * 255)).join(' ')})`);
+  const fillsFor = (tints) => tints.map((t) => `rgb(${t.map((v) => Math.round(v * 255)).join(' ')})`);
+  let fills = fillsFor(TINTS);
+  let mode = 'lighter';
+  let gain = 1;
   return {
     kind: '2d',
+    palette(p) {
+      fills = fillsFor(p.tints);
+      mode = p.blend === 'over' ? 'source-over' : 'lighter';
+      gain = p.gain;
+    },
     draw(state) {
       const { orbit, style } = points;
       const { look, dpr } = state;
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalCompositeOperation = mode;
       const ci = look.tilt;
       const si = Math.sqrt(1 - ci * ci);
       const turn = (look.angle * Math.PI) / 180;
@@ -343,7 +372,7 @@ function canvasRenderer(canvas, points) {
       for (let k = 0; k < paths.length; k++) {
         const b = k % BUCKETS;
         ctx.fillStyle = fills[(k - b) / BUCKETS];
-        ctx.globalAlpha = Math.min(1, ((b + 0.5) / BUCKETS) * 1.6 * fade * small * (1 + state.glow * 0.3));
+        ctx.globalAlpha = Math.min(1, ((b + 0.5) / BUCKETS) * 1.6 * fade * small * (1 + state.glow * 0.3) * gain);
         ctx.fill(paths[k]);
       }
       ctx.globalAlpha = 1;
@@ -605,6 +634,12 @@ export function createGalaxy(canvas, { stage, onOpen }) {
     },
     get renderer() {
       return renderer.kind;
+    },
+    // Tintes y mezcla del tema (ver `galaxy` en themes.js), en los dos lienzos.
+    setPalette(p) {
+      front.renderer.palette(p);
+      back?.renderer.palette(p);
+      request();
     },
   };
 }

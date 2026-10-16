@@ -17,6 +17,8 @@ mod skills;
 mod sources;
 mod usage;
 mod vault;
+mod workspace;
+mod workspace_run;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,6 +30,8 @@ pub fn run() {
         .manage(agy::AgyState::default())
         .manage(usage::UsageState::default())
         .manage(registro::RegistroState::default())
+        .manage(workspace::WorkspaceCatalogs::default())
+        .manage(workspace_run::WorkspaceRuns::default())
         .invoke_handler(tauri::generate_handler![
             vault::get_vault,
             vault::detect_vaults,
@@ -73,14 +77,30 @@ pub fn run() {
             notas::desks_load,
             notas::desks_save,
             render::render_info,
-            render::render_retry_gpu,
             skills::skills_list,
             skills::skills_prepare,
             skills::skills_remove,
             agents::agents_list,
             agents::agents_remove,
             registro::agent_log,
-            registro::agent_context
+            registro::agent_context,
+            workspace::workspace_list,
+            workspace::workspace_open,
+            workspace::workspace_create,
+            workspace::workspace_forget,
+            workspace::workspace_state,
+            workspace::workspace_save_ui,
+            workspace::workspace_set_extras,
+            workspace::workspace_tree,
+            workspace::workspace_read,
+            workspace::workspace_agents,
+            workspace::workspace_extras,
+            workspace_run::workspace_start,
+            workspace_run::workspace_send,
+            workspace_run::workspace_stop,
+            workspace_run::workspace_reset,
+            workspace_run::workspace_detach,
+            workspace_run::workspace_running
         ])
         .setup(|app| {
             render::attach(app);

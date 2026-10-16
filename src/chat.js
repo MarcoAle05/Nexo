@@ -1,8 +1,16 @@
-// Chat con Claude de la carta derecha. Claude Code corre sin terminal (claude_code.rs) y aquí
-// se pinta su conversación con el diseño de la app: lo que escribe el usuario, lo que
-// contesta Claude, sus procesos (herramientas y subagentes) y los permisos que pide. Debajo,
-// el compositor con el modelo, el esfuerzo, el modo de permisos, los comandos «/» y Enviar.
-// El protocolo lo interpreta chat-model.js (sin DOM); esto es la vista y el cableado.
+// Chat con Claude Code: la carta derecha (Nexo) y cada ventana de agente de un workspace. Claude
+// Code corre sin terminal (claude_code.rs, workspace_run.rs) y aquí se pinta su conversación
+// con el diseño de la app: lo que escribe el usuario, lo que contesta Claude, sus procesos
+// (herramientas y subagentes) y los permisos que pide. Debajo, el compositor con el modelo, el
+// esfuerzo, el modo de permisos, los comandos «/» y Enviar. El protocolo lo interpreta
+// chat-model.js (sin DOM); esto es la vista y el cableado.
+//
+// Todas las piezas de un chat salen de la misma plantilla (`#chat-template`, `mountChat`) con
+// sus ids bajo un prefijo («chat» en la carta de Nexo): así cada ventana tiene las suyas y las
+// relaciones de ARIA (aria-controls, for…) siguen apuntando dentro de ella. Lo que habla con el
+// proceso es un transporte: el chat de Nexo usa claude_code_*, el orquestador de un workspace
+// workspace_*. Un subagente no tiene proceso propio: su chat va «alimentado» (`feed`) con las
+// líneas que le reparte el workspace, y lo que escribe el usuario se lo pasa el orquestador.
 import {
   EFFORT_HINTS,
   EFFORT_LABELS,
@@ -28,6 +36,7 @@ const ICON = {
   check: svg('<path d="m4.5 10.5 3.5 3.5 7.5-8"/>'),
   chevron: svg('<path d="m5 8 5 5 5-5"/>', 12),
   close: svg('<path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/>', 12),
+  open: svg('<path d="M8 4H4v12h12v-4M11 4h5v5M16 4l-7 7"/>', 12),
   // Estados de un proceso: hecho, error, denegado o detenido, y a la espera de permiso.
   states:
     svg('<path d="m4.5 10.5 3.5 3.5 7.5-8"/>').replace('<svg', '<svg class="is-done"') +
@@ -45,9 +54,9 @@ const STATUS_TEXT = {
   denied: 'sin permiso',
   stopped: 'detenido',
 };
-const PREFS_KEY = 'nexo.chat';
 const MODES = ['default', 'acceptEdits', 'plan', 'auto'];
 const CONTROL_TIMEOUT = 20_000;
+const AGENT_TOOLS = new Set(['Agent', 'Task']);
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -64,6 +73,42 @@ const pretty = (value) => {
   }
 };
 
+// Preferencias del compositor (modelo, esfuerzo, permisos) guardadas en este equipo.
+export const localPrefs = (key) => ({
+  load() {
+    try {
+      return JSON.parse(localStorage.getItem(key) ?? '{}') ?? {};
+    } catch {
+      return {};
+    }
+  },
+  save(prefs) {
+    try {
+      localStorage.setItem(key, JSON.stringify(prefs));
+    } catch {}
+  },
+});
+
+// Copia la plantilla del chat en `container` con sus ids bajo `prefix` (`chat-log` →
+// `<prefix>-log`), también en las referencias de ARIA, y pone los textos de quien habla.
+export function mountChat(container, prefix, { label = 'Conversación con Claude', placeholder = 'Escríbele a Claude…', inputLabel = 'Mensaje para Claude' } = {}) {
+  const template = document.getElementById('chat-template');
+  const fragment = template.content.cloneNode(true);
+  const rename = (value) => value.replace(/(^|\s)chat-/g, `$1${prefix}-`);
+  for (const node of fragment.querySelectorAll('[id], [for], [aria-controls], [aria-describedby], [aria-labelledby]')) {
+    for (const attr of ['id', 'for', 'aria-controls', 'aria-describedby', 'aria-labelledby']) {
+      if (node.hasAttribute(attr)) node.setAttribute(attr, rename(node.getAttribute(attr)));
+    }
+  }
+  container.replaceChildren(fragment);
+  container.querySelector(`#${prefix}-list`)?.setAttribute('aria-label', label);
+  const input = container.querySelector(`#${prefix}-input`);
+  input?.setAttribute('placeholder', placeholder);
+  const inputName = container.querySelector(`label[for="${prefix}-input"]`);
+  if (inputName) inputName.textContent = inputLabel;
+  return container;
+}
+
 // Lo que una herramienta manda, en claro: la orden, el archivo o su entrada tal cual.
 function inputText(item) {
   const input = item.input ?? {};
@@ -76,41 +121,71 @@ function inputText(item) {
   return pretty(input);
 }
 
-export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLink = () => {}, localCommands = () => [], onState = () => {} }) {
-  const $ = (id) => document.getElementById(id);
-  const log = $('chat-log');
-  const list = $('chat-list');
-  const input = $('chat-input');
-  const bar = $('chat-bar');
-  const commandsBox = $('chat-commands');
+const EMPTY = {
+  browser: ['Solo en la app de escritorio', 'El chat con Claude necesita la app de nexo: aquí solo se ve la interfaz.'],
+  'no-vault': ['Elige un vault', 'Claude se abrirá dentro de él y trabajará con tus fuentes y tu wiki.'],
+  idle: ['Claude', 'El chat se abre con tu suscripción de Claude Code.'],
+  starting: ['Abriendo Claude…', 'Arrancando Claude Code con tu suscripción.'],
+  ready: ['Claude está listo', 'Pregunta por tus fuentes y tu wiki, o escribe / para ver los comandos y las skills.'],
+  exited: ['Claude Code se cerró', 'Puedes abrirlo de nuevo y seguir con la misma conversación.'],
+  error: ['No se pudo abrir Claude', ''],
+};
 
-  const model = createChatModel();
+export function createChat({
+  root = document,
+  prefix = 'chat',
+  transport,
+  desktop,
+  // Por qué no se puede abrir todavía (`'no-vault'`, `'browser'`…) o null si se puede.
+  blocked = () => null,
+  feed = false,
+  // Un chat alimentado: qué hacer con lo que escribe el usuario (se lo pasa el orquestador).
+  submitUser = null,
+  onInterrupt = null,
+  prefs: prefsStore = localPrefs('nexo.chat'),
+  getCwd = () => '',
+  pickFiles,
+  onLink = () => {},
+  localCommands = () => [],
+  onState = () => {},
+  onStarted = () => {},
+  // Procesos de la herramienta Agent: el agente que desplegó (para abrir su ventana).
+  agentFor = null,
+  onOpenAgent = () => {},
+  speaker = 'Claude',
+  texts = {},
+  model = createChatModel(),
+}) {
+  const $ = (name) => (root === document ? document.getElementById(`${prefix}-${name}`) : root.querySelector(`#${CSS.escape(prefix)}-${name}`));
+  const log = $('log');
+  const list = $('list');
+  const input = $('input');
+  const bar = $('bar');
+  const commandsBox = $('commands');
+  const form = $('form');
+  const empty = { ...EMPTY, ...texts };
+  if (feed) root.querySelector?.('.chat-view')?.setAttribute('data-feed', '');
+
   const nodes = new Map(); // pieza → su <li>
   const waiting = new Map(); // id de petición de control → { resolve, reject, timer }
-  let phase = desktop ? 'idle' : 'browser';
+  let phase = feed ? 'ready' : desktop ? 'idle' : 'browser';
   let phaseDetail = '';
-  let running = false;
+  let running = feed;
   let starting = null;
   let fresh = true; // esta página aún no ha pedido la conversación guardada
   let stick = true; // la conversación sigue al final mientras no se suba a mano
   let frame = 0;
   let files = [];
   let requestSeq = 0;
-  let prefs = {};
-  try {
-    prefs = JSON.parse(localStorage.getItem(PREFS_KEY) ?? '{}') ?? {};
-  } catch {}
-  const savePrefs = () => {
-    try {
-      localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-    } catch {}
-  };
+  let prefs = prefsStore.load() ?? {};
+  const savePrefs = () => prefsStore.save(prefs);
+  const send$ = (line, record) => transport.send(line, record);
 
   // ---------------------------------------------------------------- anuncios
   // La región de estado existe vacía desde el principio; se vacía y se rellena en dos pasos
   // para que el lector de pantalla repita un texto aunque sea el mismo.
   function announce(text, urgent = false) {
-    const region = $(urgent ? 'chat-alert' : 'chat-live');
+    const region = $(urgent ? 'alert' : 'live');
     region.textContent = '';
     requestAnimationFrame(() => (region.textContent = text));
   }
@@ -122,7 +197,13 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
 
   // ---------------------------------------------------------------- pintar piezas
   function paintUser(node, item) {
-    node.replaceChildren(el('span', 'visually-hidden', 'Tú: '), el('div', 'chat-bubble', item.text || 'Archivos adjuntos'));
+    const who = item.from ? `${item.from}: ` : 'Tú: ';
+    const parts = [el('span', 'visually-hidden', who)];
+    if (item.from || item.toName) node.classList.add('chat-user-tagged');
+    if (item.from) parts.push(el('span', 'chat-user-tag', item.from));
+    else if (item.toName) parts.push(el('span', 'chat-user-tag', `Para ${item.toName}`));
+    parts.push(el('div', 'chat-bubble', item.text || 'Archivos adjuntos'));
+    node.replaceChildren(...parts);
     if (item.files?.length) {
       const attached = el('ul', 'chat-user-files');
       attached.setAttribute('aria-label', 'Archivos adjuntos');
@@ -141,7 +222,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     let body = node.querySelector('.chat-md');
     if (!body) {
       body = el('div', 'note-body chat-md');
-      node.replaceChildren(el('span', 'visually-hidden', `${item.speaker ?? 'Claude'}: `), body);
+      node.replaceChildren(el('span', 'visually-hidden', `${item.speaker ?? speaker}: `), body);
     }
     body.innerHTML = renderMarkdown(item.text);
   }
@@ -210,8 +291,23 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     return parts;
   }
 
+  // Un proceso de la herramienta Agent lleva, debajo, el botón que abre la ventana del agente.
+  function agentButton(node, item) {
+    const agent = AGENT_TOOLS.has(item.name) && agentFor ? agentFor(item.id) : null;
+    let button = node.querySelector(':scope > .chat-proc-open');
+    if (!agent) return button?.remove();
+    if (!button) {
+      button = el('button', 'chat-proc-open');
+      button.type = 'button';
+      button.addEventListener('click', () => onOpenAgent(agentFor(item.id)));
+      node.querySelector(':scope > details').after(button);
+    }
+    button.innerHTML = `${ICON.open}<span></span>`;
+    button.lastChild.textContent = `Abrir la ventana de ${agent.name}`;
+  }
+
   function paintTool(node, item) {
-    const cwd = model.state.session?.cwd ?? getVault()?.path ?? '';
+    const cwd = model.state.session?.cwd ?? getCwd() ?? '';
     const { label, detail } = toolSummary(item.name, item.input, cwd);
     node.dataset.status = item.status;
     let details = node.querySelector(':scope > details');
@@ -246,6 +342,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
       details.open = true;
       details.dataset.opened = '1';
     }
+    agentButton(node, item);
     const pending = item.permission && !item.permission.answer ? item.permission : null;
     const card = node.querySelector(':scope > .chat-perm');
     if (!pending) card?.remove();
@@ -262,7 +359,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
       decision === 'deny' ? denyLine(requestId, message) : allowLine(requestId, updated ?? item.input, decision === 'always' ? suggestions : null);
     const record = JSON.stringify({ type: 'nexo_permission', request_id: requestId, decision: decision === 'deny' ? 'deny' : 'allow' });
     try {
-      await invoke('claude_code_send', { line, record });
+      await send$(line, record);
     } catch (error) {
       return notice(error, 'error');
     }
@@ -295,8 +392,8 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     const actions = el('div', 'chat-perm-actions');
 
     if (item.name === 'AskUserQuestion' && Array.isArray(item.input?.questions)) {
-      card.setAttribute('aria-label', 'Claude te pregunta');
-      card.append(el('p', 'chat-perm-title', 'Claude te pregunta'));
+      card.setAttribute('aria-label', `${speaker} te pregunta`);
+      card.append(el('p', 'chat-perm-title', `${speaker} te pregunta`));
       const picked = new Map();
       const groups = item.input.questions.map((question) => {
         const group = el('fieldset', 'chat-question');
@@ -335,7 +432,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
         permButton('No responder', '', () => answerPermission(item, 'deny', { message: 'El usuario prefirió no contestar.' })),
       );
     } else if (item.name === 'ExitPlanMode') {
-      card.setAttribute('aria-label', 'Plan de Claude');
+      card.setAttribute('aria-label', `Plan de ${speaker}`);
       card.append(el('p', 'chat-perm-title', 'Plan para revisar'));
       const plan = el('div', 'note-body chat-md chat-perm-plan');
       plan.tabIndex = 0;
@@ -348,7 +445,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
       );
     } else {
       card.setAttribute('aria-label', `Permiso para ${label} ${detail}`.trim());
-      card.append(el('p', 'chat-perm-title', 'Claude pide permiso'));
+      card.append(el('p', 'chat-perm-title', `${speaker} pide permiso`));
       const text = el('p', 'chat-perm-text', `${label} `);
       if (detail) text.append(el('code', '', detail));
       card.append(text);
@@ -380,63 +477,60 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     }
   }
 
-  const EMPTY = {
-    browser: ['Solo en la app de escritorio', 'El chat con Claude necesita la app de nexo: aquí solo se ve la interfaz.'],
-    'no-vault': ['Elige un vault', 'Claude se abrirá dentro de él y trabajará con tus fuentes y tu wiki.'],
-    idle: ['Claude', 'El chat se abre con tu suscripción de Claude Code.'],
-    starting: ['Abriendo Claude…', 'Arrancando Claude Code con tu suscripción.'],
-    ready: ['Claude está listo', 'Pregunta por tus fuentes y tu wiki, o escribe / para ver los comandos y las skills.'],
-    exited: ['Claude Code se cerró', 'Puedes abrirlo de nuevo y seguir con la misma conversación.'],
-    error: ['No se pudo abrir Claude', ''],
-  };
-
   function renderChrome() {
     const { state } = model;
-    const empty = state.items.length === 0;
-    $('chat-empty').hidden = !empty;
-    const [title, text] = EMPTY[phase] ?? EMPTY.ready;
-    $('chat-empty-title').textContent = title;
-    $('chat-empty-text').textContent = phase === 'error' ? phaseDetail : text;
-    $('chat-retry').hidden = !(phase === 'error' || phase === 'exited');
-    $('chat-banner').hidden = empty || !(phase === 'exited' || phase === 'error');
-    $('chat-banner-text').textContent = phase === 'error' ? `No se pudo abrir Claude: ${phaseDetail}` : `Claude Code se cerró.${phaseDetail ? ` ${phaseDetail}` : ''}`;
+    const none = state.items.length === 0;
+    $('empty').hidden = !none;
+    const [title, text] = empty[phase] ?? empty.ready;
+    $('empty-title').textContent = title;
+    $('empty-text').textContent = phase === 'error' ? phaseDetail : text;
+    $('retry').hidden = feed || !(phase === 'error' || phase === 'exited');
+    $('banner').hidden = feed || none || !(phase === 'exited' || phase === 'error');
+    $('banner-text').textContent = phase === 'error' ? `No se pudo abrir Claude: ${phaseDetail}` : `Claude Code se cerró.${phaseDetail ? ` ${phaseDetail}` : ''}`;
 
     const asking = model.pending().length > 0;
     const writing = state.items.at(-1)?.streaming && state.items.at(-1)?.kind === 'text';
     const working = state.busy && !asking && !writing;
-    $('chat-working').hidden = !working;
-    $('chat-working-text').textContent =
-      state.status === 'compacting' ? 'Compactando el contexto…' : state.status === 'retry' ? 'Reintentando la conexión…' : 'Claude está trabajando…';
-    $('rail-working').hidden = !state.busy;
+    $('working').hidden = !working;
+    $('working-text').textContent =
+      state.status === 'compacting' ? 'Compactando el contexto…' : state.status === 'retry' ? 'Reintentando la conexión…' : `${speaker} está trabajando…`;
     list.setAttribute('aria-busy', String(state.busy));
 
-    const stop = state.busy && !input.value.trim() && !files.length;
-    $('chat-send').dataset.state = stop ? 'stop' : 'send';
-    $('chat-send-label').textContent = stop ? 'Detener' : 'Enviar';
+    const stop = state.busy && !input.value.trim() && !files.length && (!feed || onInterrupt);
+    $('send').dataset.state = stop ? 'stop' : 'send';
+    $('send-label').textContent = stop ? 'Detener' : 'Enviar';
 
-    const plan = $('chat-plan');
-    plan.hidden = !state.account?.subscription;
-    plan.textContent = state.account?.subscription ?? '';
+    const plan = $('plan');
+    if (plan) {
+      plan.hidden = feed || !state.account?.subscription;
+      plan.textContent = state.account?.subscription ?? '';
+    }
 
-    const applied = state.applied ?? {};
-    $('chat-model-label').textContent = modelLabel(state.models, applied.model ?? state.session?.model, prefs.model);
-    const effort = applied.effort ?? prefs.effort;
-    $('chat-effort-label').textContent = EFFORT_LABELS[effort] ?? 'Esfuerzo';
-    $('chat-effort').disabled = effortLevels(state.models, applied.model, prefs.model).length === 0;
-    $('chat-access-label').textContent = MODE_LABELS[state.permissionMode] ?? state.permissionMode;
+    if (!feed) {
+      const applied = state.applied ?? {};
+      $('model-label').textContent = modelLabel(state.models, applied.model ?? state.session?.model, prefs.model);
+      const effort = applied.effort ?? prefs.effort;
+      $('effort-label').textContent = EFFORT_LABELS[effort] ?? 'Esfuerzo';
+      $('effort').disabled = effortLevels(state.models, applied.model, prefs.model).length === 0;
+      $('access-label').textContent = MODE_LABELS[state.permissionMode] ?? state.permissionMode;
+    }
     fitBar();
-    onState({ busy: state.busy, running, phase });
+    onState({ busy: state.busy, running, phase, waiting: asking });
   }
 
   // «Enviar» pierde su texto (no su nombre) cuando la barra no cabe a lo ancho de la carta.
   function fitBar() {
     if (!bar.clientWidth) return;
+    // Alimentado, la barra va en la fila del campo: Enviar pierde el texto si el compositor
+    // es estrecho (el campo se queda con lo que sobra).
+    if (feed) return bar.classList.toggle('compact', form.clientWidth < 340);
     bar.classList.remove('compact');
     // Con `measure` nada encoge: cada pieza da el ancho que querría.
     bar.classList.add('measure');
-    const pieces = [...bar.children].filter((child) => !child.classList.contains('chat-bar-space'));
+    const shown = [...bar.children].filter((child) => child.offsetParent !== null);
+    const pieces = shown.filter((child) => !child.classList.contains('chat-bar-space'));
     const style = getComputedStyle(bar);
-    const gaps = parseFloat(style.columnGap) * (bar.children.length - 1);
+    const gaps = parseFloat(style.columnGap) * Math.max(0, shown.length - 1);
     const padding = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
     const needed = pieces.reduce((sum, child) => sum + child.getBoundingClientRect().width + parseFloat(getComputedStyle(child).marginLeft), 0) + gaps + padding;
     bar.classList.remove('measure');
@@ -455,10 +549,10 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
         continue;
       }
       if (node.hidden) continue;
-      const speaker = item.speaker ?? 'Claude';
-      node.dataset.speaker = speaker;
-      node.classList.toggle('chat-first', speaker !== last);
-      last = speaker;
+      const who = item.speaker ?? speaker;
+      node.dataset.speaker = who;
+      node.classList.toggle('chat-first', who !== last);
+      last = who;
     }
   }
 
@@ -468,7 +562,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     markFirsts();
     renderChrome();
     if (stick) log.scrollTop = log.scrollHeight;
-    $('chat-jump').hidden = stick || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+    $('jump').hidden = stick || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
   }
   function queueRender() {
     if (!frame) frame = requestAnimationFrame(render);
@@ -494,18 +588,24 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
       for (const [, pending] of waiting) pending.reject('Claude Code se cerró.');
       waiting.clear();
       const detail = (event.detail ?? '').split('\n').filter((l) => l.trim()).pop() ?? '';
+      if (feed) {
+        queueRender();
+        return;
+      }
       setPhase('exited', detail.slice(0, 300));
       announce(`Claude Code se cerró.${detail ? ` ${detail}` : ''}`, true);
       return;
     }
-    let msg;
-    try {
-      msg = JSON.parse(event.text);
-    } catch {
-      return;
+    let msg = event.msg;
+    if (!msg) {
+      try {
+        msg = JSON.parse(event.text);
+      } catch {
+        return;
+      }
     }
     const effect = model.apply(msg);
-    if (effect?.unsupported) invoke('claude_code_send', { line: unsupportedLine(effect.unsupported, effect.subtype), record: null }).catch(() => {});
+    if (effect?.unsupported && !feed) send$(unsupportedLine(effect.unsupported, effect.subtype), null).catch(() => {});
     if (msg.type === 'control_response') {
       const id = msg.response?.request_id;
       const pending = waiting.get(id);
@@ -515,15 +615,15 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
         if (msg.response.subtype === 'success') pending.resolve(msg.response.response ?? null);
         else pending.reject(msg.response.error ?? 'Claude Code rechazó la petición.');
       }
-    } else if (!running) {
+    } else if (!running || event.history) {
       // Es la conversación guardada, que se repite al conectar: nada que anunciar.
     } else if (msg.type === 'control_request' && msg.request?.subtype === 'can_use_tool') {
-      const { label, detail } = toolSummary(msg.request.tool_name, msg.request.input, model.state.session?.cwd ?? '');
-      const what = msg.request.tool_name === 'AskUserQuestion' ? 'Claude te hace una pregunta' : `Claude pide permiso para ${label} ${detail}`.trim();
+      const { label, detail } = toolSummary(msg.request.tool_name, msg.request.input, model.state.session?.cwd ?? getCwd());
+      const what = msg.request.tool_name === 'AskUserQuestion' ? `${speaker} te hace una pregunta` : `${speaker} pide permiso para ${label} ${detail}`.trim();
       announce(`${what}. Los botones están en la conversación, antes del campo de mensaje.`);
     } else if (msg.type === 'result') {
       const last = model.state.items.findLast((i) => i.kind === 'text');
-      announce(msg.is_error ? 'El turno terminó con un error.' : `Claude terminó. ${last ? plain(last.text).slice(0, 280) : ''}`);
+      announce(msg.is_error ? 'El turno terminó con un error.' : `${speaker} terminó. ${last ? plain(last.text).slice(0, 280) : ''}`);
     }
     queueRender();
   }
@@ -537,7 +637,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
         reject('Claude Code no contestó a tiempo.');
       }, CONTROL_TIMEOUT);
       waiting.set(id, { resolve, reject, timer });
-      invoke('claude_code_send', { line: controlLine(id, request), record: null }).catch((error) => {
+      send$(controlLine(id, request), null).catch((error) => {
         waiting.delete(id);
         clearTimeout(timer);
         reject(error);
@@ -546,23 +646,24 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
   }
 
   function start() {
+    if (feed) return Promise.resolve(true);
     if (starting) return starting;
     if (running) return Promise.resolve(true);
-    if (!desktop || !getVault()) {
-      setPhase(desktop ? 'no-vault' : 'browser');
+    const why = !desktop ? 'browser' : blocked();
+    if (why) {
+      setPhase(why);
       return Promise.resolve(false);
     }
     setPhase('starting');
-    $('chat-alert').textContent = '';
+    $('alert').textContent = '';
     starting = (async () => {
       try {
-        const channel = new Channel();
-        channel.onmessage = onEvent;
         const options = { model: prefs.model ?? null, effort: prefs.effort ?? null, permissionMode: prefs.mode ?? null };
-        const info = await invoke('claude_code_start', { options, replay: fresh, channel });
+        const info = await transport.start({ options, replay: fresh, onEvent });
         fresh = false;
         running = true;
         setPhase('ready');
+        onStarted(info);
         // Sin gastar nada: qué modelos y comandos hay y qué está vigente.
         if (!info.attached) await control({ subtype: 'initialize' }).catch((error) => notice(error, 'error'));
         await control({ subtype: 'get_settings' }).catch(() => {});
@@ -583,14 +684,22 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
   async function send(text, attached = []) {
     const body = composeMessage(text ?? '', attached);
     if (!body) return false;
-    if (!running && !(await start())) return false;
     const shown = String(text ?? '').trim();
+    if (feed) {
+      // Al agente se lo pasa el orquestador; aquí se ve como lo escribió el usuario.
+      if (!(await submitUser(text ?? '', attached))) return false;
+      model.addUser(shown, attached, { local: true });
+      stick = true;
+      queueRender();
+      return true;
+    }
+    if (!running && !(await start())) return false;
     // El mensaje sale en la conversación antes de mandarlo: lo que conteste Claude va detrás.
     model.addUser(shown, attached);
     stick = true;
     queueRender();
     try {
-      await invoke('claude_code_send', { line: userLine(body), record: JSON.stringify({ type: 'nexo_user', text: shown, files: attached }) });
+      await send$(userLine(body), JSON.stringify({ type: 'nexo_user', text: shown, files: attached }));
     } catch (error) {
       model.state.busy = false;
       notice(`No se pudo enviar: ${error}`, 'error');
@@ -599,19 +708,41 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     return true;
   }
 
-  const interrupt = () => control({ subtype: 'interrupt' }).catch((error) => notice(error, 'error'));
+  // Un mensaje que no escribió el usuario en este chat (lo que escribe en la ventana de un
+  // agente): va a Claude Code tal cual y se pinta con `shown` (y a quién iba).
+  async function relay(body, record) {
+    if (!running && !(await start())) return false;
+    model.addUser(record.text, record.files ?? [], { to: record.to, toName: record.toName });
+    stick = true;
+    queueRender();
+    try {
+      await send$(userLine(body), JSON.stringify({ type: 'nexo_user', ...record }));
+    } catch (error) {
+      model.state.busy = false;
+      notice(`No se pudo enviar: ${error}`, 'error');
+      return false;
+    }
+    return true;
+  }
+
+  const interrupt = () => (feed ? onInterrupt?.() : control({ subtype: 'interrupt' }).catch((error) => notice(error, 'error')));
+
+  function clearView() {
+    model.clear();
+    nodes.clear();
+    list.replaceChildren();
+  }
 
   // Conversación nueva: sesión nueva de Claude Code y la lista vacía.
   async function reset() {
+    if (feed) return;
     try {
-      await invoke('claude_code_reset');
+      await transport.reset();
     } catch (error) {
       return notice(error, 'error');
     }
     running = false;
-    model.clear();
-    nodes.clear();
-    list.replaceChildren();
+    clearView();
     setFiles([]);
     setPhase('idle');
     announce('Conversación nueva.');
@@ -712,54 +843,56 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     queueRender();
   }
 
-  createMenu(
-    $('chat-model'),
-    $('chat-model-menu'),
-    () => {
-      const { models, applied, session } = model.state;
-      const current = applied?.model ?? session?.model;
-      // Marcado: lo elegido aquí si sigue vigente; si no, el modelo que Claude Code dice tener.
-      const picked = models.find((m) => m.value === (prefs.model ?? 'default'));
-      const chosen = picked && (!current || picked.resolvedModel === current) ? picked.value : (models.find((m) => m.value !== 'default' && m.resolvedModel === current)?.value ?? 'default');
-      return models.map((m) => ({
-        value: m.value,
-        label: m.value === 'default' ? 'Predeterminado' : m.displayName,
-        tag: m.value === 'default' ? modelLabel(models, m.resolvedModel, null) : m.resolvedModel,
-        hint: m.value === 'default' ? 'El que tienes configurado en Claude Code' : '',
-        checked: m.value === chosen,
-      }));
-    },
-    (value) => {
-      const name = modelLabel(model.state.models, null, value);
-      apply({ subtype: 'set_model', model: value }, () => (prefs.model = value)).then(() => announce(`Modelo: ${value === 'default' ? 'predeterminado' : name}.`));
-    },
-  );
+  if (!feed) {
+    createMenu(
+      $('model'),
+      $('model-menu'),
+      () => {
+        const { models, applied, session } = model.state;
+        const current = applied?.model ?? session?.model;
+        // Marcado: lo elegido aquí si sigue vigente; si no, el modelo que Claude Code dice tener.
+        const picked = models.find((m) => m.value === (prefs.model ?? 'default'));
+        const chosen = picked && (!current || picked.resolvedModel === current) ? picked.value : (models.find((m) => m.value !== 'default' && m.resolvedModel === current)?.value ?? 'default');
+        return models.map((m) => ({
+          value: m.value,
+          label: m.value === 'default' ? 'Predeterminado' : m.displayName,
+          tag: m.value === 'default' ? modelLabel(models, m.resolvedModel, null) : m.resolvedModel,
+          hint: m.value === 'default' ? 'El que tienes configurado en Claude Code' : '',
+          checked: m.value === chosen,
+        }));
+      },
+      (value) => {
+        const name = modelLabel(model.state.models, null, value);
+        apply({ subtype: 'set_model', model: value }, () => (prefs.model = value)).then(() => announce(`Modelo: ${value === 'default' ? 'predeterminado' : name}.`));
+      },
+    );
 
-  createMenu(
-    $('chat-effort'),
-    $('chat-effort-menu'),
-    () => {
-      const { models, applied } = model.state;
-      const current = applied?.effort ?? prefs.effort;
-      return effortLevels(models, applied?.model, prefs.model).map((level) => ({ value: level, label: level === 'xhigh' ? 'Extra alto' : (EFFORT_LABELS[level] ?? level), hint: EFFORT_HINTS[level] ?? '', checked: level === current }));
-    },
-    (value) => apply({ subtype: 'apply_flag_settings', settings: { effortLevel: value } }, () => (prefs.effort = value)).then(() => announce(`Esfuerzo: ${EFFORT_LABELS[value] ?? value}.`)),
-  );
+    createMenu(
+      $('effort'),
+      $('effort-menu'),
+      () => {
+        const { models, applied } = model.state;
+        const current = applied?.effort ?? prefs.effort;
+        return effortLevels(models, applied?.model, prefs.model).map((level) => ({ value: level, label: level === 'xhigh' ? 'Extra alto' : (EFFORT_LABELS[level] ?? level), hint: EFFORT_HINTS[level] ?? '', checked: level === current }));
+      },
+      (value) => apply({ subtype: 'apply_flag_settings', settings: { effortLevel: value } }, () => (prefs.effort = value)).then(() => announce(`Esfuerzo: ${EFFORT_LABELS[value] ?? value}.`)),
+    );
 
-  createMenu(
-    $('chat-access'),
-    $('chat-access-menu'),
-    () => {
-      const { models, applied, permissionMode } = model.state;
-      const current = models.find((m) => m.resolvedModel === applied?.model);
-      return MODES.filter((mode) => mode !== 'auto' || current?.supportsAutoMode !== false).map((mode) => ({ value: mode, label: MODE_LABELS[mode], hint: MODE_HINTS[mode], checked: mode === permissionMode }));
-    },
-    (value) =>
-      apply({ subtype: 'set_permission_mode', mode: value }, () => {
-        prefs.mode = value;
-        if (!running) model.state.permissionMode = value;
-      }).then(() => announce(`Permisos: ${MODE_LABELS[value]}.`)),
-  );
+    createMenu(
+      $('access'),
+      $('access-menu'),
+      () => {
+        const { models, applied, permissionMode } = model.state;
+        const current = models.find((m) => m.resolvedModel === applied?.model);
+        return MODES.filter((mode) => mode !== 'auto' || current?.supportsAutoMode !== false).map((mode) => ({ value: mode, label: MODE_LABELS[mode], hint: MODE_HINTS[mode], checked: mode === permissionMode }));
+      },
+      (value) =>
+        apply({ subtype: 'set_permission_mode', mode: value }, () => {
+          prefs.mode = value;
+          if (!running) model.state.permissionMode = value;
+        }).then(() => announce(`Permisos: ${MODE_LABELS[value]}.`)),
+    );
+  }
 
   // ---------------------------------------------------------------- comandos «/»
   // Lista desplegable ligada al campo: el foco se queda en él y la opción activa se señala
@@ -783,7 +916,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     commandAt = -1;
     input.setAttribute('aria-expanded', 'false');
     input.removeAttribute('aria-activedescendant');
-    $('chat-slash').setAttribute('aria-expanded', 'false');
+    $('slash').setAttribute('aria-expanded', 'false');
   }
 
   function markCommand(index) {
@@ -798,11 +931,12 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
   }
 
   function openCommands(query) {
+    if (feed) return;
     closeMenus();
     commandList = filterCommands(allCommands(), query).slice(0, 60);
     const options = commandList.map((command, index) => {
       const option = el('div', 'chat-menu-item');
-      option.id = `chat-command-${index}`;
+      option.id = `${prefix}-command-${index}`;
       option.setAttribute('role', 'option');
       option.dataset.index = index;
       const slash = el('span', 'chat-menu-check', '/');
@@ -816,7 +950,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     commandsBox.replaceChildren(...(options.length ? options : [el('p', 'chat-menu-empty', 'Ningún comando empieza así.')]));
     commandsBox.hidden = false;
     input.setAttribute('aria-expanded', 'true');
-    $('chat-slash').setAttribute('aria-expanded', 'true');
+    $('slash').setAttribute('aria-expanded', 'true');
     if (options.length) markCommand(0);
     else input.removeAttribute('aria-activedescendant');
   }
@@ -841,7 +975,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
   // El menú acompaña mientras se escribe el nombre del comando: «/» y nada de espacios.
   function syncCommands() {
     const match = /^\/([^\s]*)$/.exec(input.value);
-    if (match) openCommands(match[1]);
+    if (match && !feed) openCommands(match[1]);
     else closeCommands();
   }
 
@@ -851,7 +985,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     const option = event.target.closest('[role="option"]');
     if (option) pickCommand(commandList[Number(option.dataset.index)]);
   });
-  $('chat-slash').addEventListener('click', () => {
+  $('slash').addEventListener('click', () => {
     if (!commandsBox.hidden) {
       closeCommands();
       return input.focus();
@@ -870,7 +1004,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
 
   function setFiles(next) {
     files = next;
-    const box = $('chat-files');
+    const box = $('files');
     box.hidden = files.length === 0;
     box.replaceChildren(
       ...files.map((file) => {
@@ -891,7 +1025,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     queueRender();
   }
 
-  $('chat-attach').addEventListener('click', async () => {
+  $('attach').addEventListener('click', async () => {
     try {
       const picked = await pickFiles();
       if (picked?.length) {
@@ -912,7 +1046,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
       return input.focus();
     }
     // Estos dos empiezan la conversación de cero: lo hace nexo, que lleva la cuenta de la sesión.
-    if (/^\/(clear|new)\s*$/.test(text.trim())) {
+    if (!feed && /^\/(clear|new)\s*$/.test(text.trim())) {
       input.value = '';
       grow();
       return reset();
@@ -920,7 +1054,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     // Las órdenes de nexo (compilar, preguntar, clave…) no van a Claude Code ni se pintan
     // como mensaje: una clave escrita aquí no sale del campo.
     const typed = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
-    const local = typed && localCommands().find((c) => c.name === typed[1]);
+    const local = !feed && typed && localCommands().find((c) => c.name === typed[1]);
     if (local) {
       input.value = '';
       grow();
@@ -943,7 +1077,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     input.focus();
   }
 
-  $('chat-form').addEventListener('submit', (event) => {
+  form.addEventListener('submit', (event) => {
     event.preventDefault();
     submit();
   });
@@ -974,7 +1108,7 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       submit();
-    } else if (event.key === 'Escape' && model.state.busy) {
+    } else if (event.key === 'Escape' && model.state.busy && (!feed || onInterrupt)) {
       event.preventDefault();
       event.stopPropagation();
       interrupt();
@@ -982,22 +1116,24 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
   });
   input.addEventListener('blur', () => setTimeout(() => document.activeElement !== input && closeCommands(), 120));
 
-  document.addEventListener('pointerdown', (event) => {
-    if (!event.target.closest?.('#chat-form')) {
+  const outside = (event) => {
+    if (!form.isConnected) return document.removeEventListener('pointerdown', outside);
+    if (!form.contains(event.target)) {
       closeMenus();
       closeCommands();
     }
-  });
+  };
+  document.addEventListener('pointerdown', outside);
 
   // ---------------------------------------------------------------- resto de la carta
   log.addEventListener('scroll', () => {
     stick = log.scrollHeight - log.scrollTop - log.clientHeight < 48;
-    $('chat-jump').hidden = stick;
+    $('jump').hidden = stick;
   });
-  $('chat-jump').addEventListener('click', () => {
+  $('jump').addEventListener('click', () => {
     stick = true;
     log.scrollTop = log.scrollHeight;
-    $('chat-jump').hidden = true;
+    $('jump').hidden = true;
     input.focus();
   });
   list.addEventListener('click', (event) => {
@@ -1007,28 +1143,45 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
     onLink(link);
   });
   const restart = () => start().then((ok) => ok && input.focus());
-  $('chat-retry').addEventListener('click', restart);
-  $('chat-restart').addEventListener('click', restart);
-  $('chat-new').addEventListener('click', reset);
-  new ResizeObserver(() => queueRender()).observe(bar);
+  $('retry').addEventListener('click', restart);
+  $('restart').addEventListener('click', restart);
+  $('new')?.addEventListener('click', reset);
+  const resizer = new ResizeObserver(() => queueRender());
+  resizer.observe(bar);
   queueRender();
 
   return {
     start,
     send,
+    relay,
     notice,
     reset,
     interrupt,
+    // Las líneas que reparte el workspace (o el transporte del chat de Nexo).
+    receive: onEvent,
     // Otro vault: la conversación era del anterior.
     async stop() {
       try {
-        await invoke('claude_code_reset');
+        await transport.reset();
       } catch {}
       running = false;
-      model.clear();
-      nodes.clear();
-      list.replaceChildren();
-      setPhase(getVault() ? 'idle' : 'no-vault');
+      clearView();
+      setPhase(blocked() ? blocked() : 'idle');
+    },
+    // Vuelve a abrir el proceso (Reiniciar espacio de Workspace): se retoma la sesión.
+    async restart() {
+      running = false;
+      setPhase('starting');
+      return start();
+    },
+    // Cuando cambia algo de fuera que se ve en la conversación (los agentes de los procesos).
+    refresh(ids) {
+      for (const id of ids ?? []) model.touchTool?.(id);
+      queueRender();
+    },
+    setBusy(busy) {
+      model.state.busy = Boolean(busy);
+      queueRender();
     },
     focus: () => input.focus(),
     // Para la API de nexo: la pregunta del usuario y una respuesta que se va llenando, en la
@@ -1038,8 +1191,8 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
       stick = true;
       queueRender();
     },
-    reply(speaker) {
-      const reply = model.localReply(speaker);
+    reply(who) {
+      const reply = model.localReply(who);
       queueRender();
       return {
         push(text) {
@@ -1049,21 +1202,33 @@ export function createChat({ invoke, Channel, desktop, getVault, pickFiles, onLi
         end() {
           const text = reply.end();
           queueRender();
-          if (text) announce(`${speaker} terminó. ${plain(text).slice(0, 280)}`);
+          if (text) announce(`${who} terminó. ${plain(text).slice(0, 280)}`);
           return text;
         },
       };
     },
     // La carta vuelve a verse (se restauró o se cerró la actividad): al final y con el foco.
-    show() {
+    show({ focus = true } = {}) {
+      stick = true;
       queueRender();
-      input.focus();
+      if (focus) input.focus();
     },
+    dispose() {
+      resizer.disconnect();
+      document.removeEventListener('pointerdown', outside);
+      for (const [, pending] of waiting) clearTimeout(pending.timer);
+      waiting.clear();
+      cancelAnimationFrame(frame);
+    },
+    model,
     get running() {
       return running;
     },
     get busy() {
       return model.state.busy;
+    },
+    get waiting() {
+      return model.pending().length > 0;
     },
     get hasConversation() {
       return model.state.items.some((i) => i.kind === 'user');
