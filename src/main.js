@@ -926,16 +926,23 @@ function renderConnections(list) {
   connButton.title = list.map((c) => `${c.name}: ${STATE_LABEL[c.state] ?? '…'}`).join(' · ');
 }
 
-// Gráficos: cómo pinta WebKit. Por ahora siempre por CPU (render.rs): por GPU, el driver de
-// NVIDIA hacía caer la interfaz.
+// Gráficos: cómo pinta WebKit (render.rs). De serie la GPU compone y la CPU dibuja; si WebKit se
+// cae, nexo baja solo a sin WebGL y, como último recurso, a solo CPU.
+const RENDER_MODE = {
+  hibrido: ['ok', 'GPU + CPU', 'La GPU compone la página y el WebGL de la galaxia; la CPU la dibuja, porque dibujar por GPU hacía caer el driver de NVIDIA.'],
+  'sin-webgl': ['ok', 'GPU + CPU', 'La GPU compone la página y la CPU la dibuja, sin WebGL: la galaxia usa su versión 2D.'],
+  cpu: ['warn', 'CPU', 'nexo pinta solo por CPU. Volverá a probar la GPU cuando se actualice WebKit o el driver.'],
+  'forzado-gpu': ['ok', 'GPU', 'Pintado por GPU, fijado al arrancar con una variable de entorno.'],
+  'forzado-cpu': ['warn', 'CPU', 'Pintado por CPU, fijado al arrancar con una variable de entorno.'],
+};
 async function refreshRender() {
   try {
     const info = await invoke('render_info');
-    $('render-dot').dataset.state = 'ok';
-    $('render-state').textContent = info.gpu ? 'GPU' : 'CPU';
-    $('render-detail').textContent = info.gpu
-      ? `WebKit pinta con la tarjeta gráfica${info.hz ? `, a ${info.hz} Hz como tu monitor` : ''} (forzado al arrancar).`
-      : 'nexo pinta por CPU: por GPU, el driver de NVIDIA hacía caer la interfaz.';
+    const [dot, state, detail] = RENDER_MODE[info.modo] ?? RENDER_MODE.hibrido;
+    $('render-dot').dataset.state = dot;
+    $('render-state').textContent = state;
+    const rate = info.hz && info.modo !== 'cpu' && info.modo !== 'forzado-cpu' ? ` A ${info.hz} Hz, como tu monitor.` : '';
+    $('render-detail').textContent = [info.motivo, `${detail}${rate}`].filter(Boolean).join(' ');
   } catch (error) {
     $('render-state').textContent = 'Error';
     $('render-detail').textContent = String(error);

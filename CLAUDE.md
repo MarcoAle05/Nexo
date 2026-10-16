@@ -47,7 +47,7 @@ Si `cargo` no está en el PATH de la sesión: `source ~/.cargo/env`.
 | `api-nexo.md` | Messages API, el asistente Nexo (`compile`, `ask`), Conexiones | `claude.rs`, `nexo.rs`, `connections.rs` |
 | `claude-code.md` | El chat con Claude Code: proceso, protocolo, vista, sesiones y recargas | `claude_code.rs`, `chat-model.js`, `chat.js` y sus pruebas |
 | `uso-y-registro.md` | Límites de uso y registro de agentes | `usage.rs`, `registro.rs`, `registro.js` |
-| `render.md` | Cómo pinta WebKitGTK (por CPU de momento, recarga si cae, `drmWaitVBlank`) | `render.rs`, `main.rs`, `build.rs` |
+| `render.md` | Cómo pinta WebKitGTK (GPU y CPU de serie, escalera de seguridad si cae, composición entera, `drmWaitVBlank`) | `render.rs`, `main.rs`, `build.rs` |
 | `rendimiento.md` | Rendimiento de lo que se pinta en WebKitGTK | `styles.css`, `galaxy.js`, `graph.js`, `notes.js`, `render.rs` |
 | `skills-y-agentes.md` | Skills y agentes del vault, su órbita y la carta Agentes | `skills.rs`, `agents.rs`, `skills.js`, `agents.js` |
 | `workspace.md` | Workspaces de la vista Agentes: carpetas de proyecto, su orquestador, el registro de sus agentes, los extras, las pestañas y las ventanas | `workspace.rs`, `workspace_run.rs`, `workspace.js`, `ws-*.js` y sus pruebas |
