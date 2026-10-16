@@ -580,7 +580,7 @@ function sourceRow(source, index) {
 
 function renderSources() {
   $('source-count').textContent = String(sources.length);
-  document.querySelectorAll('[data-count]').forEach((el) => {
+  document.querySelectorAll('.chips [data-count]').forEach((el) => {
     const kind = el.dataset.count;
     el.textContent = String(kind === 'all' ? sources.length : sources.filter((s) => s.kind === kind).length);
   });

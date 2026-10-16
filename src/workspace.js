@@ -962,7 +962,6 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
       const layout = tileLayout(open.length, rect.width || 800, rect.height || 600);
       winBox.style.gridTemplateColumns = `repeat(${Math.max(1, layout.cols)}, minmax(0, 1fr))`;
       winBox.style.gridTemplateRows = `repeat(${Math.max(1, layout.rows)}, minmax(0, 1fr))`;
-      winBox.dataset.count = String(open.length);
       open.forEach((key, i) => {
         const win = wins.get(key);
         const cell = layout.cells[i];
