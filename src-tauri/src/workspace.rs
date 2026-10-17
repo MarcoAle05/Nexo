@@ -191,7 +191,7 @@ fn prepare(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn remember(app: &AppHandle, root: &Path) -> Result<WsInfo, String> {
+pub(crate) fn remember(app: &AppHandle, root: &Path) -> Result<WsInfo, String> {
     let mut list = read_list(app);
     list.recent.retain(|r| r.path != root);
     let recent = Recent {
@@ -293,6 +293,9 @@ pub struct Extras {
     pub connectors: Vec<String>,
     #[serde(default)]
     pub skills: Vec<String>,
+    /// Ids de `Catalog::hooks`.
+    #[serde(default)]
+    pub hooks: Vec<String>,
 }
 
 #[derive(Default, Serialize, Deserialize, Clone)]
@@ -814,6 +817,9 @@ pub struct PluginItem {
     pub servers: usize,
     /// Viene sincronizado desde claude.ai.
     pub synced: bool,
+    /// Trae hooks: encendido, los del perfil del usuario también se ejecutan (ver
+    /// `extras_settings`).
+    pub hooks: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -834,12 +840,29 @@ pub struct SkillItem {
     pub source: String,
 }
 
+/// Hooks que se pueden encender en un workspace. Claude Code no sabe apagar unos y dejar
+/// otros: con cualquiera encendido, los del perfil y los de la carpeta también se ejecutan.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct HookItem {
+    /// `rtk` (lo añade nexo), `perfil` (`~/.claude/settings.json`) o `carpeta` (su `.claude/`).
+    pub id: String,
+    pub name: String,
+    pub detail: String,
+    /// Lo añade nexo a la sesión (no está en ningún archivo de ajustes): solo corre si se
+    /// enciende, no arrastrado por otro.
+    pub added: bool,
+    /// Lo que nexo añade a los ajustes de la sesión (`{evento: [grupos]}`).
+    #[serde(skip)]
+    pub settings: Value,
+}
+
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 pub struct Catalog {
     pub plugins: Vec<PluginItem>,
     pub mcp: Vec<ServerItem>,
     pub connectors: Vec<ServerItem>,
     pub skills: Vec<SkillItem>,
+    pub hooks: Vec<HookItem>,
     /// Si Claude Code no contestó, por qué (el catálogo sale entonces de los archivos).
     pub error: Option<String>,
 }
@@ -901,6 +924,212 @@ fn known_plugins(home: &Path, root: &Path) -> HashMap<String, (String, String, b
         }
     }
     out
+}
+
+fn has_hooks(dir: &Path) -> bool {
+    dir.join("hooks/hooks.json").is_file()
+        || fs::read_to_string(dir.join(".claude-plugin/plugin.json"))
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .is_some_and(|v| !v["hooks"].is_null())
+}
+
+/// Ids de los plugins instalados o sincronizados que traen hooks.
+fn plugins_with_hooks(home: &Path) -> HashSet<String> {
+    let mut out = HashSet::new();
+    if let Some(installed) = fs::read_to_string(home.join(".claude/plugins/installed_plugins.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    {
+        for (id, installs) in installed["plugins"].as_object().into_iter().flatten() {
+            let hooked = installs.as_array().into_iter().flatten().any(|i| {
+                i["installPath"]
+                    .as_str()
+                    .is_some_and(|p| has_hooks(Path::new(p)))
+            });
+            if hooked {
+                out.insert(id.clone());
+            }
+        }
+    }
+    // Los sincronizados viven en `<cubo>/<nombre>~g<generación>`.
+    for bucket in fs::read_dir(home.join(".claude/plugins/synced"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        for entry in fs::read_dir(bucket.path()).into_iter().flatten().flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if let Some((plugin, _)) = name.split_once('~')
+                && entry.path().is_dir()
+                && has_hooks(&entry.path())
+            {
+                out.insert(format!("{plugin}@synced"));
+            }
+        }
+    }
+    out
+}
+
+/// Un programa en el `PATH` o donde se suelen instalar las herramientas del usuario (nexo se
+/// abre desde el escritorio, con un `PATH` corto).
+pub(crate) fn find_program(name: &str, home: &Path) -> Option<PathBuf> {
+    let from_path = std::env::var_os("PATH")
+        .map(|paths| {
+            std::env::split_paths(&paths)
+                .map(|p| p.join(name))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    from_path
+        .into_iter()
+        .chain([
+            home.join(".local/bin").join(name),
+            home.join(".cargo/bin").join(name),
+        ])
+        .find(|p| p.is_file())
+}
+
+/// Qué es un hook, sin enseñar su orden (puede llevar claves): el programa que se reconoce.
+fn hook_label(command: &str) -> String {
+    if command.contains(".orca/") {
+        return "orca".into();
+    }
+    if command.contains("rtk hook") || command.contains("rtk-rewrite") {
+        return "rtk".into();
+    }
+    let first = command
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .trim_matches(['"', '\'']);
+    let shell = ["if", "case", "for", "while", "[", "[[", "{", "("];
+    if first.is_empty() || shell.contains(&first) || first.contains('=') {
+        return "un script".into();
+    }
+    Path::new(first)
+        .file_name()
+        .map_or_else(|| first.to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Los hooks de un archivo de ajustes: qué programas son y en qué eventos están.
+fn hooks_in(settings: &Value) -> Option<(Vec<String>, HashSet<String>)> {
+    let mut labels: Vec<String> = Vec::new();
+    let mut events = HashSet::new();
+    for (event, groups) in settings["hooks"].as_object()? {
+        let hooks: Vec<&Value> = groups
+            .as_array()
+            .into_iter()
+            .flatten()
+            .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
+            .collect();
+        if hooks.is_empty() {
+            continue;
+        }
+        events.insert(event.clone());
+        for hook in hooks {
+            let label = match hook["command"].as_str() {
+                Some(command) => hook_label(command),
+                None => hook["type"].as_str().unwrap_or("hook").to_string(),
+            };
+            if !labels.contains(&label) {
+                labels.push(label);
+            }
+        }
+    }
+    (!events.is_empty()).then_some((labels, events))
+}
+
+/// Los hooks que se pueden encender en un workspace: rtk si está instalado (y no viene ya en
+/// el perfil), los del perfil y los de la carpeta.
+pub(crate) fn hook_items(home: &Path, root: &Path, rtk: Option<PathBuf>) -> Vec<HookItem> {
+    let read = |p: PathBuf| {
+        fs::read_to_string(p)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .unwrap_or(Value::Null)
+    };
+    let summary = |(labels, events): (Vec<String>, HashSet<String>)| {
+        let n = events.len();
+        format!(
+            "{} · {n} {}",
+            labels.join(", "),
+            if n == 1 { "evento" } else { "eventos" }
+        )
+    };
+    let profile = hooks_in(&read(home.join(".claude/settings.json")));
+    // La carpeta puede ser el propio home: entonces sus ajustes son los del perfil.
+    let mut folder: Option<(Vec<String>, HashSet<String>)> = None;
+    if root != home {
+        for file in ["settings.json", "settings.local.json"] {
+            if let Some((labels, events)) = hooks_in(&read(root.join(".claude").join(file))) {
+                let (all, seen) = folder.get_or_insert_with(Default::default);
+                for label in labels {
+                    if !all.contains(&label) {
+                        all.push(label);
+                    }
+                }
+                seen.extend(events);
+            }
+        }
+    }
+    let mut items = Vec::new();
+    let rtk_in_profile = profile
+        .as_ref()
+        .is_some_and(|(labels, _)| labels.iter().any(|l| l == "rtk"));
+    if let Some(rtk) = rtk.filter(|_| !rtk_in_profile) {
+        // El mismo hook que instala `rtk init -g`, con la ruta entera (el PATH de nexo es corto).
+        let path = rtk.to_string_lossy().replace('\'', r"'\''");
+        items.push(HookItem {
+            id: "rtk".into(),
+            name: "rtk".into(),
+            detail: "Pasa los comandos de Bash por rtk para gastar menos tokens · lo añade nexo, no tu perfil".into(),
+            added: true,
+            settings: json!({ "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{ "type": "command", "command": format!("'{path}' hook claude") }]
+            }] }),
+        });
+    }
+    if let Some(found) = profile {
+        items.push(HookItem {
+            id: "perfil".into(),
+            name: "Los de tu perfil".into(),
+            detail: summary(found),
+            added: false,
+            settings: Value::Null,
+        });
+    }
+    if let Some(found) = folder {
+        items.push(HookItem {
+            id: "carpeta".into(),
+            name: "Los de esta carpeta".into(),
+            detail: summary(found),
+            added: false,
+            settings: Value::Null,
+        });
+    }
+    items
+}
+
+/// Si algún hook va a correr: uno encendido o un plugin encendido que trae los suyos.
+fn hooks_on(catalog: &Catalog, on: &Extras) -> bool {
+    catalog
+        .plugins
+        .iter()
+        .any(|p| p.hooks && on.plugins.contains(&p.id))
+        || catalog.hooks.iter().any(|h| on.hooks.contains(&h.id))
+}
+
+/// Los hooks que de verdad corren: los encendidos y, si corre alguno, todos los de los
+/// archivos de ajustes (Claude Code no los separa).
+pub(crate) fn hooks_running<'a>(catalog: &'a Catalog, on: &Extras) -> Vec<&'a HookItem> {
+    let any = hooks_on(catalog, on);
+    catalog
+        .hooks
+        .iter()
+        .filter(|h| on.hooks.contains(&h.id) || (any && !h.added))
+        .collect()
 }
 
 /// Plugins que el usuario tiene encendidos en `~/.claude/settings.json`.
@@ -1052,6 +1281,7 @@ pub(crate) fn build_catalog(
             skills: plugin_skills.get(&name).copied().unwrap_or(0),
             servers: plugin_servers.get(&name).copied().unwrap_or(0),
             synced: *synced,
+            hooks: false,
         });
     }
     catalog.skills.sort_by_key(|a| a.name.to_lowercase());
@@ -1090,6 +1320,31 @@ pub(crate) fn extras_settings(catalog: &Catalog, on: &Extras) -> Value {
     // encendida, se apagan todas.
     if catalog.error.is_some() && on.connectors.is_empty() {
         settings["disableClaudeAiConnectors"] = Value::Bool(true);
+    }
+    // Los hooks tampoco son de serie. Claude Code solo sabe apagarlos todos a la vez: con uno
+    // encendido (o un plugin encendido que trae los suyos) corren también los de los archivos
+    // de ajustes. Los que añade nexo van en los ajustes de la sesión, solo si se encienden.
+    if !hooks_on(catalog, on) {
+        settings["disableAllHooks"] = Value::Bool(true);
+    }
+    let mut added = Map::new();
+    for hook in catalog
+        .hooks
+        .iter()
+        .filter(|h| h.added && on.hooks.contains(&h.id))
+    {
+        for (event, groups) in hook.settings.as_object().into_iter().flatten() {
+            if let Some(list) = added
+                .entry(event.clone())
+                .or_insert_with(|| Value::Array(Vec::new()))
+                .as_array_mut()
+            {
+                list.extend(groups.as_array().into_iter().flatten().cloned());
+            }
+        }
+    }
+    if !added.is_empty() {
+        settings["hooks"] = Value::Object(added);
     }
     settings
 }
@@ -1183,10 +1438,12 @@ pub(crate) fn fallback_catalog(home: &Path, root: &Path, why: String) -> Catalog
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
     };
     let enabled = enabled_plugins(home);
+    let hooked = plugins_with_hooks(home);
     let plugins = known_plugins(home, root)
         .into_iter()
         .filter(|(_, (id, _, synced))| *synced || enabled.contains(id))
         .map(|(name, (id, description, synced))| PluginItem {
+            hooks: hooked.contains(&id),
             id,
             name,
             description,
@@ -1249,6 +1506,7 @@ pub(crate) fn fallback_catalog(home: &Path, root: &Path, why: String) -> Catalog
         mcp,
         connectors,
         skills,
+        hooks: hook_items(home, root, find_program("rtk", home)),
         error: Some(why),
     }
 }
@@ -1264,7 +1522,7 @@ pub(crate) fn catalog_for(app: &AppHandle, root: &Path, force: bool) -> Result<C
     }
     let claude = crate::claude_code::find_claude(app).ok_or("No encontré Claude Code.")?;
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    let catalog = match probe_catalog(&claude, root) {
+    let mut catalog = match probe_catalog(&claude, root) {
         Ok((init, mcp, context)) => build_catalog(
             &init,
             &mcp,
@@ -1275,12 +1533,29 @@ pub(crate) fn catalog_for(app: &AppHandle, root: &Path, force: bool) -> Result<C
         // Sin respuesta, lo de los archivos (sin guardarlo: la próxima vez se vuelve a probar).
         Err(e) => return Ok(fallback_catalog(&home, root, e)),
     };
+    let hooked = plugins_with_hooks(&home);
+    for plugin in &mut catalog.plugins {
+        plugin.hooks = hooked.contains(&plugin.id);
+    }
+    catalog.hooks = hook_items(&home, root, find_program("rtk", &home));
     state
         .cache
         .lock()
         .map_err(|e| e.to_string())?
         .insert(root.to_path_buf(), (Instant::now(), catalog.clone()));
     Ok(catalog)
+}
+
+/// El catálogo con el que se arranca o se mide un orquestador. Si no se puede sondear, el de
+/// los archivos; si ni eso, uno vacío que al menos apaga las conexiones.
+pub(crate) fn catalog_or_fallback(app: &AppHandle, root: &Path, force: bool) -> Catalog {
+    catalog_for(app, root, force).unwrap_or_else(|e| match app.path().home_dir() {
+        Ok(home) => fallback_catalog(&home, root, e),
+        Err(_) => Catalog {
+            error: Some(e),
+            ..Catalog::default()
+        },
+    })
 }
 
 #[tauri::command]
@@ -1534,6 +1809,7 @@ mod tests {
             mcp: vec!["nexo".into()],
             connectors: vec![],
             skills: vec!["pdf".into()],
+            hooks: vec![],
         };
         let settings = extras_settings(&catalog, &on);
         assert_eq!(settings["enabledPlugins"]["data@synced"], true);
@@ -1545,6 +1821,177 @@ mod tests {
         assert_eq!(settings["skillOverrides"], json!({ "computer-use": "off" }));
         let none = extras_settings(&catalog, &Extras::default());
         assert_eq!(none["deniedMcpServers"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn los_hooks_del_perfil_van_apagados_salvo_con_un_plugin_que_los_trae() {
+        let home = temp("hooks");
+        let with = home.join("cache/ganchos");
+        fs::create_dir_all(with.join("hooks")).unwrap();
+        fs::write(with.join("hooks/hooks.json"), "{}").unwrap();
+        let without = home.join("cache/limpio");
+        fs::create_dir_all(without.join(".claude-plugin")).unwrap();
+        fs::write(
+            without.join(".claude-plugin/plugin.json"),
+            r#"{"name":"limpio"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(home.join(".claude/plugins")).unwrap();
+        fs::write(
+            home.join(".claude/plugins/installed_plugins.json"),
+            json!({ "plugins": {
+                "ganchos@tienda": [{ "scope": "user", "installPath": with }],
+                "limpio@tienda": [{ "scope": "user", "installPath": without }]
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let synced = home.join(".claude/plugins/synced/org_1/datos~g2/.claude-plugin");
+        fs::create_dir_all(&synced).unwrap();
+        fs::write(synced.join("plugin.json"), r#"{"hooks":"./hooks.json"}"#).unwrap();
+        let hooked = plugins_with_hooks(&home);
+        let mut ids: Vec<&str> = hooked.iter().map(String::as_str).collect();
+        ids.sort();
+        assert_eq!(ids, ["datos@synced", "ganchos@tienda"]);
+
+        let plugin = |id: &str, hooks| PluginItem {
+            id: id.into(),
+            name: id.split('@').next().unwrap().into(),
+            description: String::new(),
+            skills: 1,
+            servers: 0,
+            synced: false,
+            hooks,
+        };
+        let catalog = Catalog {
+            plugins: vec![
+                plugin("ganchos@tienda", true),
+                plugin("limpio@tienda", false),
+            ],
+            ..Catalog::default()
+        };
+        let none = extras_settings(&catalog, &Extras::default());
+        assert_eq!(none["disableAllHooks"], true, "de serie, sin hooks");
+        let clean = Extras {
+            plugins: vec!["limpio@tienda".into()],
+            ..Extras::default()
+        };
+        assert_eq!(extras_settings(&catalog, &clean)["disableAllHooks"], true);
+        let hooks = Extras {
+            plugins: vec!["ganchos@tienda".into()],
+            ..Extras::default()
+        };
+        assert!(
+            extras_settings(&catalog, &hooks)["disableAllHooks"].is_null(),
+            "un plugin encendido con hooks los necesita"
+        );
+    }
+
+    #[test]
+    fn los_hooks_se_encienden_desde_extras_y_rtk_lo_anade_nexo() {
+        let home = temp("hooks-perfil");
+        let root = temp("hooks-carpeta");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let orca = "if [ -z \"${HOME-}\" ]; then printf '{}'; else /bin/sh \"$HOME/.orca/agent-hooks/claude-hook.sh\"; fi";
+        let group = |command: &str| json!([{ "matcher": "*", "hooks": [{ "type": "command", "command": command }] }]);
+        fs::write(
+            home.join(".claude/settings.json"),
+            json!({ "hooks": { "SessionStart": group(orca), "PreToolUse": group(orca), "Stop": [] } }).to_string(),
+        )
+        .unwrap();
+        fs::create_dir_all(root.join(".claude")).unwrap();
+        fs::write(
+            root.join(".claude/settings.json"),
+            json!({ "hooks": { "PostToolUse": group("TOKEN=secreto ./scripts/formatear.sh") } })
+                .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            root.join(".claude/settings.local.json"),
+            json!({ "hooks": { "PostToolUse": group("/usr/bin/prettier --write"), "Stop": group("npm test") } }).to_string(),
+        )
+        .unwrap();
+        let items = hook_items(
+            &home,
+            &root,
+            Some(PathBuf::from("/home/ana/.local/bin/rtk")),
+        );
+        let ids: Vec<&str> = items.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(ids, ["rtk", "perfil", "carpeta"]);
+        assert!(items[0].added);
+        assert_eq!(
+            items[0].settings["PreToolUse"][0]["hooks"][0]["command"],
+            "'/home/ana/.local/bin/rtk' hook claude"
+        );
+        assert_eq!(items[0].settings["PreToolUse"][0]["matcher"], "Bash");
+        assert_eq!(
+            items[1].detail, "orca · 2 eventos",
+            "sin contar los eventos vacíos"
+        );
+        assert_eq!(items[2].detail, "un script, prettier, npm · 2 eventos");
+        assert!(
+            !serde_json::to_string(&items).unwrap().contains("secreto"),
+            "las órdenes no salen"
+        );
+
+        let catalog = Catalog {
+            hooks: items,
+            ..Catalog::default()
+        };
+        let none = extras_settings(&catalog, &Extras::default());
+        assert_eq!(none["disableAllHooks"], true, "de serie, ninguno");
+        assert!(none["hooks"].is_null());
+        assert!(hooks_running(&catalog, &Extras::default()).is_empty());
+
+        let rtk = Extras {
+            hooks: vec!["rtk".into()],
+            ..Extras::default()
+        };
+        let settings = extras_settings(&catalog, &rtk);
+        assert!(settings["disableAllHooks"].is_null());
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "'/home/ana/.local/bin/rtk' hook claude"
+        );
+        // Con uno encendido corren también los de los archivos: Claude Code no los separa.
+        let running: Vec<&str> = hooks_running(&catalog, &rtk)
+            .iter()
+            .map(|h| h.id.as_str())
+            .collect();
+        assert_eq!(running, ["rtk", "perfil", "carpeta"]);
+
+        let profile = Extras {
+            hooks: vec!["perfil".into()],
+            ..Extras::default()
+        };
+        let settings = extras_settings(&catalog, &profile);
+        assert!(settings["disableAllHooks"].is_null());
+        assert!(
+            settings["hooks"].is_null(),
+            "rtk no se añade si no se enciende"
+        );
+        let running: Vec<&str> = hooks_running(&catalog, &profile)
+            .iter()
+            .map(|h| h.id.as_str())
+            .collect();
+        assert_eq!(running, ["perfil", "carpeta"]);
+
+        // Si el perfil ya trae el hook de rtk, no se ofrece aparte.
+        fs::write(
+            home.join(".claude/settings.json"),
+            json!({ "hooks": { "PreToolUse": group("rtk hook claude") } }).to_string(),
+        )
+        .unwrap();
+        let ids: Vec<String> = hook_items(&home, &root, Some(PathBuf::from("/x/rtk")))
+            .into_iter()
+            .map(|h| h.id)
+            .collect();
+        assert_eq!(ids, ["perfil", "carpeta"]);
+        assert!(
+            hook_items(&home, &home, None)
+                .iter()
+                .all(|h| h.id != "carpeta")
+        );
     }
 
     #[test]

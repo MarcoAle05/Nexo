@@ -921,11 +921,14 @@ pub async fn agent_log(app: AppHandle, force: bool) -> Result<AgentLog, String> 
 
 /// Pide a Claude Code el desglose del contexto (`get_context_usage`) sin hablar con el
 /// modelo: lo responde con la transcripción y estimaciones locales.
-fn probe(claude: &Path, cwd: &Path, args: &[String]) -> Result<Value, String> {
+fn probe(claude: &Path, cwd: &Path, args: &[String], mut settings: Value) -> Result<Value, String> {
     let mut command = Command::new(claude);
     for key in crate::claude_code::INHERITED_ENV {
         command.env_remove(key);
     }
+    // Sin servidores MCP (sus herramientas van diferidas y no ocupan contexto) ni hooks del
+    // usuario: el sondeo no debe hacer nada más.
+    settings["disableAllHooks"] = Value::Bool(true);
     let mut child = command
         .args([
             "-p",
@@ -935,11 +938,9 @@ fn probe(claude: &Path, cwd: &Path, args: &[String]) -> Result<Value, String> {
             "stream-json",
             "--verbose",
             "--no-session-persistence",
-            // Sin servidores MCP (sus herramientas van diferidas y no ocupan contexto) ni
-            // hooks del usuario: el sondeo no debe hacer nada más.
             "--strict-mcp-config",
             "--settings",
-            r#"{"disableAllHooks":true}"#,
+            &settings.to_string(),
         ])
         .args(args)
         .current_dir(cwd)
@@ -1126,16 +1127,31 @@ pub async fn agent_context(
             "--fork-session".into(),
         ];
         // Las sesiones de nexo llevan el prompt del orquestador: cuenta en el contexto.
-        if workspace {
-            args.push("--append-system-prompt".into());
-            args.push(crate::workspace_run::orchestrator_prompt(&cwd));
-        } else if let Some(title) = transcript.title.filter(|t| t.starts_with("Nexo")) {
+        if !workspace && let Some(title) = transcript.title.filter(|t| t.starts_with("Nexo")) {
             args.push("--append-system-prompt".into());
             args.push(crate::claude_code::orchestrator_prompt(&root, &title));
         }
-        let mut value = tauri::async_runtime::spawn_blocking(move || probe(&claude, &cwd, &args))
-            .await
-            .map_err(|e| e.to_string())??;
+        let app = app.clone();
+        let mut value = tauri::async_runtime::spawn_blocking(move || {
+            // El de un workspace, con lo mismo que lleva al arrancar: su papel, el plugin de
+            // nexo y solo los extras encendidos (si no, saldría todo lo instalado).
+            let settings = if workspace {
+                let (prompt, settings, plugin) =
+                    crate::workspace_run::launch_setup(&app, &cwd, false)?;
+                args.extend([
+                    "--append-system-prompt".into(),
+                    prompt,
+                    "--plugin-dir".into(),
+                    plugin.to_string_lossy().into_owned(),
+                ]);
+                settings
+            } else {
+                json!({})
+            };
+            probe(&claude, &cwd, &args, settings)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
         if let Some(obj) = value.as_object_mut() {
             obj.insert("kind".into(), "main".into());
             obj.insert("exact".into(), true.into());
@@ -1145,11 +1161,11 @@ pub async fn agent_context(
         if !safe_id(session) || !safe_id(agent) {
             return Err("Agente no válido.".into());
         }
-        let (dir, cwd) = places
+        let (dir, cwd, workspace) = places
             .iter()
             .find(|(dir, ..)| dir.join(session).join("subagents").is_dir())
-            .map(|(dir, cwd, _)| (dir.clone(), cwd.clone()))
-            .unwrap_or((vault_dir.clone(), root.clone()));
+            .cloned()
+            .unwrap_or((vault_dir.clone(), root.clone(), false));
         let subagents = dir.join(session).join("subagents");
         let mut file = subagents.join(format!("agent-{agent}.jsonl"));
         if !file.is_file() {
@@ -1173,11 +1189,23 @@ pub async fn agent_context(
         let (agent_type, _) = read_meta(&file);
         let probed = match agent_type {
             Some(t) if !t.starts_with('-') => {
-                let args = vec!["--agent".to_string(), t];
-                tauri::async_runtime::spawn_blocking(move || probe(&claude, &cwd, &args))
-                    .await
-                    .ok()
-                    .and_then(Result::ok)
+                let mut args = vec!["--agent".to_string(), t];
+                let app = app.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    // Los agentes de un workspace cargan lo mismo que su orquestador.
+                    let settings = if workspace {
+                        let (_, settings, plugin) =
+                            crate::workspace_run::launch_setup(&app, &cwd, false)?;
+                        args.extend(["--plugin-dir".into(), plugin.to_string_lossy().into_owned()]);
+                        settings
+                    } else {
+                        json!({})
+                    };
+                    probe(&claude, &cwd, &args, settings)
+                })
+                .await
+                .ok()
+                .and_then(Result::ok)
             }
             _ => None,
         };

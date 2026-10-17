@@ -19,6 +19,7 @@ mod usage;
 mod vault;
 mod workspace;
 mod workspace_run;
+mod worktree;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -100,7 +101,12 @@ pub fn run() {
             workspace_run::workspace_stop,
             workspace_run::workspace_reset,
             workspace_run::workspace_detach,
-            workspace_run::workspace_running
+            workspace_run::workspace_running,
+            worktree::worktree_list,
+            worktree::worktree_form,
+            worktree::worktree_plan,
+            worktree::worktree_create,
+            worktree::worktree_setup
         ])
         .setup(|app| {
             render::attach(app);
