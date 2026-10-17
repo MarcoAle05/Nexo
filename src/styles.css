@@ -3583,10 +3583,59 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .ws-core { gap: 12px; padding: 24px 22px 0; }
 .ws-core > * { flex-shrink: 0; }
 .ws-core .panel-title { gap: 6px; }
-.ws-title { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* El nombre y, al lado, el «+» de un worktree nuevo. Con más de un worktree en el repo el
+   nombre es un botón con su flecha, que abre la lista; si no, se ve como un título. */
+.ws-title-row { position: relative; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ws-title { min-width: 0; }
+.ws-title-btn { display: flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; padding: 0; border-radius: var(--r-sm); font: inherit; letter-spacing: inherit; color: inherit; text-align: start; }
+.ws-title-btn:disabled { opacity: 1; }
+.ws-title-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ws-title-chevron { display: none; flex-shrink: 0; color: var(--dim); transition: rotate 300ms var(--ease), color 150ms ease-out; }
+.ws-title-btn.has-menu .ws-title-chevron { display: flex; }
+.ws-title-btn[aria-expanded="true"] .ws-title-chevron { rotate: 180deg; color: var(--fg); }
+@media (hover: hover) {
+  .ws-title-btn.has-menu:hover .ws-title-chevron { color: var(--fg); }
+}
+.icon-btn.ws-wt-add { width: 36px; height: 36px; border-radius: var(--r-sm); color: var(--fg); transition-property: transform, background-color, border-color; }
+.icon-btn.ws-wt-add[hidden] { display: none; }
+/* El «+» gira como el de «Añadir fuente» (mismo tiempo y curva). */
+.ws-wt-add-icon { display: flex; }
+@media (prefers-reduced-motion: no-preference) {
+  .ws-wt-add-icon { transition: transform 400ms var(--ease); }
+}
+@media (hover: hover) {
+  .icon-btn.ws-wt-add:hover { background: rgba(var(--ink-rgb), 0.08); border-color: var(--line-strong); }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .icon-btn.ws-wt-add:hover .ws-wt-add-icon { transform: rotate(90deg) scale(1.05); }
+}
+.vault-menu.ws-wt-menu { top: calc(100% + 8px); width: min(340px, 100%); min-width: 0; max-height: min(420px, 60dvh); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.ws-wt-name { display: flex; align-items: center; gap: 8px; max-width: 100%; min-width: 0; font-size: 13.5px; font-weight: 500; }
+.ws-wt-name-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.vault-option.ws-wt-item:disabled small { font-family: var(--sans); }
 .ws-path:empty { display: none; }
-.ws-back { margin: -4px 0 0 -2px; }
-.ws-sections[hidden], .ws-none[hidden], .ws-foot[hidden] { display: none; }
+/* Volver a los agentes de nexo: la única acción rellena de la cabecera, sin texto. La flecha
+   se mueve al pasar el ratón como el «+» de «Añadir fuente» (mismo tiempo y curva). */
+.ws-head { align-items: center; }
+.ws-head .eyebrow { align-self: center; margin-right: auto; white-space: nowrap; }
+/* En una carta estrecha, la etiqueta deja sitio a los botones (la carta ya dice qué es con su
+   título). */
+.ws-core { container: ws-card / inline-size; }
+@container ws-card (max-width: 330px) {
+  .ws-head .eyebrow { display: none; }
+  .ws-head .head-actions { margin-left: auto; }
+}
+.ws-heading { margin-top: -2px; padding: 0 4px; }
+.ws-back-icon { display: flex; }
+@media (prefers-reduced-motion: no-preference) {
+  .ws-back-icon { transition: transform 400ms var(--ease); }
+}
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .ws-back:hover .ws-back-icon { transform: translateX(-3px) scale(1.08); }
+}
+.ws-sections[hidden], .ws-sec-tabs[hidden], .ws-none[hidden], .ws-foot[hidden] { display: none; }
+/* Archivos, agentes y extras: una pestaña cada uno en la línea de debajo del título; la que se
+   ve ocupa todo el alto de la carta. */
 .ws-sections {
   flex: 1 1 auto;
   min-height: 0;
@@ -3595,64 +3644,26 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
   margin: 0 -22px;
   border-top: 1px solid var(--seam);
 }
-.ws-sec { display: flex; flex-direction: column; min-height: 0; border-bottom: 1px solid var(--seam); }
-.ws-sec:last-child { border-bottom: 0; }
-.ws-sec-files { flex: 1 1 0; min-height: 120px; }
-.ws-sec-agents { flex: 0 1 auto; max-height: 30%; }
-.ws-sec-extras { flex: 0 1 auto; max-height: 28%; }
-/* Plegado el explorador, lo demás se reparte el sitio. */
-.ws-sections:has(.ws-sec-files.is-folded) .ws-sec:not(.is-folded) { flex: 1 1 0; max-height: none; }
-.ws-sec.is-folded { flex: 0 0 auto; min-height: 0; }
-.ws-sec.is-folded .ws-sec-body { display: none; }
-/* Expandida (o en una ventana muy ancha), la carta pone sus tres secciones lado a lado. */
-.ws-core { container: ws-card / inline-size; }
-@container ws-card (min-width: 760px) {
-  .ws-sections { flex-direction: row; }
-  .ws-sections > .ws-sec { flex: 1 1 0; min-width: 0; max-height: none; border-bottom: 0; border-right: 1px solid var(--seam); }
-  .ws-sections > .ws-sec:last-child { border-right: 0; }
-  .ws-sections > .ws-sec-files { flex-grow: 1.4; }
-  .ws-sections > .ws-sec.is-folded { flex: 0 0 auto; }
-}
-.ws-sec-head { flex-shrink: 0; display: flex; align-items: center; gap: 2px; min-height: 44px; padding: 0 12px 0 14px; }
-.ws-sec-toggle {
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  height: 36px;
-  padding: 0 8px 0 6px;
-  border-radius: var(--r-sm);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: var(--dim);
-  text-align: start;
-  transition: color 150ms ease-out, background-color 150ms ease-out;
-}
-@media (hover: hover) {
-  .ws-sec-toggle:hover { color: var(--fg); background: rgba(var(--ink-rgb), 0.04); }
-}
-.ws-sec-chevron { display: flex; color: var(--faint); transition: rotate 200ms var(--ease); }
-.ws-sec-toggle[aria-expanded="true"] .ws-sec-chevron { rotate: 90deg; }
-.ws-sec-count { margin-left: 2px; font-family: var(--sans); font-weight: 500; letter-spacing: 0; color: var(--faint); font-variant-numeric: tabular-nums; }
-.ws-sec-aside { flex-shrink: 0; padding: 0 6px; font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.ws-sec-aside:empty { display: none; }
+.ws-sec { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
+.ws-sec[hidden] { display: none; }
+.ws-sec-tools { flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-height: 40px; padding: 4px 12px 0 18px; }
+.ws-sec-tools-note { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 12px; color: var(--faint); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .icon-btn.ws-sec-btn { width: 32px; height: 32px; border-radius: var(--r-sm); color: var(--faint); transition-property: transform, background-color, color; }
 @media (hover: hover) {
   .icon-btn.ws-sec-btn:hover { color: var(--fg); background: rgba(var(--ink-rgb), 0.06); }
 }
 .ws-sec-btn.loading svg { animation: breathe 1.2s var(--ease) infinite; }
+.agents-tab-count:empty { display: none; }
 .ws-sec-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 0 10px 12px;
+  padding: 8px 10px 12px;
   scrollbar-width: thin;
   scrollbar-color: rgba(var(--ink-rgb), 0.14) transparent;
 }
+.ws-sec-tools + .ws-sec-body { padding-top: 0; }
 .ws-sec-note { margin: 2px 6px 8px; font-size: 12px; line-height: 1.5; color: var(--dim); text-wrap: pretty; }
 .ws-sec-note.is-waiting { animation: breathe 1.4s var(--ease) infinite; }
 .ws-core.is-loading .ws-sec-body { opacity: 0.4; transition: opacity 200ms ease-out; }
@@ -3756,6 +3767,12 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .ws-extra-detail:empty { display: none; }
 .ws-extra[aria-checked="true"] .switch { background: var(--accent-soft); }
 .ws-extra[aria-checked="true"] .switch span { transform: translateX(14px); background: var(--bg); }
+/* Hooks que corren porque hay otro encendido (Claude Code no los separa): se ven, no se tocan. */
+.ws-extra[aria-disabled="true"] { cursor: default; }
+.ws-extra[aria-disabled="true"] .switch { opacity: 0.45; }
+@media (hover: hover) {
+  .ws-extra[aria-disabled="true"]:hover { background: none; }
+}
 
 /* Pie: reiniciar para aplicar los extras. */
 .ws-foot { display: flex; flex-direction: column; gap: 10px; margin: 0 -22px; padding: 14px 22px 18px; border-top: 1px solid var(--seam); }
@@ -3943,6 +3960,11 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .ws-code-note-title { margin-bottom: 4px !important; font-size: 13.5px; color: var(--fg); }
 .ws-code-loading { margin: auto; font-size: 12.5px; color: var(--dim); }
 .ws-code-cut { flex-shrink: 0; margin: 0; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--faint); }
+/* La salida del setup de un worktree (en segundo plano): texto de terminal, pegado al final
+   mientras corre. */
+.ws-setup-log { flex: 1 1 auto; min-height: 0; margin: 0; padding: 14px 16px 18px; overflow: auto; overscroll-behavior: contain; font: 400 12px/1.6 var(--mono); font-variant-ligatures: none; tab-size: 4; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--fg); scrollbar-width: thin; scrollbar-color: rgba(var(--ink-rgb), 0.18) transparent; }
+.ws-setup-log.is-empty { font-family: var(--sans); color: var(--faint); }
+.ws-setup-log:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -2px; }
 
 /* Pantalla de carga al abrir un workspace: el logo respira sobre las ventanas, apagadas. */
 .ws-loading {
@@ -4041,3 +4063,36 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 @media (max-width: 520px) {
   .ws-choices { grid-template-columns: minmax(0, 1fr); }
 }
+/* Nuevo worktree (el «+» junto al nombre del workspace). */
+.settings.wt-dialog { width: min(480px, calc(100vw - 32px)); }
+.wt-form { display: flex; flex-direction: column; gap: 14px; }
+.wt-form .ws-dialog-hint strong { font-weight: 500; color: var(--fg); }
+.wt-name-note { margin: 0; font-size: 12px; line-height: 1.5; color: var(--dim); }
+.wt-name-note[hidden] { display: none; }
+.wt-base-anchor { position: relative; }
+.wt-base { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; height: 44px; padding: 0 12px 0 14px; border-radius: var(--r-sm); border: 1px solid rgba(var(--ink-rgb), 0.18); background: rgba(var(--ink-rgb), 0.05); font-family: var(--mono); font-size: 12.5px; color: var(--fg); text-align: start; transition: border-color 150ms ease-out; }
+.wt-base[aria-expanded="true"] { border-color: var(--accent-line); }
+.wt-base-value { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wt-base-chevron { display: flex; flex-shrink: 0; color: var(--dim); transition: rotate 300ms var(--ease); }
+.wt-base[aria-expanded="true"] .wt-base-chevron { rotate: 180deg; }
+.vault-menu.wt-base-menu { top: calc(100% + 6px); right: 0; min-width: 0; max-width: none; max-height: 240px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.wt-base-name { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono); font-size: 12.5px; }
+.vault-option .wt-base-hint { font-family: var(--sans); }
+/* Lo que saldrá: rama, carpeta y lo que se copia del repo. */
+.wt-plan { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 14px; margin: 0; padding: 12px 14px; border-radius: var(--r-md); background: var(--well-soft); }
+.wt-plan > div { display: contents; }
+.wt-plan > div[hidden] { display: none; }
+.wt-plan dt { font-size: 11px; font-weight: 600; line-height: 20px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); }
+.wt-plan dd { min-width: 0; margin: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono); font-size: 12px; line-height: 20px; color: var(--fg); }
+#wt-copy { font-family: var(--sans); font-size: 12.5px; }
+.switch-btn.wt-setup { justify-content: space-between; height: auto; min-height: 52px; padding: 8px 12px 8px 14px; border: 1px solid var(--line); text-align: start; transition: border-color 150ms ease-out; }
+.switch-btn.wt-setup[hidden] { display: none; }
+.switch-btn.wt-setup .switch { flex-shrink: 0; }
+.wt-setup-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13.5px; }
+.wt-setup-text code { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
+@media (hover: hover) {
+  .switch-btn.wt-setup:hover { border-color: var(--line-strong); }
+  .wt-base:hover { border-color: rgba(var(--ink-rgb), 0.3); }
+  .wt-base[aria-expanded="true"]:hover { border-color: var(--accent-line); }
+}
+.chip.working { animation: breathe 1.4s var(--ease) infinite; }

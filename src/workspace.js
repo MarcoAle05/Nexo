@@ -44,8 +44,8 @@ const el = (tag, className, text) => {
 };
 const baseName = (path) => String(path).split('/').filter(Boolean).pop() ?? String(path);
 const sameSet = (a = [], b = []) => a.length === b.length && a.every((x) => b.includes(x));
-const sameExtras = (a, b) => ['plugins', 'mcp', 'connectors', 'skills'].every((k) => sameSet(a?.[k] ?? [], b?.[k] ?? []));
-const EMPTY_EXTRAS = () => ({ plugins: [], mcp: [], connectors: [], skills: [] });
+const sameExtras = (a, b) => ['plugins', 'mcp', 'connectors', 'skills', 'hooks'].every((k) => sameSet(a?.[k] ?? [], b?.[k] ?? []));
+const EMPTY_EXTRAS = () => ({ plugins: [], mcp: [], connectors: [], skills: [], hooks: [] });
 
 // Icono de un archivo según su tipo.
 export function fileIcon(path) {
@@ -58,15 +58,25 @@ export function fileIcon(path) {
   return ICON.file;
 }
 
-// Cómo se llama una pestaña/ventana: `main` (el orquestador), `a:<tarea>` (un agente) o
-// `f:<ruta>` (un archivo).
 export function activity(list) {
   const active = list.filter((a) => a.state === 'active').length;
   const waiting = list.filter((a) => a.state === 'waiting').length;
   return [active ? `${active} ${active === 1 ? 'activo' : 'activos'}` : '', waiting ? `${waiting} esperando` : ''].filter(Boolean).join(' · ');
 }
 
-export const keyKind = (key) => (key === 'main' ? 'main' : key.startsWith('a:') ? 'agent' : 'file');
+// Cómo se llama una pestaña/ventana: `main` (el orquestador), `a:<tarea>` (un agente),
+// `f:<ruta>` (un archivo) o `s:setup` (la salida del setup de un worktree recién creado).
+export const SETUP_KEY = 's:setup';
+export const keyKind = (key) => (key === 'main' ? 'main' : key.startsWith('a:') ? 'agent' : key.startsWith('s:') ? 'setup' : 'file');
+// Lo que dice la ventana del setup según cómo va (worktree.rs: `running`, `ok`, `error`,
+// `interrupted`).
+export function setupLabel(view) {
+  if (!view) return '';
+  if (view.state === 'running') return 'Ejecutándose';
+  if (view.state === 'ok') return 'Terminó bien';
+  if (view.state === 'interrupted') return 'Se cortó al cerrar nexo';
+  return view.code == null ? 'Falló' : `Falló · código ${view.code}`;
+}
 
 export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFiles, ask, fail, renderMarkdown, onLink = () => {}, nexo, onMode = () => {}, onChange = () => {} }) {
   const $ = (id) => document.getElementById(id);
@@ -96,6 +106,8 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   let replaying = false;
   let mainState = { busy: false, running: false, waiting: false, phase: 'idle' };
   const wins = new Map(); // clave → ventana { key, kind, el, chat?, file?, body, title, sub, icon }
+  let trees = { repo: null, items: [] }; // los worktrees del repo del workspace (worktree.rs)
+  let setupView = null; // el setup de orca.yaml de un worktree recién creado: estado y salida
 
   // ---------------------------------------------------------------- anuncios y guardado
   function announce(text) {
@@ -251,6 +263,350 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     }
   });
 
+  // ---------------------------------------------------------------- worktrees
+  // Si la carpeta es la raíz de un repo de git, el «+» junto al nombre crea otro worktree del
+  // repo (worktree.rs: otra copia con su rama, en ~/nexo/workspaces/<repo>/) y lo abre; con más
+  // de uno, el nombre abre la lista para saltar entre ellos.
+  const titleButton = $('ws-title-btn');
+  const treeMenu = $('ws-wt-menu');
+  const addButton = $('ws-wt-add');
+
+  async function loadWorktrees() {
+    const path = ws?.path;
+    let next = { repo: null, items: [] };
+    if (path) next = await invoke('worktree_list', { path }).catch(() => next);
+    if (ws?.path !== path) return;
+    trees = next;
+    renderWorktrees();
+  }
+
+  function renderWorktrees() {
+    const repo = ws ? trees.repo : null;
+    addButton.hidden = !repo;
+    if (repo) addButton.setAttribute('aria-label', `Nuevo worktree de ${repo}`);
+    const several = Boolean(repo) && trees.items.length > 1;
+    titleButton.disabled = !several;
+    titleButton.classList.toggle('has-menu', several);
+    titleButton.title = several ? `${ws.path} · cambiar de worktree` : (ws?.path ?? '');
+    if (several) titleButton.setAttribute('aria-label', `${ws.name}: cambiar de worktree, ${trees.items.length} en ${repo}`);
+    else titleButton.removeAttribute('aria-label');
+    if (!several) closeTreeMenu();
+  }
+
+  function closeTreeMenu(refocus = false) {
+    if (treeMenu.hidden) return;
+    treeMenu.hidden = true;
+    titleButton.setAttribute('aria-expanded', 'false');
+    if (refocus) titleButton.focus();
+  }
+
+  function openTreeMenu() {
+    const head = el('div', 'vault-menu-title', `Worktrees de ${trees.repo}`);
+    const items = trees.items.map((item) => {
+      const button = el('button', 'vault-option ws-wt-item');
+      button.type = 'button';
+      if (item.current) button.setAttribute('aria-current', 'true');
+      const name = el('span', 'ws-wt-name');
+      name.append(el('span', 'ws-wt-name-text', item.name));
+      if (item.main) name.append(el('span', 'ws-badge', 'Principal'));
+      button.append(name, el('small', '', item.missing ? 'La carpeta ya no está' : item.branch));
+      button.title = item.path;
+      button.disabled = item.missing;
+      button.addEventListener('click', () => {
+        closeTreeMenu();
+        if (!item.current) switchTree(item.path);
+      });
+      return button;
+    });
+    treeMenu.replaceChildren(head, ...items);
+    treeMenu.hidden = false;
+    titleButton.setAttribute('aria-expanded', 'true');
+    (treeMenu.querySelector('[aria-current="true"]') ?? treeMenu.querySelector('button:not(:disabled)'))?.focus();
+  }
+
+  // Un worktree que nexo aún no tenía en la lista se abre como cualquier carpeta elegida.
+  async function switchTree(path) {
+    try {
+      const info = await invoke('workspace_open', { path });
+      await openWorkspace(info.path);
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  titleButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (!treeMenu.hidden) return closeTreeMenu(true);
+    openTreeMenu();
+  });
+  titleButton.addEventListener('keydown', (event) => {
+    if (event.key === 'ArrowDown' && treeMenu.hidden && !titleButton.disabled) {
+      event.preventDefault();
+      openTreeMenu();
+    }
+  });
+  // Flechas y Escape dentro de un menú de botones (la lista de worktrees, las ramas).
+  function menuKeys(menu, close) {
+    menu.addEventListener('keydown', (event) => {
+      const items = [...menu.querySelectorAll('button:not(:disabled)')];
+      const at = items.indexOf(document.activeElement);
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        close(true);
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        items[(at + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+      } else if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        items[event.key === 'Home' ? 0 : items.length - 1]?.focus();
+      } else if (event.key === 'Tab') close(false);
+    });
+  }
+  menuKeys(treeMenu, closeTreeMenu);
+  document.addEventListener('click', (event) => {
+    if (!treeMenu.hidden && !treeMenu.contains(event.target) && !titleButton.contains(event.target)) closeTreeMenu();
+  });
+
+  // El formulario: nombre (el propuesto, ya escrito y seleccionado), la rama de partida y lo que
+  // saldrá (rama, carpeta, lo que se copia del repo y, si orca.yaml lo tiene, el setup).
+  const wtDialog = $('wt-dialog');
+  const wtName = $('wt-name');
+  const baseButton = $('wt-base');
+  const baseMenu = $('wt-base-menu');
+  const setupSwitch = $('wt-setup');
+  let wtForm = null; // { repo, bases, base, parent, home, plan }
+  let wtBase = '';
+  let wtSetup = true;
+  let wtBusy = false;
+  let wtSeq = 0;
+  const wtModal = createModal({
+    dialog: wtDialog,
+    closeButton: $('wt-dialog-close'),
+    initialFocus: () => wtName,
+    onClose: () => {
+      closeBaseMenu();
+      (addButton.hidden ? titleButton : addButton).focus();
+    },
+  });
+
+  const tilde = (path) => (wtForm?.home && path.startsWith(`${wtForm.home}/`) ? `~${path.slice(wtForm.home.length)}` : path);
+  const listOf = (items) => (items.length <= 2 ? items.join(' y ') : `${items.slice(0, 2).join(', ')} y ${items.length - 2} más`);
+
+  function showWtError(text) {
+    $('wt-error').textContent = text;
+    $('wt-error').hidden = !text;
+  }
+
+  function setWtBusy(on, text = '') {
+    wtBusy = on;
+    const ok = $('wt-ok');
+    ok.textContent = on ? text || 'Creando…' : 'Crear y abrir';
+    ok.classList.toggle('working', on);
+    ok.disabled = on || !wtForm?.plan;
+    for (const control of [wtName, baseButton, setupSwitch, $('wt-cancel')]) control.disabled = on;
+  }
+
+  function paintPlan(plan, note = '') {
+    $('wt-branch').textContent = plan?.branch ?? note;
+    $('wt-folder').textContent = plan ? tilde(plan.folder) : '';
+    $('wt-folder').title = plan?.folder ?? '';
+    const copy = plan ? [plan.include.length ? `copia ${listOf(plan.include)}` : '', plan.shared.length ? `enlaza ${listOf(plan.shared)}` : ''].filter(Boolean).join(' · ') : '';
+    $('wt-copy').textContent = copy ? copy[0].toUpperCase() + copy.slice(1) : '';
+    $('wt-copy').title = plan ? [...plan.include, ...plan.shared].join(', ') : '';
+    $('wt-copy-row').hidden = !copy;
+    setupSwitch.hidden = !plan?.setup;
+    setupSwitch.setAttribute('aria-checked', String(wtSetup));
+    $('wt-setup-cmd').textContent = plan?.setup ?? '';
+    // Lo escrito puede cambiar al limpiarlo o porque ya está cogido: se dice qué se usará.
+    const typed = wtName.value.trim();
+    const note2 = plan && typed && plan.name !== typed ? `Se usará «${plan.name}»: ${/[^\p{L}\p{N}._-]/u.test(typed) ? 'solo letras, números, puntos, guiones y _' : 'ese nombre o su rama ya existen'}.` : '';
+    $('wt-name-note').textContent = note2;
+    $('wt-name-note').hidden = !note2;
+    if (!typed) wtName.placeholder = plan?.name ?? '';
+    $('wt-ok').disabled = wtBusy || !plan;
+  }
+
+  function paintBase() {
+    $('wt-base-value').textContent = wtBase || 'Elige una rama';
+  }
+
+  let planTimer = 0;
+  function schedulePlan(now = false) {
+    clearTimeout(planTimer);
+    planTimer = setTimeout(refreshPlan, now ? 0 : 160);
+  }
+  async function refreshPlan() {
+    if (!ws || !wtForm) return;
+    const path = ws.path;
+    const mine = ++wtSeq;
+    try {
+      const plan = await invoke('worktree_plan', { path, name: wtName.value, base: wtBase });
+      if (mine !== wtSeq) return;
+      wtForm.plan = plan;
+      showWtError('');
+      paintPlan(plan);
+    } catch (error) {
+      if (mine !== wtSeq) return;
+      wtForm.plan = null;
+      paintPlan(null);
+      showWtError(String(error));
+    }
+  }
+
+  async function openNewWorktree() {
+    if (!ws || !trees.repo || wtDialog.open) return;
+    const path = ws.path;
+    wtForm = null;
+    wtBase = '';
+    wtSetup = true;
+    wtName.value = '';
+    wtName.placeholder = '';
+    $('wt-repo').textContent = trees.repo;
+    showWtError('');
+    setWtBusy(false);
+    paintBase();
+    paintPlan(null, 'Leyendo el repo…');
+    wtModal.open();
+    try {
+      const form = await invoke('worktree_form', { path });
+      if (ws?.path !== path || !wtDialog.open) return;
+      wtForm = form;
+      wtBase = form.plan?.base ?? form.base ?? '';
+      paintBase();
+      if (form.plan && !wtName.value) {
+        wtName.value = form.plan.name;
+        if (document.activeElement === wtName) wtName.select();
+      }
+      paintPlan(form.plan);
+      showWtError(form.error ?? '');
+    } catch (error) {
+      if (wtDialog.open) {
+        paintPlan(null);
+        showWtError(String(error));
+      }
+    }
+  }
+
+  function closeBaseMenu(refocus = false) {
+    if (baseMenu.hidden) return;
+    baseMenu.hidden = true;
+    baseButton.setAttribute('aria-expanded', 'false');
+    if (refocus) baseButton.focus();
+  }
+  function openBaseMenu() {
+    const bases = wtForm?.bases ?? [];
+    const parts = [];
+    for (const [title, group] of [
+      ['Del remoto', bases.filter((b) => b.remote)],
+      ['Locales', bases.filter((b) => !b.remote)],
+    ]) {
+      if (!group.length) continue;
+      parts.push(el('div', 'vault-menu-title', title));
+      for (const base of group) {
+        const button = el('button', 'vault-option wt-base-option');
+        button.type = 'button';
+        if (base.name === wtBase) button.setAttribute('aria-current', 'true');
+        button.append(el('span', 'wt-base-name', base.name));
+        if (base.name === wtForm.base) button.append(el('small', 'wt-base-hint', 'La principal del remoto'));
+        button.addEventListener('click', () => {
+          wtBase = base.name;
+          paintBase();
+          closeBaseMenu(true);
+          schedulePlan(true);
+        });
+        parts.push(button);
+      }
+    }
+    if (!parts.length) parts.push(el('p', 'ws-sec-note', 'Este repo no tiene ramas.'));
+    baseMenu.replaceChildren(...parts);
+    baseMenu.hidden = false;
+    baseButton.setAttribute('aria-expanded', 'true');
+    (baseMenu.querySelector('[aria-current="true"]') ?? baseMenu.querySelector('button'))?.focus();
+  }
+  baseButton.addEventListener('click', () => (baseMenu.hidden ? openBaseMenu() : closeBaseMenu(true)));
+  menuKeys(baseMenu, closeBaseMenu);
+  wtDialog.addEventListener('click', (event) => {
+    if (!baseMenu.hidden && !baseMenu.contains(event.target) && !baseButton.contains(event.target)) closeBaseMenu();
+  });
+  wtName.addEventListener('input', () => schedulePlan());
+  setupSwitch.addEventListener('click', () => {
+    wtSetup = !wtSetup;
+    setupSwitch.setAttribute('aria-checked', String(wtSetup));
+  });
+  $('wt-cancel').addEventListener('click', () => wtModal.close());
+  addButton.addEventListener('click', openNewWorktree);
+
+  $('wt-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!ws || !wtForm?.plan || wtBusy) return;
+    const path = ws.path;
+    clearTimeout(planTimer);
+    showWtError('');
+    setWtBusy(true);
+    const channel = new Channel();
+    channel.onmessage = (step) => wtBusy && setWtBusy(true, step.text);
+    try {
+      const made = await invoke('worktree_create', { path, name: wtName.value, base: wtBase, setup: !setupSwitch.hidden && wtSetup, channel });
+      wtModal.close();
+      setWtBusy(false);
+      await openWorkspace(made.info.path);
+      announce(`Worktree ${made.info.name} creado, en la rama ${made.branch}.`);
+      for (const warning of made.warnings) fail(warning);
+    } catch (error) {
+      setWtBusy(false);
+      // Si se cerró el formulario mientras se creaba, el error sale en el chat.
+      if (!wtDialog.open) return fail(error);
+      showWtError(String(error));
+      wtName.focus();
+    }
+  });
+
+  // ---------------------------------------------------------------- el setup de un worktree
+  // Se ejecuta en segundo plano (worktree.rs); su ventana lee la salida mientras corre.
+  let setupTimer = 0;
+  function watchSetup() {
+    clearTimeout(setupTimer);
+    if (setupView?.state !== 'running' || !ws) return;
+    const path = ws.path;
+    setupTimer = setTimeout(async () => {
+      const next = await invoke('worktree_setup', { path }).catch(() => null);
+      if (ws?.path !== path) return;
+      const done = setupView?.state === 'running' && next && next.state !== 'running';
+      setupView = next;
+      const win = wins.get(SETUP_KEY);
+      if (win) {
+        paintSetup(win);
+        paintWindowHead(win);
+      }
+      scheduleRender();
+      if (done) {
+        announce(`El setup ${next.state === 'ok' ? 'terminó bien' : 'falló'}.`);
+        // Lo normal es que instale o genere archivos.
+        refreshTree();
+      }
+      watchSetup();
+    }, 800);
+  }
+
+  function paintSetup(win) {
+    const view = setupView;
+    let log = win.body.querySelector('.ws-setup-log');
+    if (!log) {
+      log = el('pre', 'ws-setup-log');
+      log.tabIndex = 0;
+      log.setAttribute('aria-label', 'Salida del setup');
+      win.body.replaceChildren(log);
+    }
+    // Pegado al final mientras se lee el final; si el usuario subió, se queda donde está.
+    const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
+    const text = view?.log || (view?.state === 'running' ? 'Esperando la salida…' : 'El setup no escribió nada.');
+    if (log.textContent !== text) log.textContent = text;
+    log.classList.toggle('is-empty', !view?.log);
+    log.toggleAttribute('data-truncated', Boolean(view?.truncated));
+    if (atEnd) log.scrollTop = log.scrollHeight;
+  }
+
   // ---------------------------------------------------------------- abrir y dejar un workspace
   function loadingStep(text) {
     $('ws-loading-step').textContent = text;
@@ -293,6 +649,9 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     registry = [];
     catalog = null;
     applied = null;
+    trees = { repo: null, items: [] };
+    setupView = null;
+    clearTimeout(setupTimer);
     render();
     onChange(null);
   }
@@ -304,9 +663,13 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     setLoading(true, `Abriendo ${baseName(path)}…`);
     loadingStep('Leyendo la carpeta');
     try {
-      const state = await invoke('workspace_state', { path });
+      const [state, setup] = await Promise.all([invoke('workspace_state', { path }), invoke('worktree_setup', { path }).catch(() => null)]);
       if (mine !== seq) return;
       ws = { path: state.info.path, name: state.info.name };
+      // Saltar entre worktrees del mismo repo no hace parpadear el «+».
+      if (!trees.items.some((t) => t.path === state.info.path)) trees = { repo: null, items: [] };
+      setupView = setup;
+      clearTimeout(setupTimer);
       list.current = state.info;
       registry = state.agents ?? [];
       defined = state.defined ?? [];
@@ -314,19 +677,23 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
       extras = { ...EMPTY_EXTRAS(), ...(state.extras ?? {}) };
       ui = state.ui && typeof state.ui === 'object' ? state.ui : {};
       expanded = new Set(Array.isArray(ui.expanded) ? ui.expanded : []);
-      sections = { files: true, agents: true, extras: true, ...(ui.sections ?? {}) };
+      section = SECTIONS.includes(ui.section) ? ui.section : 'files';
       children.clear();
       applied = null;
       fresh = new Set();
       removed = new Set();
-      const keys = new Set(['main', ...registry.map((a) => `a:${a.task}`), ...((ui.windows?.tabs ?? []).filter((k) => k.startsWith('f:')))]);
+      const keys = new Set(['main', ...registry.map((a) => `a:${a.task}`), ...((ui.windows?.tabs ?? []).filter((k) => k.startsWith('f:'))), ...(setupView ? [SETUP_KEY] : [])]);
       windows = normalizeWindows(ui.windows, keys);
       windows = addTab(windows, 'main');
       // El orquestador siempre es la primera pestaña.
       windows.tabs = ['main', ...windows.tabs.filter((k) => k !== 'main')];
       if (!windows.open.length) windows = openWindow(windows, 'main').state;
+      // Un setup en marcha (un worktree recién creado) se ve junto al orquestador.
+      if (setupView?.state === 'running' && !windows.open.includes(SETUP_KEY)) windows = openWindow(addTab(windows, SETUP_KEY), SETUP_KEY).state;
       onChange(ws);
       render();
+      loadWorktrees();
+      watchSetup();
       loadingStep('Leyendo el explorador');
       await loadTree();
       if (mine !== seq) return;
@@ -351,7 +718,9 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
 
   // ---------------------------------------------------------------- explorador
   let expanded = new Set(); // carpetas abiertas (rutas relativas; '' es la raíz)
-  let sections = { files: true, agents: true, extras: true };
+  // Lo que se ve de la carta: el explorador, los agentes o los extras (una pestaña cada uno).
+  const SECTIONS = ['files', 'agents', 'extras'];
+  let section = 'files';
   const children = new Map(); // carpeta → { entries, truncated } | { error }
   let focusPath = null;
 
@@ -586,6 +955,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   function infoOf(key) {
     if (key === 'main') return mainInfo();
     if (key.startsWith('a:')) return agentInfo(key.slice(2));
+    if (key === SETUP_KEY) return { key, name: 'Setup', role: setupView?.command ?? '', state: setupView?.state === 'running' ? 'active' : 'idle', label: setupLabel(setupView) };
     return { key, name: baseName(key.slice(2)), path: key.slice(2) };
   }
 
@@ -710,8 +1080,8 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     minimize.addEventListener('click', () => minimizeKey(key));
     actions.append(minimize);
     let preview = null;
-    if (kind === 'file') {
-      if (isMarkdown(key.slice(2))) {
+    if (kind === 'file' || kind === 'setup') {
+      if (kind === 'file' && isMarkdown(key.slice(2))) {
         preview = el('button', 'ws-win-chip');
         preview.type = 'button';
         preview.setAttribute('aria-pressed', String(Boolean(ui.preview?.[key.slice(2)])));
@@ -745,6 +1115,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     wins.set(key, win);
 
     if (kind === 'file') reloadFile(win);
+    else if (kind === 'setup') paintSetup(win);
     else {
       const chatView = el('div', 'chat-view');
       body.append(chatView);
@@ -829,6 +1200,16 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
       return;
     }
     win.icon.replaceChildren(stateDot(info.state));
+    if (win.kind === 'setup') {
+      const sub = [info.label, setupView?.command, setupView?.truncated ? 'se ve el final' : ''].filter(Boolean).join(' · ');
+      win.sub.textContent = sub;
+      win.sub.title = sub;
+      win.minimize.setAttribute('aria-label', 'Minimizar la salida del setup');
+      win.minimize.title = 'Minimizar';
+      win.el.querySelector('.ws-win-btn:last-child')?.setAttribute('aria-label', 'Cerrar la salida del setup');
+      win.el.querySelector('.ws-win-btn:last-child')?.setAttribute('title', 'Cerrar');
+      return;
+    }
     const parts = [];
     if (win.kind === 'main') parts.push('Principal');
     else if (info.role) parts.push(info.role);
@@ -910,7 +1291,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     const win = wins.get(key);
     if (!win?.el.isConnected) return;
     if (win.chat) win.chat.focus();
-    else (win.body.querySelector('.ws-code, .ws-preview') ?? win.minimize).focus();
+    else (win.body.querySelector('.ws-code, .ws-preview, .ws-setup-log') ?? win.minimize).focus();
   }
 
   function focusTab(key) {
@@ -926,7 +1307,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   }
 
   function closeKey(key) {
-    if (keyKind(key) !== 'file') return;
+    if (keyKind(key) !== 'file' && keyKind(key) !== 'setup') return;
     const at = windows.tabs.indexOf(key);
     windows = closeTab(windows, key);
     dropWindow(key);
@@ -1008,7 +1389,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
           else openKey(key, { focus: true });
         });
         li.append(main);
-        if (kind === 'file') {
+        if (kind === 'file' || kind === 'setup') {
           main.setAttribute('aria-keyshortcuts', 'Delete');
           const close = el('button', 'ws-tab-close');
           close.type = 'button';
@@ -1033,6 +1414,12 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
         main.title = `${info.path}${shown ? '' : ' · minimizada'}`;
         main.querySelector('.ws-tab-state').textContent = shown ? ', a la vista' : ', minimizada';
         li.lastChild.setAttribute('aria-label', `Cerrar ${info.name}`);
+        li.lastChild.title = 'Cerrar';
+      } else if (kind === 'setup') {
+        icon.replaceChildren(stateDot(info.state));
+        main.title = `Salida del setup · ${info.label}${shown ? '' : ' · minimizada'}`;
+        main.querySelector('.ws-tab-state').textContent = `, ${info.label.toLowerCase()}${shown ? '' : ', minimizada'}`;
+        li.lastChild.setAttribute('aria-label', 'Cerrar la salida del setup');
         li.lastChild.title = 'Cerrar';
       } else {
         icon.replaceChildren(stateDot(info.state));
@@ -1083,7 +1470,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     else if (event.key === 'ArrowLeft') next = neighbor(keys, current, -1);
     else if (event.key === 'Home') next = keys[0];
     else if (event.key === 'End') next = keys.at(-1);
-    else if ((event.key === 'Delete' || event.key === 'Backspace') && keyKind(current) === 'file') {
+    else if ((event.key === 'Delete' || event.key === 'Backspace') && (keyKind(current) === 'file' || keyKind(current) === 'setup')) {
       event.preventDefault();
       return closeKey(current);
     }
@@ -1108,8 +1495,9 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   function renderOverview() {
     const keys = windows.tabs;
     const groups = [
-      ['Agentes', keys.filter((k) => keyKind(k) !== 'file')],
+      ['Agentes', keys.filter((k) => keyKind(k) === 'main' || keyKind(k) === 'agent')],
       ['Archivos', keys.filter((k) => keyKind(k) === 'file')],
+      ['Setup', keys.filter((k) => keyKind(k) === 'setup')],
     ];
     const parts = [];
     const head = el('div', 'vault-menu-title ws-overview-title');
@@ -1129,7 +1517,8 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
         else icon.append(stateDot(info.state));
         const text = el('span', 'ws-overview-text');
         const file = keyKind(key) === 'file';
-        text.append(el('span', 'ws-overview-name', info.name), el('small', file ? 'is-path' : '', file ? info.path : [info.role || (key === 'main' ? 'Principal' : ''), STATE_LABEL[info.state]].filter(Boolean).join(' · ')));
+        const detail = file ? info.path : keyKind(key) === 'setup' ? [info.label, info.role].filter(Boolean).join(' · ') : [info.role || (key === 'main' ? 'Principal' : ''), STATE_LABEL[info.state]].filter(Boolean).join(' · ');
+        text.append(el('span', 'ws-overview-name', info.name), el('small', file ? 'is-path' : '', detail));
         const where = el('span', 'ws-overview-where', windows.open.includes(key) ? 'A la vista' : 'Minimizada');
         button.append(icon, text, where);
         button.addEventListener('click', () => {
@@ -1207,7 +1596,6 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     for (const info of agents) rows.push(row(info, { onClick: () => openKey(info.key, { focus: true }), current: windows.active === info.key }));
     box.replaceChildren(...rows);
     $('ws-agents-count').textContent = String(agents.length + 1);
-    $('ws-agents-aside').textContent = activity([mainInfo(), ...agents]);
   }
 
   // ---------------------------------------------------------------- carta: extras
@@ -1231,17 +1619,21 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   }
 
   const GROUPS = [
-    { key: 'plugins', title: 'Plugins', id: (p) => p.id, detail: (p) => [p.skills ? `${p.skills} ${p.skills === 1 ? 'skill' : 'skills'}` : '', p.servers ? `${p.servers} MCP` : '', p.synced ? 'de claude.ai' : '', p.description].filter(Boolean).join(' · ') },
+    { key: 'plugins', title: 'Plugins', id: (p) => p.id, detail: (p) => [p.skills ? `${p.skills} ${p.skills === 1 ? 'skill' : 'skills'}` : '', p.servers ? `${p.servers} MCP` : '', p.synced ? 'de claude.ai' : '', p.hooks ? 'trae hooks: encendido, también corren los de tu perfil' : '', p.description].filter(Boolean).join(' · ') },
     { key: 'mcp', title: 'MCP', id: (s) => s.name, detail: (s) => [s.kind, s.detail].filter(Boolean).join(' · ') },
     { key: 'connectors', title: 'Conexiones', id: (s) => s.name, detail: (s) => (s.status === 'needs-auth' ? 'Sin iniciar sesión en claude.ai' : 'Conexión de claude.ai'), name: (s) => s.name.replace(/^claude\.ai /, '') },
     { key: 'skills', title: 'Skills sin plugin', id: (s) => s.name, detail: (s) => [s.source === 'claude.ai' ? 'de claude.ai' : 'de ~/.claude/skills', s.description].filter(Boolean).join(' · ') },
+    { key: 'hooks', title: 'Hooks', id: (h) => h.id, detail: (h) => h.detail },
   ];
+  // Claude Code no separa los hooks: con uno encendido (o un plugin con hooks), los de los
+  // archivos de ajustes (perfil y carpeta) corren también aunque estén apagados aquí.
+  const hooksForced = (data) => extras.hooks.length > 0 || (data.plugins ?? []).some((p) => p.hooks && extras.plugins.includes(p.id));
 
   function renderExtras() {
     const box = $('ws-extras');
     const data = catalog?.loading ? catalog.previous : catalog;
     const on = GROUPS.reduce((n, g) => n + (extras[g.key]?.length ?? 0), 0);
-    $('ws-extras-aside').textContent = on ? `${on} ${on === 1 ? 'encendido' : 'encendidos'}` : 'Todo apagado';
+    $('ws-extras-count').textContent = on ? String(on) : '';
     $('ws-extras-refresh').classList.toggle('loading', Boolean(catalog?.loading));
     if (!data) {
       const note = el('p', 'ws-sec-note');
@@ -1250,8 +1642,6 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
       return box.replaceChildren(note);
     }
     const parts = [];
-    const intro = el('p', 'ws-sec-note', 'Lo instalado en tu perfil global. Apagado, el orquestador y sus agentes no lo ven.');
-    parts.push(intro);
     for (const group of GROUPS) {
       const items = data[group.key] ?? [];
       if (!items.length) continue;
@@ -1263,33 +1653,35 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
       for (const item of items) {
         const id = group.id(item);
         const checked = extras[group.key].includes(id);
+        const forced = group.key === 'hooks' && !item.added && !checked && hooksForced(data);
         const li = el('li');
         const button = el('button', 'ws-extra');
         button.type = 'button';
         button.setAttribute('role', 'switch');
-        button.setAttribute('aria-checked', String(checked));
+        button.setAttribute('aria-checked', String(checked || forced));
+        if (forced) button.setAttribute('aria-disabled', 'true');
         const text = el('span', 'ws-extra-text');
         const nameId = `ws-x-${group.key}-${id.replace(/[^a-z0-9]/gi, '-')}`;
         const name = el('span', 'ws-extra-name', group.name ? group.name(item) : item.name);
         name.id = nameId;
-        const detail = el('span', 'ws-extra-detail', group.detail(item));
+        const detail = el('span', 'ws-extra-detail', forced ? `${group.detail(item)} · corren porque hay otro hook encendido` : group.detail(item));
         detail.id = `${nameId}-d`;
         text.append(name, detail);
         button.setAttribute('aria-labelledby', nameId);
         button.setAttribute('aria-describedby', detail.id);
-        button.title = group.detail(item);
+        button.title = forced ? 'Claude Code no separa los hooks: con otro encendido, estos también corren.' : group.detail(item);
         const sw = el('span', 'switch');
         sw.setAttribute('aria-hidden', 'true');
         sw.append(el('span'));
         button.append(text, sw);
-        button.addEventListener('click', () => toggleExtra(group.key, id));
+        button.addEventListener('click', () => !forced && toggleExtra(group.key, id));
         li.append(button);
         ul.append(li);
       }
       wrap.append(h, ul);
       parts.push(wrap);
     }
-    if (parts.length === 1) parts.push(el('p', 'ws-sec-note', 'No tienes plugins, servidores MCP, conexiones ni skills propias en tu perfil global.'));
+    if (!parts.length) parts.push(el('p', 'ws-sec-note', 'No tienes plugins, servidores MCP, conexiones, skills propias ni hooks en tu perfil global.'));
     if (catalog?.error && data) parts.push(el('p', 'ws-sec-note', `No se pudo volver a leer: ${catalog.error}`));
     // Rehacer la lista no debe hacer perder el foco del interruptor que se acaba de pulsar.
     const focused = document.activeElement?.closest?.('.ws-extra')?.getAttribute('aria-labelledby');
@@ -1354,27 +1746,25 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
       button.disabled = false;
       button.classList.remove('working');
       renderFoot();
-      // El botón desaparece con el pie: el foco va a la cabecera de los extras.
-      if ($('ws-foot').hidden) $('ws-sec-extras-toggle').focus();
+      // El botón desaparece con el pie: el foco va a la pestaña de los extras.
+      if ($('ws-foot').hidden) sectionTab('extras').focus();
     }
   });
   $('ws-extras-refresh').addEventListener('click', () => loadCatalog(true));
 
-  // ---------------------------------------------------------------- secciones plegables
-  for (const [key, id] of [['files', 'ws-sec-files'], ['agents', 'ws-sec-agents'], ['extras', 'ws-sec-extras']]) {
-    const toggle = $(`${id}-toggle`);
-    toggle.addEventListener('click', () => {
-      sections = { ...sections, [key]: !sections[key] };
-      ui.sections = sections;
-      saveUi();
-      renderSections();
-    });
+  // ---------------------------------------------------------------- pestañas de la carta
+  const sectionTab = (key) => $('ws-sec-tabs').querySelector(`[data-ws-sec="${key}"]`);
+  function showSection(key) {
+    section = key;
+    ui.section = key;
+    saveUi();
+    renderSections();
   }
+  for (const key of SECTIONS) sectionTab(key).addEventListener('click', () => showSection(key));
   function renderSections() {
-    for (const [key, id] of [['files', 'ws-sec-files'], ['agents', 'ws-sec-agents'], ['extras', 'ws-sec-extras']]) {
-      const open = sections[key] !== false;
-      $(id).classList.toggle('is-folded', !open);
-      $(`${id}-toggle`).setAttribute('aria-expanded', String(open));
+    for (const key of SECTIONS) {
+      sectionTab(key).setAttribute('aria-pressed', String(key === section));
+      $(`ws-sec-${key}`).hidden = key !== section;
     }
   }
 
@@ -1388,10 +1778,11 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     renderFrame = 0;
     const has = Boolean(ws);
     $('ws-title').textContent = has ? ws.name : 'Workspace';
-    $('ws-title').title = has ? ws.path : '';
+    renderWorktrees();
     $('ws-path').textContent = has ? ws.path : '';
     $('ws-none').hidden = has || loading;
     $('ws-sections').hidden = !has && !loading;
+    $('ws-sec-tabs').hidden = !has && !loading;
     $('ws-bar').hidden = !has;
     renderSections();
     if (has) {
@@ -1411,8 +1802,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   $('ws-none-open').addEventListener('click', (event) => openDialog(event.currentTarget));
   $('ws-back').addEventListener('click', () => onMode('nexo'));
   $('ws-empty-files').addEventListener('click', () => {
-    sections = { ...sections, files: true };
-    renderSections();
+    showSection('files');
     tree.querySelector('[tabindex="0"]')?.focus();
   });
 

@@ -21,11 +21,11 @@ paths:
 
 - `vault.rs`: configuración, elección del vault, detección de vaults de Obsidian (lee `obsidian.json`) y creación de la estructura.
 
-Cada módulo está descrito en la regla de su zona: `vault.rs` aquí; `graph.rs` en `grafo-datos.md`; `sources.rs`, `fichas.rs`, `mcp.rs`, `markitdown.rs`, `playwright.rs`, `agy.rs` y `browser.rs` en `fuentes.md`; `claude.rs`, `nexo.rs` y `connections.rs` en `api-nexo.md`; `vaultgit` en `vaultgit.md`; `claude_code.rs` en `claude-code.md`; `usage.rs` y `registro.rs` en `uso-y-registro.md`; `workspace.rs` y `workspace_run.rs` en `workspace.md`; `notas.rs` en `notas.md`; `render.rs` en `render.md`; `skills.rs` y `agents.rs` en `skills-y-agentes.md`.
+Cada módulo está descrito en la regla de su zona: `vault.rs` aquí; `graph.rs` en `grafo-datos.md`; `sources.rs`, `fichas.rs`, `mcp.rs`, `markitdown.rs`, `playwright.rs`, `agy.rs` y `browser.rs` en `fuentes.md`; `claude.rs`, `nexo.rs` y `connections.rs` en `api-nexo.md`; `vaultgit` en `vaultgit.md`; `claude_code.rs` en `claude-code.md`; `usage.rs` y `registro.rs` en `uso-y-registro.md`; `workspace.rs`, `workspace_run.rs` y `worktree.rs` en `workspace.md`; `notas.rs` en `notas.md`; `render.rs` en `render.md`; `skills.rs` y `agents.rs` en `skills-y-agentes.md`.
 
-El streaming hacia la interfaz usa `tauri::ipc::Channel` (eventos `{kind, text}`); la única excepción es `agy-activity`, un evento global porque el panel de actividad escucha todas las tareas de Antigravity.
+El streaming hacia la interfaz usa `tauri::ipc::Channel` (eventos `{kind, text}`; el progreso de `worktree_create`, `{step, text}`); la única excepción es `agy-activity`, un evento global porque el panel de actividad escucha todas las tareas de Antigravity.
 
-Dependencias externas en tiempo de ejecución: `markitdown-mcp` (instalado con `uv tool install --python 3.12 markitdown-mcp`, en `~/.local/bin`), `playwright-mcp` (`npm install -g --prefix ~/.local @playwright/mcp`; usa el Google Chrome instalado), `claude` (Claude Code CLI) y `agy` (Antigravity CLI). En Linux, `main.rs` llama a `render::configure()` antes de crear nada: elige cómo pinta WebKitGTK (ver `render.rs`); no quitarlo.
+Dependencias externas en tiempo de ejecución: `markitdown-mcp` (instalado con `uv tool install --python 3.12 markitdown-mcp`, en `~/.local/bin`), `playwright-mcp` (`npm install -g --prefix ~/.local @playwright/mcp`; usa el Google Chrome instalado), `claude` (Claude Code CLI), `agy` (Antigravity CLI) y `git` (los worktrees; `gh`, si está, da el usuario de GitHub para sus ramas). En Linux, `main.rs` llama a `render::configure()` antes de crear nada: elige cómo pinta WebKitGTK (ver `render.rs`); no quitarlo.
 
 ## Modelo de datos: el vault
 

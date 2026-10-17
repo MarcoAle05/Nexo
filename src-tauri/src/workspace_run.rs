@@ -33,7 +33,8 @@ use crate::claude_code::{
     BACKLOG_MAX, ChatEvent, ChatOptions, INHERITED_ENV, find_claude, keep_in_backlog, option_args,
 };
 use crate::workspace::{
-    self, Extras, RegAgent, catalog_for, extras_settings, read_config, update_config, ws_root,
+    self, Catalog, Extras, RegAgent, catalog_or_fallback, extras_settings, hooks_running,
+    read_config, update_config, ws_root,
 };
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -161,6 +162,127 @@ bloques de código y tablas sencillas). Sé directo y responde en el idioma del 
         path = root.display(),
         to = TO_AGENT,
     )
+}
+
+/// Lo que el orquestador tiene que saber de los extras: qué está encendido en el workspace,
+/// qué no lo está y cómo se enciende (sin eso busca en `~/.claude`, ve lo instalado y no
+/// entiende por qué no lo tiene).
+pub(crate) fn extras_prompt(catalog: &Catalog, on: &Extras) -> String {
+    let named = |name: &str, lit: bool| (name.to_string(), lit);
+    let running: Vec<&str> = hooks_running(catalog, on)
+        .iter()
+        .map(|h| h.id.as_str())
+        .collect();
+    let groups: [(&str, Vec<(String, bool)>); 5] = [
+        (
+            "plugins",
+            catalog
+                .plugins
+                .iter()
+                .map(|p| named(&p.name, on.plugins.contains(&p.id)))
+                .collect(),
+        ),
+        (
+            "servidores MCP",
+            catalog
+                .mcp
+                .iter()
+                .map(|s| named(&s.name, on.mcp.contains(&s.name)))
+                .collect(),
+        ),
+        (
+            "conexiones de claude.ai",
+            catalog
+                .connectors
+                .iter()
+                .map(|s| {
+                    let name = s.name.strip_prefix("claude.ai ").unwrap_or(&s.name);
+                    named(name, on.connectors.contains(&s.name))
+                })
+                .collect(),
+        ),
+        (
+            "skills",
+            catalog
+                .skills
+                .iter()
+                .map(|s| named(&s.name, on.skills.contains(&s.name)))
+                .collect(),
+        ),
+        (
+            "hooks",
+            catalog
+                .hooks
+                .iter()
+                .map(|h| {
+                    let name = if h.added {
+                        h.name.clone()
+                    } else {
+                        // «los de tu perfil (orca · 13 eventos)»
+                        format!("{} ({})", h.name.to_lowercase(), h.detail)
+                    };
+                    (name, running.contains(&h.id.as_str()))
+                })
+                .collect(),
+        ),
+    ];
+    let list = |lit: bool| {
+        let parts: Vec<String> = groups
+            .iter()
+            .filter_map(|(label, items)| {
+                let names: Vec<&str> = items
+                    .iter()
+                    .filter(|(_, o)| *o == lit)
+                    .map(|(n, _)| n.as_str())
+                    .collect();
+                (!names.is_empty()).then(|| format!("{label}: {}", names.join(", ")))
+            })
+            .collect();
+        if parts.is_empty() {
+            "nada".to_string()
+        } else {
+            parts.join("; ")
+        }
+    };
+    let hooks_note = if catalog.hooks.is_empty() {
+        ""
+    } else {
+        " Los hooks van juntos: Claude Code no los separa, así que con uno encendido corren también los de \
+tu perfil y los de la carpeta."
+    };
+    format!(
+        "Extras del workspace: nexo arranca Claude Code solo con lo que trae de serie (sus skills, agentes y \
+herramientas) y la skill de nexo. De lo que el usuario tiene en su perfil global (plugins, servidores MCP, \
+conexiones de claude.ai, skills propias y hooks) solo carga lo que él encendió para esta carpeta.\n\
+- Encendido: {on}.\n\
+- Apagado (no está cargado: no lo puedes usar): {off}.\n\
+Si el usuario te pide usar o activar algo apagado, no lo instales ni lo busques en ~/.claude ni cambies la \
+configuración de Claude Code: dile que lo encienda en Extras, en la carta izquierda de nexo, y que pulse \
+«Reiniciar espacio de Workspace» (vuelves a arrancar con eso cargado y la conversación sigue).{hooks_note} Si te \
+pregunta qué skills, plugins, MCP o hooks tienes, contesta con los que tienes cargados en esta sesión y, si viene \
+al caso, nombra los apagados.",
+        on = list(true),
+        off = list(false),
+    )
+}
+
+/// Lo que lleva el orquestador de un workspace además de las opciones del chat: su papel
+/// (con los extras), los ajustes que apagan lo que no está encendido y el plugin de nexo. El
+/// catálogo se vuelve a sondear con `fresh`: lo instalado hace un momento también debe
+/// arrancar apagado.
+pub(crate) fn launch_setup(
+    app: &AppHandle,
+    root: &Path,
+    fresh: bool,
+) -> Result<(String, Value, PathBuf), String> {
+    let catalog = catalog_or_fallback(app, root, fresh);
+    let on = read_config(root).extras;
+    let prompt = format!(
+        "{}\n\n{}",
+        orchestrator_prompt(root),
+        extras_prompt(&catalog, &on)
+    );
+    Ok((prompt, extras_settings(&catalog, &on), install_plugin(app)?))
 }
 
 const SKILL: &str = r#"---
@@ -613,14 +735,12 @@ fn start(
     }
     stop(run.proc.take());
 
-    let catalog = catalog_for(app, root, false).unwrap_or_default();
-    let settings = extras_settings(&catalog, &config.extras);
-    let plugin = install_plugin(app)?;
+    let (prompt, settings, plugin) = launch_setup(app, root, true)?;
     let args = launch_args(
         &session,
         saved,
         &session_name(root),
-        &orchestrator_prompt(root),
+        &prompt,
         &plugin,
         &settings,
         &options,
@@ -927,6 +1047,94 @@ mod tests {
         assert!(prompt.contains(TO_AGENT));
         assert!(SKILL.starts_with("---\nname: agentes-del-workspace\n"));
         assert!(SKILL.contains("TaskStop"));
+    }
+
+    #[test]
+    fn el_orquestador_sabe_que_extras_tiene_y_como_se_encienden_los_demas() {
+        use crate::workspace::{PluginItem, ServerItem, SkillItem};
+        let server = |name: &str| ServerItem {
+            name: name.into(),
+            kind: "http".into(),
+            detail: String::new(),
+            status: String::new(),
+        };
+        let plugin = |id: &str, name: &str| PluginItem {
+            id: id.into(),
+            name: name.into(),
+            description: String::new(),
+            skills: 3,
+            servers: 0,
+            synced: false,
+            hooks: false,
+        };
+        let catalog = Catalog {
+            plugins: vec![
+                plugin("interfaces@interfaces", "interfaces"),
+                plugin("data@synced", "data"),
+            ],
+            mcp: vec![server("github")],
+            connectors: vec![server("claude.ai Mobbin")],
+            skills: vec![SkillItem {
+                name: "pdf".into(),
+                description: String::new(),
+                source: "claude.ai".into(),
+            }],
+            hooks: vec![],
+            error: None,
+        };
+        let none = extras_prompt(&catalog, &Extras::default());
+        assert!(none.contains("- Encendido: nada."));
+        assert!(none.contains(
+            "- Apagado (no está cargado: no lo puedes usar): plugins: interfaces, data; servidores MCP: github; \
+conexiones de claude.ai: Mobbin; skills: pdf."
+        ));
+        assert!(none.contains("Extras, en la carta izquierda de nexo"));
+        assert!(none.contains("«Reiniciar espacio de Workspace»"));
+        assert!(none.contains("~/.claude"));
+        let some = Extras {
+            plugins: vec!["data@synced".into()],
+            connectors: vec!["claude.ai Mobbin".into()],
+            ..Extras::default()
+        };
+        let prompt = extras_prompt(&catalog, &some);
+        assert!(prompt.contains("- Encendido: plugins: data; conexiones de claude.ai: Mobbin."));
+        assert!(prompt.contains("plugins: interfaces; servidores MCP: github; skills: pdf."));
+        assert!(
+            !prompt.contains("Los hooks van juntos"),
+            "sin hooks, nada que explicar"
+        );
+    }
+
+    #[test]
+    fn el_orquestador_sabe_que_hooks_corren_de_verdad() {
+        use crate::workspace::HookItem;
+        let hook = |id: &str, name: &str, detail: &str, added| HookItem {
+            id: id.into(),
+            name: name.into(),
+            detail: detail.into(),
+            added,
+            settings: Value::Null,
+        };
+        let catalog = Catalog {
+            hooks: vec![
+                hook("rtk", "rtk", "Reescribe…", true),
+                hook("perfil", "Los de tu perfil", "orca · 13 eventos", false),
+            ],
+            ..Catalog::default()
+        };
+        let none = extras_prompt(&catalog, &Extras::default());
+        assert!(none.contains("- Encendido: nada."));
+        assert!(none.contains("hooks: rtk, los de tu perfil (orca · 13 eventos)."));
+        assert!(none.contains("Los hooks van juntos"));
+        let rtk = Extras {
+            hooks: vec!["rtk".into()],
+            ..Extras::default()
+        };
+        // Con rtk encendido, los del perfil también corren: el orquestador lo sabe.
+        assert!(
+            extras_prompt(&catalog, &rtk)
+                .contains("- Encendido: hooks: rtk, los de tu perfil (orca · 13 eventos).")
+        );
     }
 
     #[test]

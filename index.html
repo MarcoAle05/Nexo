@@ -467,12 +467,11 @@
              archivos, agentes y Extras del perfil global; los cambios en los extras se aplican al
              reiniciar el espacio. -->
         <div class="panel-core ws-core" id="ws-core" hidden>
-          <div class="panel-head">
-            <div class="panel-title">
-              <span class="eyebrow">Workspace</span>
-              <h2 class="ws-title" id="ws-title">Workspace</h2>
-              <span class="path ws-path" id="ws-path"></span>
-            </div>
+          <div class="panel-head ws-head">
+            <button type="button" class="icon-btn light ws-back" id="ws-back" aria-label="Volver a los agentes de nexo" title="Volver a los agentes de nexo">
+              <span class="ws-back-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10H4M9 5l-5 5 5 5"/></svg></span>
+            </button>
+            <span class="eyebrow">Workspace</span>
             <div class="head-actions">
               <button type="button" class="icon-btn outline" id="ws-folder" aria-haspopup="dialog" aria-controls="ws-dialog" aria-label="Elegir o crear la carpeta del workspace" title="Elegir o crear carpeta"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/></svg></button>
               <button type="button" class="icon-btn outline minimize-btn left-minimize" aria-label="Minimizar la carta" title="Minimizar la carta">
@@ -485,40 +484,48 @@
             </div>
           </div>
 
-          <button type="button" class="back-btn ws-back" id="ws-back">
-            <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 6 10l6 6"/></svg>
-            Agentes de nexo
-          </button>
+          <!-- El nombre y, al lado, el «+» de un worktree nuevo (si la carpeta es la raíz de un
+               repo de git). Con más de un worktree en el repo, el nombre abre la lista. -->
+          <div class="panel-title ws-heading">
+            <div class="ws-title-row">
+              <h2 class="ws-title"><button type="button" class="ws-title-btn" id="ws-title-btn" aria-haspopup="true" aria-expanded="false" aria-controls="ws-wt-menu" disabled><span class="ws-title-text" id="ws-title">Workspace</span><span class="ws-title-chevron" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg></span></button></h2>
+              <button type="button" class="icon-btn outline ws-wt-add" id="ws-wt-add" aria-label="Nuevo worktree" title="Nuevo worktree" hidden>
+                <span class="ws-wt-add-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></span>
+              </button>
+              <div class="vault-menu ws-wt-menu" id="ws-wt-menu" role="group" aria-label="Worktrees del repo" hidden></div>
+            </div>
+            <span class="path ws-path" id="ws-path"></span>
+          </div>
+
+          <div class="segmented small agents-tabs ws-tabs-sec" id="ws-sec-tabs" role="group" aria-label="Apartado del workspace" data-segmented>
+            <button type="button" aria-pressed="true" data-ws-sec="files" aria-controls="ws-sec-files">Archivos</button>
+            <button type="button" aria-pressed="false" data-ws-sec="agents" aria-controls="ws-sec-agents">Agentes <span class="agents-tab-count" id="ws-agents-count">0</span></button>
+            <button type="button" aria-pressed="false" data-ws-sec="extras" aria-controls="ws-sec-extras">Extras <span class="agents-tab-count" id="ws-extras-count"></span></button>
+          </div>
 
           <div class="ws-sections" id="ws-sections">
-            <section class="ws-sec ws-sec-files" id="ws-sec-files" aria-labelledby="ws-sec-files-toggle">
-              <div class="ws-sec-head">
-                <button type="button" class="ws-sec-toggle" id="ws-sec-files-toggle" aria-expanded="true" aria-controls="ws-sec-files-body"><span class="ws-sec-chevron" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg></span>Archivos</button>
+            <section class="ws-sec" id="ws-sec-files" aria-label="Archivos">
+              <div class="ws-sec-tools">
                 <button type="button" class="icon-btn ws-sec-btn" id="ws-files-refresh" aria-label="Volver a leer la carpeta" title="Volver a leer la carpeta"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
                 <button type="button" class="icon-btn ws-sec-btn" id="ws-files-collapse" aria-label="Plegar todas las carpetas" title="Plegar todas las carpetas"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 4 4 4 4-4M6 16l4-4 4 4"/></svg></button>
               </div>
-              <div class="ws-sec-body" id="ws-sec-files-body">
+              <div class="ws-sec-body">
                 <ul class="ws-tree" id="ws-tree" role="tree" aria-label="Archivos del workspace"></ul>
               </div>
             </section>
 
-            <section class="ws-sec ws-sec-agents" id="ws-sec-agents" aria-labelledby="ws-sec-agents-toggle">
-              <div class="ws-sec-head">
-                <button type="button" class="ws-sec-toggle" id="ws-sec-agents-toggle" aria-expanded="true" aria-controls="ws-sec-agents-body"><span class="ws-sec-chevron" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg></span>Agentes <span class="ws-sec-count" id="ws-agents-count">0</span></button>
-                <span class="ws-sec-aside" id="ws-agents-aside"></span>
-              </div>
-              <div class="ws-sec-body" id="ws-sec-agents-body">
+            <section class="ws-sec" id="ws-sec-agents" aria-label="Agentes" hidden>
+              <div class="ws-sec-body">
                 <ul class="ws-agents" id="ws-agents" aria-label="Agentes del workspace"></ul>
               </div>
             </section>
 
-            <section class="ws-sec ws-sec-extras" id="ws-sec-extras" aria-labelledby="ws-sec-extras-toggle">
-              <div class="ws-sec-head">
-                <button type="button" class="ws-sec-toggle" id="ws-sec-extras-toggle" aria-expanded="true" aria-controls="ws-sec-extras-body"><span class="ws-sec-chevron" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg></span>Extras</button>
-                <span class="ws-sec-aside" id="ws-extras-aside"></span>
+            <section class="ws-sec" id="ws-sec-extras" aria-label="Extras" hidden>
+              <div class="ws-sec-tools">
+                <p class="ws-sec-tools-note">Apagado, el orquestador no lo carga.</p>
                 <button type="button" class="icon-btn ws-sec-btn" id="ws-extras-refresh" aria-label="Volver a leer tu perfil de Claude Code" title="Volver a leer tu perfil"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
               </div>
-              <div class="ws-sec-body" id="ws-sec-extras-body">
+              <div class="ws-sec-body">
                 <div class="ws-extras" id="ws-extras"></div>
               </div>
             </section>
@@ -819,6 +826,51 @@
           <ul class="ws-recent" id="ws-recent"></ul>
         </div>
       </div>
+    </div>
+  </dialog>
+
+  <!-- Nuevo worktree: otra copia de trabajo del repo del workspace, con su propia rama y su
+       orquestador (worktree.rs). Se abre con el «+» que hay junto al nombre. -->
+  <dialog class="settings ws-dialog wt-dialog" id="wt-dialog" aria-labelledby="wt-dialog-title" aria-describedby="wt-dialog-hint">
+    <div class="settings-panel">
+      <div class="settings-head">
+        <h2 id="wt-dialog-title">Nuevo worktree</h2>
+        <button type="button" class="icon-btn outline settings-close" id="wt-dialog-close" aria-label="Cerrar" title="Cerrar">
+          <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m5 5 10 10M15 5 5 15"/></svg>
+        </button>
+      </div>
+      <form class="settings-body wt-form" id="wt-form" novalidate>
+        <p class="settings-section-hint ws-dialog-hint" id="wt-dialog-hint">Otra copia de <strong id="wt-repo"></strong> con su propia rama y su propio orquestador.</p>
+        <div class="ws-field">
+          <label class="ws-field-label" for="wt-name">Nombre</label>
+          <input type="text" id="wt-name" autocomplete="off" spellcheck="false" aria-describedby="wt-name-note">
+          <p class="wt-name-note" id="wt-name-note" hidden></p>
+        </div>
+        <div class="ws-field">
+          <span class="ws-field-label" id="wt-base-label">Parte de</span>
+          <div class="wt-base-anchor">
+            <button type="button" class="wt-base" id="wt-base" aria-haspopup="true" aria-expanded="false" aria-controls="wt-base-menu" aria-labelledby="wt-base-label wt-base-value">
+              <span class="wt-base-value" id="wt-base-value"></span>
+              <span class="wt-base-chevron" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 5 5 5-5"/></svg></span>
+            </button>
+            <div class="vault-menu wt-base-menu" id="wt-base-menu" role="group" aria-labelledby="wt-base-label" hidden></div>
+          </div>
+        </div>
+        <dl class="wt-plan" aria-live="polite">
+          <div><dt>Rama</dt><dd id="wt-branch"></dd></div>
+          <div><dt>Carpeta</dt><dd id="wt-folder"></dd></div>
+          <div id="wt-copy-row" hidden><dt>Del repo</dt><dd id="wt-copy"></dd></div>
+        </dl>
+        <button type="button" class="switch-btn wt-setup" id="wt-setup" role="switch" aria-checked="true" aria-labelledby="wt-setup-label" aria-describedby="wt-setup-cmd" hidden>
+          <span class="wt-setup-text"><span id="wt-setup-label">Ejecutar el setup de orca.yaml</span><code id="wt-setup-cmd"></code></span>
+          <span class="switch" aria-hidden="true"><span></span></span>
+        </button>
+        <p class="ws-create-error" id="wt-error" role="alert" hidden></p>
+        <div class="notes-create-actions">
+          <button type="button" class="chip" id="wt-cancel">Cancelar</button>
+          <button type="submit" class="chip notes-create-ok" id="wt-ok">Crear y abrir</button>
+        </div>
+      </form>
     </div>
   </dialog>
 
