@@ -167,6 +167,16 @@ export function createChat({
   if (feed) root.querySelector?.('.chat-view')?.setAttribute('data-feed', '');
 
   const nodes = new Map(); // pieza → su <li>
+  // Las piezas lejos del final llevan `chat-far`: solo se maquetan y se pintan cuando se ven
+  // (styles.css). Lo de cerca del final no (FAR_PX o tres alturas de la conversación, lo que
+  // sea más): con la conversación pegada al final, nada de lo que se ve cambia de alto al
+  // aparecer y bajar hasta el final cae siempre en su sitio. Una pieza se mira desde el
+  // fotograma siguiente a pintarse, cuando ya recuerda su alto (si no, mediría 160 px). `far` es
+  // la primera que no la lleva y `seen`, cuántas había en la pasada anterior.
+  const FAR_PX = 2400;
+  let far = 0;
+  let seen = 0;
+  let farFrame = 0;
   const waiting = new Map(); // id de petición de control → { resolve, reject, timer }
   let phase = feed ? 'ready' : desktop ? 'idle' : 'browser';
   let phaseDetail = '';
@@ -556,10 +566,36 @@ export function createChat({
     }
   }
 
+  function markFar() {
+    const { items } = model.state;
+    const limit = Math.min(seen, items.length);
+    const fresh = items.length > seen;
+    seen = items.length;
+    if (far < limit) {
+      // Primero se mide y luego se marca: una pieza lejana deja de maquetarse y movería las demás.
+      const end = list.offsetTop + list.offsetHeight - Math.max(FAR_PX, 3 * log.clientHeight);
+      let next = far;
+      while (next < limit) {
+        const node = nodes.get(items[next]);
+        if (node && node.offsetTop + node.offsetHeight > end) break;
+        next++;
+      }
+      for (; far < next; far++) nodes.get(items[far])?.classList.add('chat-far');
+    }
+    if (fresh && !farFrame) {
+      farFrame = requestAnimationFrame(() => {
+        farFrame = 0;
+        markFar();
+        if (stick) log.scrollTop = log.scrollHeight;
+      });
+    }
+  }
+
   function render() {
     frame = 0;
     for (const item of model.flush()) paint(item);
     markFirsts();
+    markFar();
     renderChrome();
     if (stick) log.scrollTop = log.scrollHeight;
     $('jump').hidden = stick || log.scrollHeight - log.scrollTop - log.clientHeight < 80;
@@ -730,6 +766,8 @@ export function createChat({
   function clearView() {
     model.clear();
     nodes.clear();
+    far = 0;
+    seen = 0;
     list.replaceChildren();
   }
 
@@ -1210,6 +1248,9 @@ export function createChat({
     // La carta vuelve a verse (se restauró o se cerró la actividad): al final y con el foco.
     show({ focus = true } = {}) {
       stick = true;
+      // Ya, no en el fotograma siguiente: una ventana que vuelve a la rejilla empieza arriba y
+      // maquetaría para nada las primeras piezas (las lejanas solo se maquetan si se ven).
+      log.scrollTop = log.scrollHeight;
       queueRender();
       if (focus) input.focus();
     },
@@ -1219,6 +1260,7 @@ export function createChat({
       for (const [, pending] of waiting) clearTimeout(pending.timer);
       waiting.clear();
       cancelAnimationFrame(frame);
+      cancelAnimationFrame(farFrame);
     },
     model,
     get running() {

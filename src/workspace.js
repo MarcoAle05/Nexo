@@ -79,7 +79,7 @@ export function setupLabel(view) {
   return view.code == null ? 'Falló' : `Falló · código ${view.code}`;
 }
 
-export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFiles, ask, fail, renderMarkdown, onLink = () => {}, nexo, onMode = () => {}, onChange = () => {}, waiting = () => false }) {
+export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFiles, ask, fail, renderMarkdown, onLink = () => {}, nexo, onMode = () => {}, onChange = () => {}, waiting = () => false, attention = () => ({ waiting: 0, busy: false }) }) {
   const $ = (id) => document.getElementById(id);
   const core = $('ws-core');
   const center = $('ws-center');
@@ -89,7 +89,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   const tree = $('ws-tree');
 
   let ws = null; // { path, name }
-  let list = { current: null, recent: [], parent: '' };
+  let list = { current: null, recent: [], open: [], parent: '' }; // `open`: los del panel de Agentes
   let registry = []; // agentes registrados en .nexo/agentes/
   let fresh = new Set(); // agentes recién desplegados que aún no se han visto en el registro
   let removed = new Set(); // agentes que quitó el orquestador: lo que aún llegue de ellos se ignora
@@ -178,14 +178,14 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
         icon.innerHTML = ICON.folder;
         const text = el('span', 'ws-recent-text');
         const name = el('span', 'ws-recent-name', r.name);
-        if (ws?.path === r.path) name.append(el('span', 'ws-badge', 'Abierto'));
+        if (list.open.some((o) => o.path === r.path)) name.append(el('span', 'ws-badge', 'En el panel'));
         text.append(name, el('span', 'ws-recent-path', r.path));
         paintAttention(open, text);
         open.append(icon, text);
         open.title = r.path;
         open.addEventListener('click', () => {
           modal.close();
-          if (ws?.path !== r.path) openWorkspace(r.path);
+          if (ws?.path !== r.path) enter(r.path);
           else onMode('workspace');
         });
         const forget = el('button', 'icon-btn ws-recent-forget');
@@ -194,13 +194,15 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
         forget.setAttribute('aria-label', `Quitar ${r.name} de la lista`);
         forget.title = 'Quitar de la lista (la carpeta no se toca)';
         forget.addEventListener('click', async () => {
+          if (!(await stopIfWorking(r.path, r.name, 'olvidas'))) return;
           try {
             await invoke('workspace_forget', { path: r.path });
           } catch (error) {
             return fail(error);
           }
-          if (ws?.path === r.path) leave();
           await refreshList();
+          if (ws?.path === r.path) leave();
+          else onChange(ws);
           renderRecent();
           $('ws-pick').focus();
         });
@@ -214,10 +216,52 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     if (!desktop) return list;
     try {
       list = await invoke('workspace_list');
+      list.open ??= [];
     } catch (error) {
       fail(error);
     }
     return list;
+  }
+
+  // Si el orquestador de ese workspace trabaja o espera una respuesta, pregunta y lo detiene.
+  // Devuelve si se puede seguir (no hacía nada, o el usuario aceptó y se detuvo).
+  async function stopIfWorking(path, name, verb) {
+    const state = attention(path);
+    const here = ws?.path === path && (mainState.busy || agentList().some((a) => a.state === 'active'));
+    if (!state.waiting && !state.busy && !here) return true;
+    const doing = state.waiting ? 'espera tu respuesta' : 'sigue trabajando';
+    const ok = await ask(`El orquestador de «${name}» ${doing}. Si lo ${verb} ahora, se detiene y se corta lo que esté haciendo.`, {
+      title: verb === 'quitas' ? 'Quitar workspace' : 'Olvidar workspace',
+      kind: 'warning',
+      okLabel: verb === 'quitas' ? 'Quitar y detener' : 'Olvidar y detener',
+      cancelLabel: 'Cancelar',
+    });
+    if (!ok) return false;
+    try {
+      await invoke('workspace_stop', { path });
+    } catch (error) {
+      fail(error);
+      return false;
+    }
+    return true;
+  }
+
+  // Quita un workspace del panel de Agentes: sigue en Recientes, con su sesión y sus agentes, y
+  // la carpeta no se toca. Devuelve si se quitó.
+  async function remove(path) {
+    const name = list.open.find((o) => o.path === path)?.name ?? baseName(path);
+    if (!(await stopIfWorking(path, name, 'quitas'))) return false;
+    try {
+      await invoke('workspace_close', { path });
+    } catch (error) {
+      fail(error);
+      return false;
+    }
+    await refreshList();
+    if (ws?.path === path) leave();
+    else onChange(ws);
+    announce(`${name} ya no está en el panel. Sigue en Recientes.`);
+    return true;
   }
 
   $('ws-pick').addEventListener('click', async () => {
@@ -334,7 +378,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
       button.disabled = item.missing;
       button.addEventListener('click', () => {
         closeTreeMenu();
-        if (!item.current) switchTree(item.path);
+        if (!item.current) enter(item.path);
       });
       return button;
     });
@@ -344,8 +388,9 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     (treeMenu.querySelector('[aria-current="true"]') ?? treeMenu.querySelector('button:not(:disabled)'))?.focus();
   }
 
-  // Un worktree que nexo aún no tenía en la lista se abre como cualquier carpeta elegida.
-  async function switchTree(path) {
+  // Entra en un workspace (uno del panel, un reciente, otro worktree): queda como el actual y,
+  // si no estaba, se añade al panel. Se abre como cualquier carpeta elegida.
+  async function enter(path) {
     try {
       const info = await invoke('workspace_open', { path });
       await openWorkspace(info.path);
@@ -683,7 +728,8 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     setLoading(true, `Abriendo ${baseName(path)}…`);
     loadingStep('Leyendo la carpeta');
     try {
-      const [state, setup] = await Promise.all([invoke('workspace_state', { path }), invoke('worktree_setup', { path }).catch(() => null)]);
+      // La lista se vuelve a leer: quien lo abrió (`workspace_open`) lo añadió al panel.
+      const [state, setup] = await Promise.all([invoke('workspace_state', { path }), invoke('worktree_setup', { path }).catch(() => null), refreshList()]);
       if (mine !== seq) return;
       ws = { path: state.info.path, name: state.info.name };
       // Saltar entre worktrees del mismo repo no hace parpadear el «+».
@@ -1837,6 +1883,8 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     init,
     openDialog,
     openWorkspace,
+    enter,
+    remove,
     openAgent: (task) => openKey(task ? `a:${task}` : 'main', { focus: true }),
     // Cambió qué workspaces esperan respuesta: las filas de Recientes y de la lista de worktrees
     // se ponen al día en su sitio, sin rehacer la lista (el foco no se mueve con el menú abierto).

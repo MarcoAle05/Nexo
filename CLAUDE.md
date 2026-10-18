@@ -48,13 +48,13 @@ Si `cargo` no está en el PATH de la sesión: `source ~/.cargo/env`.
 | `claude-code.md` | El chat con Claude Code: proceso, protocolo, vista, sesiones y recargas | `claude_code.rs`, `chat-model.js`, `chat.js` y sus pruebas |
 | `uso-y-registro.md` | Límites de uso y registro de agentes | `usage.rs`, `registro.rs`, `registro.js` |
 | `render.md` | Cómo pinta WebKitGTK (GPU y CPU de serie, escalera de seguridad si cae, composición entera, `drmWaitVBlank`) | `render.rs`, `main.rs`, `build.rs` |
-| `rendimiento.md` | Rendimiento de lo que se pinta en WebKitGTK | `styles.css`, `galaxy.js`, `graph.js`, `notes.js`, `render.rs` |
+| `rendimiento.md` | Rendimiento de lo que se pinta en WebKitGTK | `styles.css`, `galaxy.js`, `graph.js`, `notes.js`, `render.rs`, `card-resize.js` |
 | `skills-y-agentes.md` | Skills y agentes del vault, su órbita y la carta Agentes | `skills.rs`, `agents.rs`, `skills.js`, `agents.js` |
 | `workspace.md` | Workspaces de la vista Agentes: carpetas de proyecto, su orquestador, el registro de sus agentes, los extras, los worktrees de git, los avisos de escritorio, las pestañas y las ventanas | `workspace.rs`, `workspace_run.rs`, `worktree.rs`, `avisos.rs`, `workspace.js`, `ws-*.js` y sus pruebas, `docs/spec-avisos-workspaces.md` |
 | `galaxia.md` | La galaxia inicial (WebGL, dos lienzos, `frameFor`) | `galaxy.js` y sus pruebas |
 | `grafo-vista.md` | El grafo en canvas y la vista de notas en Markdown | `graph.js`, `note-view.js` |
 | `notas.md` | Apartado Notas: datos, editor, lienzo, zoom y escritorios | `notes.js`, `note-editor.js`, `desk-layout.js`, `desks.js`, `notas.rs` |
-| `interfaz.md` | `main.js`, barra superior, Configuración, vistas y escenas, cartas minimizadas y expandibles | `main.js`, `dom.js`, `settings.js`, `modal.js`, `index.html`, `styles.css` |
+| `interfaz.md` | `main.js`, barra superior, Configuración, vistas y escenas, cartas minimizadas y expandibles | `main.js`, `dom.js`, `settings.js`, `modal.js`, `card-resize.js`, `index.html`, `styles.css` |
 | `estilos.md` | Temas y sus tokens, tipografía, paleta, radios, contraste, anchos y alturas | `styles.css`, `index.html`, `themes.js`, `public/tema.js`, `tests/themes.test.mjs` |
 
 ## Siempre

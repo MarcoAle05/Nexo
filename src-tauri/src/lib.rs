@@ -91,6 +91,7 @@ pub fn run() {
             workspace::workspace_open,
             workspace::workspace_create,
             workspace::workspace_forget,
+            workspace::workspace_close,
             workspace::workspace_state,
             workspace::workspace_save_ui,
             workspace::workspace_set_extras,

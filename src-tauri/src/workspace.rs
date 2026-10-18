@@ -66,6 +66,10 @@ struct List {
     current: Option<PathBuf>,
     #[serde(default)]
     recent: Vec<Recent>,
+    /// Los del panel de Agentes, en su orden: entra cada uno que se abre o se crea y sale al
+    /// quitarlo (sigue en `recent`, así que `ws_root` lo sigue aceptando).
+    #[serde(default)]
+    open: Vec<PathBuf>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -83,12 +87,16 @@ pub struct WsInfo {
     /// La carpeta sigue existiendo.
     pub exists: bool,
     pub current: bool,
+    /// Agentes registrados en su `.nexo/agentes/` (solo en los del panel; en los demás, 0).
+    pub agents: usize,
 }
 
 #[derive(Serialize)]
 pub struct WsList {
     current: Option<WsInfo>,
     recent: Vec<WsInfo>,
+    /// Los del panel de Agentes, en su orden.
+    open: Vec<WsInfo>,
     /// Dónde se crean las carpetas nuevas si el usuario no elige otro sitio.
     parent: String,
 }
@@ -102,11 +110,57 @@ fn list_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 fn read_list(app: &AppHandle) -> List {
-    list_path(app)
+    let mut list: List = list_path(app)
         .ok()
         .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    migrate(&mut list);
+    list
+}
+
+/// Una lista de antes del panel no tiene `open`: el que estaba abierto pasa a estar en él. Si
+/// el usuario los quitó todos, tampoco hay actual y no vuelve.
+fn migrate(list: &mut List) {
+    if list.open.is_empty()
+        && let Some(current) = &list.current
+    {
+        list.open.push(current.clone());
+    }
+}
+
+/// Lo añade al final del panel si no estaba.
+fn add_open(list: &mut List, root: &Path) {
+    if !list.open.iter().any(|p| p == root) {
+        list.open.push(root.to_path_buf());
+    }
+}
+
+/// Lo quita del panel; si era el actual, ya no hay actual.
+fn close_open(list: &mut List, root: &Path) {
+    list.open.retain(|p| p != root);
+    if list.current.as_deref() == Some(root) {
+        list.current = None;
+    }
+}
+
+/// Deja `recent` en `RECENT_MAX` quitando los más viejos que no están en el panel: uno del
+/// panel que saliera de `recent` dejaría de pasar por `ws_root`.
+fn trim_recent(list: &mut List) {
+    let mut extra = list.recent.len().saturating_sub(RECENT_MAX);
+    let open = &list.open;
+    let mut keep = vec![true; list.recent.len()];
+    for (i, r) in list.recent.iter().enumerate().rev() {
+        if extra == 0 {
+            break;
+        }
+        if !open.contains(&r.path) {
+            keep[i] = false;
+            extra -= 1;
+        }
+    }
+    let mut flags = keep.into_iter();
+    list.recent.retain(|_| flags.next().unwrap_or(true));
 }
 
 fn write_list(app: &AppHandle, list: &List) -> Result<(), String> {
@@ -131,6 +185,7 @@ fn info_of(r: &Recent, current: Option<&Path>) -> WsInfo {
         opened: r.opened,
         exists: r.path.is_dir(),
         current: current.is_some_and(|c| c == r.path),
+        agents: 0,
     }
 }
 
@@ -200,8 +255,9 @@ pub(crate) fn remember(app: &AppHandle, root: &Path) -> Result<WsInfo, String> {
         opened: now_ms(),
     };
     list.recent.insert(0, recent.clone());
-    list.recent.truncate(RECENT_MAX);
     list.current = Some(root.to_path_buf());
+    add_open(&mut list, root);
+    trim_recent(&mut list);
     write_list(app, &list)?;
     Ok(info_of(&recent, Some(root)))
 }
@@ -225,6 +281,19 @@ pub fn workspace_list(app: AppHandle) -> WsList {
             .find(|r| Some(r.path.as_path()) == current)
             .map(|r| info_of(r, current)),
         recent: list.recent.iter().map(|r| info_of(r, current)).collect(),
+        open: list
+            .open
+            .iter()
+            .filter_map(|p| list.recent.iter().find(|r| &r.path == p))
+            .map(|r| WsInfo {
+                agents: if r.path.is_dir() {
+                    agents(&r.path).len()
+                } else {
+                    0
+                },
+                ..info_of(r, current)
+            })
+            .collect(),
         parent,
     }
 }
@@ -265,7 +334,7 @@ pub fn workspace_create(app: AppHandle, parent: String, name: String) -> Result<
     remember(&app, &root)
 }
 
-/// Quita un workspace de la lista (la carpeta no se toca).
+/// Quita un workspace de la lista (la carpeta no se toca), también del panel.
 #[tauri::command]
 pub fn workspace_forget(app: AppHandle, path: String) -> Result<(), String> {
     let target = Path::new(&path)
@@ -273,9 +342,20 @@ pub fn workspace_forget(app: AppHandle, path: String) -> Result<(), String> {
         .unwrap_or_else(|_| PathBuf::from(&path));
     let mut list = read_list(&app);
     list.recent.retain(|r| r.path != target);
-    if list.current.as_deref() == Some(target.as_path()) {
-        list.current = None;
-    }
+    close_open(&mut list, &target);
+    write_list(&app, &list)
+}
+
+/// Quita un workspace del panel de Agentes. Sigue en Recientes (y en `ws_root`), con su sesión
+/// y sus agentes; la carpeta no se toca. Si su orquestador trabajaba, la interfaz lo ha parado
+/// antes con `workspace_stop`.
+#[tauri::command]
+pub fn workspace_close(app: AppHandle, path: String) -> Result<(), String> {
+    let target = Path::new(&path)
+        .canonicalize()
+        .unwrap_or_else(|_| PathBuf::from(&path));
+    let mut list = read_list(&app);
+    close_open(&mut list, &target);
     write_list(&app, &list)
 }
 
@@ -1579,6 +1659,91 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         root.canonicalize().unwrap()
+    }
+
+    fn recent(path: &str) -> Recent {
+        Recent {
+            path: PathBuf::from(path),
+            name: folder_name(Path::new(path)),
+            opened: 0,
+        }
+    }
+
+    #[test]
+    fn el_panel_guarda_los_abiertos_en_su_orden_y_quitar_no_toca_recientes() {
+        let mut list = List::default();
+        for p in ["/w/a", "/w/b", "/w/a"] {
+            add_open(&mut list, Path::new(p));
+        }
+        assert_eq!(list.open, [PathBuf::from("/w/a"), PathBuf::from("/w/b")]);
+
+        list.recent = vec![recent("/w/b"), recent("/w/a")];
+        list.current = Some(PathBuf::from("/w/b"));
+        close_open(&mut list, Path::new("/w/b"));
+        assert_eq!(list.open, [PathBuf::from("/w/a")]);
+        assert_eq!(list.current, None);
+        assert_eq!(
+            list.recent.len(),
+            2,
+            "quitar del panel deja el workspace en Recientes"
+        );
+
+        // Quitar uno que no es el actual no cambia el actual.
+        list.current = Some(PathBuf::from("/w/a"));
+        close_open(&mut list, Path::new("/w/b"));
+        assert_eq!(list.current.as_deref(), Some(Path::new("/w/a")));
+    }
+
+    #[test]
+    fn una_lista_de_antes_del_panel_conserva_el_abierto() {
+        let mut old: List = serde_json::from_str(
+            r#"{"current":"/w/a","recent":[{"path":"/w/a","name":"a","opened":1}]}"#,
+        )
+        .unwrap();
+        migrate(&mut old);
+        assert_eq!(old.open, [PathBuf::from("/w/a")]);
+
+        // Los quitó todos: sin actual, no vuelve ninguno.
+        let mut empty: List = serde_json::from_str(
+            r#"{"current":null,"recent":[{"path":"/w/a","name":"a","opened":1}],"open":[]}"#,
+        )
+        .unwrap();
+        migrate(&mut empty);
+        assert!(empty.open.is_empty());
+    }
+
+    #[test]
+    fn recortar_recientes_nunca_deja_fuera_uno_del_panel() {
+        let mut list = List::default();
+        // Del más nuevo al más viejo; el más viejo de todos está en el panel.
+        list.recent = (0..RECENT_MAX + 3)
+            .map(|i| recent(&format!("/w/{i}")))
+            .collect();
+        let oldest = PathBuf::from(format!("/w/{}", RECENT_MAX + 2));
+        list.open = vec![oldest.clone()];
+        trim_recent(&mut list);
+        assert_eq!(list.recent.len(), RECENT_MAX);
+        assert!(list.recent.iter().any(|r| r.path == oldest));
+        assert_eq!(
+            list.recent[0].path,
+            PathBuf::from("/w/0"),
+            "los nuevos se quedan"
+        );
+        assert!(
+            !list
+                .recent
+                .iter()
+                .any(|r| r.path == Path::new(&format!("/w/{}", RECENT_MAX + 1)))
+        );
+
+        // Con todos en el panel no se quita ninguno.
+        let mut full = List::default();
+        full.recent = (0..RECENT_MAX + 2)
+            .map(|i| recent(&format!("/p/{i}")))
+            .collect();
+        full.open = full.recent.iter().map(|r| r.path.clone()).collect();
+        trim_recent(&mut full);
+        assert_eq!(full.recent.len(), RECENT_MAX + 2);
     }
 
     #[test]

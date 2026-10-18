@@ -16,6 +16,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { ask, open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
+import { createCardHold } from './card-resize.js';
 import { createChat, mountChat } from './chat.js';
 import { reconcile } from './dom.js';
 import { createAgents } from './agents.js';
@@ -101,6 +102,19 @@ try {
   if (localStorage.getItem('nexo.agentsMode') === 'workspace') agentsMode = 'workspace';
 } catch {}
 
+// Lo de dentro de las cartas y del centro no se maqueta en cada fotograma de la transición:
+// toma su medida final y se recorta (card-resize.js).
+const holdCards = createCardHold({
+  layout: $('layout'),
+  stage: $('stage'),
+  center: [$('ws-center'), $('agent-log')],
+  cores: () => [...document.querySelectorAll('#layout > .panel > .panel-core')],
+  // Con el grafo plegado no se puede usar su barra ni el enfoque. `inert` vuelve a resolver el
+  // estilo de todo lo que lleva el centro (con un workspace abierto, unos 60 ms): se pone y se
+  // quita al acabar la transición, cuando ya no se mueve nada.
+  onSettle: () => ($('stage').inert = expanded.left || expanded.right),
+});
+
 function renderExpanded() {
   const layout = $('layout');
   // Minimizada, una carta no puede estar expandida.
@@ -140,8 +154,7 @@ function renderExpanded() {
     b.setAttribute('aria-label', `${on ? 'Contraer' : 'Expandir'} ${what}`);
     b.title = `${on ? 'Contraer' : 'Expandir'} ${what}`;
   });
-  // Con el grafo plegado no se puede usar su barra ni el enfoque.
-  $('stage').inert = expanded.left || expanded.right;
+  holdCards();
 }
 
 // WebKitGTK deja rastros de 1 px (el borde de la carta en cada fotograma de la transición) en
@@ -1750,6 +1763,7 @@ workspace = createWorkspace({
   onMode: setAgentsMode,
   onChange: renderWorkspaceSummary,
   waiting: (path) => attention.waiting(path),
+  attention: (path) => attention.get(path),
 });
 
 function setAgentsMode(mode) {
@@ -1764,26 +1778,77 @@ function setAgentsMode(mode) {
   if (changed) {
     revealLeft();
     // El foco sigue al panel que aparece: el botón para volver o la entrada al workspace.
-    requestAnimationFrame(() => (agentsMode === 'workspace' ? $('ws-back') : $('ws-entry')).focus());
+    requestAnimationFrame(() => (agentsMode === 'workspace' ? $('ws-back') : entryToFocus()).focus());
   }
 }
 
-$('ws-entry').addEventListener('click', (event) => {
-  if (workspace.current) setAgentsMode('workspace');
-  else workspace.openDialog(event.currentTarget);
-});
+// Sin ninguno en el panel, la entrada abre el menú de carpetas; con alguno, lo abren el «+» de
+// la cabecera y la fila del final.
+for (const id of ['ws-entry', 'ws-add', 'ws-add-row']) $(id).addEventListener('click', (event) => workspace.openDialog(event.currentTarget));
 
-// El panel de Agentes de nexo enseña también el workspace: su entrada y, con su nombre, los
-// subapartados de sus agentes (los que desplegó el orquestador) y de sus skills.
+// Al volver al panel de nexo, el foco va al workspace actual (o a la entrada, sin ninguno).
+const entryToFocus = () => $('ws-list').querySelector('.ws-entry[aria-current="true"]') ?? $('ws-list').querySelector('.ws-entry') ?? $('ws-entry');
+
+const agentCount = (n) => `${n + 1} ${n ? 'agentes' : 'agente'}`;
+
+// Los workspaces del panel (`open` de workspace.js, en su orden): cada uno con su × para quitarlo
+// del panel, y el actual con su actividad. Sin el punto de «espera tu respuesta» (la entrada del
+// panel no lo lleva, lo decidió el usuario). La firma no lleva lo que cambia a menudo: eso se
+// pone en su sitio y la fila no se rehace (el foco no se pierde).
+function renderWorkspaceEntries(ws, summary) {
+  const panel = workspace?.list.open ?? [];
+  const box = $('ws-list');
+  $('ws-entry').hidden = panel.length > 0;
+  $('ws-list-head').hidden = $('ws-add-row').hidden = panel.length === 0;
+  reconcile(box, panel, {
+    key: (w) => w.path,
+    sig: (w) => [w.name, w.exists].join('|'),
+    build: (w) => {
+      const li = document.createElement('li');
+      li.className = 'ws-entry-row';
+      li.innerHTML = `<button type="button" class="ws-entry"><span class="ws-entry-icon" aria-hidden="true">${$('ws-entry').querySelector('.ws-entry-icon').innerHTML}</span><span class="ws-entry-text"><span class="ws-entry-name"><span class="ws-entry-name-text"></span></span><span class="ws-entry-meta"></span></span></button><button type="button" class="icon-btn ws-entry-remove" title="Quitar del panel (la carpeta no se toca)"><svg width="13" height="13" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/></svg></button>`;
+      li.querySelector('.ws-entry-name-text').textContent = w.name;
+      const main = li.querySelector('.ws-entry');
+      main.disabled = !w.exists;
+      main.addEventListener('click', () => (workspace.current?.path === w.path ? setAgentsMode('workspace') : workspace.enter(w.path)));
+      const remove = li.querySelector('.ws-entry-remove');
+      remove.setAttribute('aria-label', `Quitar ${w.name} del panel`);
+      remove.addEventListener('click', async () => {
+        const at = [...box.children].indexOf(li);
+        if (!(await workspace.remove(w.path))) return;
+        const rows = [...box.children];
+        (rows[Math.min(at, rows.length - 1)]?.querySelector('.ws-entry') ?? $('ws-entry')).focus();
+      });
+      return li;
+    },
+  });
+  const agentsNow = summary?.agents ?? [];
+  const now = summary?.main ? activity([summary.main, ...agentsNow]) : '';
+  for (const li of box.children) {
+    const w = panel.find((o) => o.path === li.dataset.key);
+    if (!w) continue;
+    const current = ws?.path === w.path;
+    const main = li.querySelector('.ws-entry');
+    const meta = !w.exists ? 'La carpeta ya no está' : current ? `${agentCount(agentsNow.length)}${now ? ` · ${now}` : ''}` : agentCount(w.agents ?? 0);
+    li.querySelector('.ws-entry-meta').textContent = meta;
+    const name = li.querySelector('.ws-entry-name');
+    let badge = name.querySelector('.ws-badge');
+    if (current && !badge) name.append(Object.assign(document.createElement('span'), { className: 'ws-badge', textContent: 'Actual' }));
+    else if (!current) badge?.remove();
+    if (current) main.setAttribute('aria-current', 'true');
+    else main.removeAttribute('aria-current');
+    main.title = w.path;
+    main.setAttribute('aria-label', `Workspace ${w.name}${current ? ', el actual' : ''}: abrirlo. ${meta}`);
+  }
+}
+
+// El panel de Agentes de nexo enseña también los workspaces: su lista y, con el nombre del
+// actual, los subapartados de sus agentes (los que desplegó el orquestador) y de sus skills.
 function renderWorkspaceSummary(ws, summary = workspace?.summary()) {
   // Abrir, cambiar o dejar un workspace cambia lo que hay en pantalla.
   syncWatch();
-  $('ws-entry-name').textContent = ws ? ws.name : 'Abre o crea una carpeta de proyecto';
-  $('ws-entry-name').title = ws?.path ?? '';
+  renderWorkspaceEntries(ws, summary);
   const agentsNow = summary?.agents ?? [];
-  const now = summary?.main ? activity([summary.main, ...agentsNow]) : '';
-  $('ws-entry-meta').textContent = ws ? `${agentsNow.length + 1} ${agentsNow.length ? 'agentes' : 'agente'}${now ? ` · ${now}` : ''}` : '';
-  $('ws-entry').setAttribute('aria-label', ws ? `Workspace ${ws.name}: abrirlo${$('ws-entry-meta').textContent ? `. ${$('ws-entry-meta').textContent}` : ''}` : 'Workspace: abrir o crear una carpeta de proyecto');
 
   const label = (id, text, count) => {
     const h = $(id);

@@ -362,15 +362,33 @@
             </div>
           </div>
 
-          <button type="button" class="ws-entry" id="ws-entry">
-            <span class="ws-entry-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/></svg></span>
-            <span class="ws-entry-text">
-              <span class="ws-entry-label">Workspace</span>
-              <span class="ws-entry-name" id="ws-entry-name">Abre o crea una carpeta de proyecto</span>
-              <span class="ws-entry-meta" id="ws-entry-meta"></span>
-            </span>
-            <span class="ws-entry-chevron" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg></span>
-          </button>
+          <!-- Los workspaces del panel (main.js los pinta en #ws-list): se quitan con su × y se
+               agregan con el «+» o la fila del final. Sin ninguno, solo la entrada de abajo. -->
+          <div class="ws-entries" id="ws-entries">
+            <div class="ws-list-head" id="ws-list-head" hidden>
+              <span class="ws-list-label" id="ws-list-label">Workspaces</span>
+              <button type="button" class="icon-btn outline ws-wt-add ws-add" id="ws-add" aria-label="Agregar workspace" title="Agregar workspace">
+                <span class="ws-wt-add-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></span>
+              </button>
+            </div>
+            <ul class="ws-list" id="ws-list" aria-labelledby="ws-list-label"></ul>
+            <button type="button" class="ws-entry ws-entry-add" id="ws-add-row" hidden>
+              <span class="ws-entry-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></span>
+              <span class="ws-entry-text">
+                <span class="ws-entry-name">Agregar workspace</span>
+                <span class="ws-entry-meta">Elige o crea otra carpeta</span>
+              </span>
+            </button>
+            <button type="button" class="ws-entry" id="ws-entry">
+              <span class="ws-entry-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/></svg></span>
+              <span class="ws-entry-text">
+                <span class="ws-entry-label">Workspace</span>
+                <span class="ws-entry-name" id="ws-entry-name">Abre o crea una carpeta de proyecto</span>
+                <span class="ws-entry-meta" id="ws-entry-meta"></span>
+              </span>
+              <span class="ws-entry-chevron" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m8 5 5 5-5 5"/></svg></span>
+            </button>
+          </div>
 
           <div class="segmented small agents-tabs" role="group" aria-label="Apartado de agentes" data-segmented>
             <button type="button" aria-pressed="true" data-agents-tab="skills">Skills <span class="agents-tab-count" id="skills-count">0</span></button>
