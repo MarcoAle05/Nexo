@@ -1318,7 +1318,14 @@ kbd {
 .chat-empty .empty-text { max-width: 32ch; }
 .chat-list { display: flex; flex-direction: column; gap: 14px; margin: 0; padding: 0; list-style: none; }
 .chat-list:empty { display: none; }
-.chat-item { min-width: 0; }
+/* Las piezas lejos del final (`chat-far`, chat.js) solo se maquetan y se pintan cuando se ven:
+   una conversación larga no se vuelve a maquetar entera cada vez que cambia el ancho de su
+   ventana o de la carta (abrir, minimizar o cerrar ventanas, minimizar o expandir cartas). Cada
+   pieza recuerda su alto desde que se pinta (`contain-intrinsic-size: auto`): sin eso, la que
+   pasa a lejana sin haberlo recordado mediría 160 px y la conversación dejaría de estar al
+   final. Con el foco dentro se pinta siempre: `content-visibility` recortaría su anillo. */
+.chat-item { min-width: 0; contain-intrinsic-size: none auto 160px; }
+.chat-item.chat-far:not(:focus-within) { content-visibility: auto; }
 .chat-item[hidden] { display: none; }
 
 /* Mensaje del usuario: a la derecha, en su recuadro. */
@@ -2212,6 +2219,11 @@ html, body { overflow: hidden; }
 .panel, .stage {
   transition: flex-grow 520ms var(--ease), flex-basis 520ms var(--ease), margin 520ms var(--ease), opacity 320ms var(--ease);
 }
+/* Mientras cambian de ancho, lo de dentro ya tiene su medida final (card-resize.js) y aquí se
+   recorta. El centro va en su propia capa: si el escenario se mueve (la carta izquierda), la
+   GPU lo coloca sin volver a pintarlo. */
+.layout.is-holding > .panel, .stage.is-holding { overflow: clip; }
+.stage.is-holding > :is(#ws-center, #agent-log) { will-change: transform; }
 @media (min-width: 768px) {
 .layout.expanded .stage {
   flex: 0 1 0px;
@@ -2221,7 +2233,6 @@ html, body { overflow: hidden; }
   opacity: 0;
   overflow: hidden;
 }
-.layout.expanded .stage * { pointer-events: none; }
 .layout.expanded .panel { flex-grow: 0; }
 .layout.expand-left #sources-panel { flex: 999 1 var(--left-w); }
 .layout.expand-right #terminal-panel { flex: 999 1 var(--right-w); }

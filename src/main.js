@@ -16,6 +16,7 @@ import { getCurrentWebview } from '@tauri-apps/api/webview';
 import { ask, open } from '@tauri-apps/plugin-dialog';
 import { openUrl } from '@tauri-apps/plugin-opener';
 
+import { createCardHold } from './card-resize.js';
 import { createChat, mountChat } from './chat.js';
 import { reconcile } from './dom.js';
 import { createAgents } from './agents.js';
@@ -101,6 +102,19 @@ try {
   if (localStorage.getItem('nexo.agentsMode') === 'workspace') agentsMode = 'workspace';
 } catch {}
 
+// Lo de dentro de las cartas y del centro no se maqueta en cada fotograma de la transición:
+// toma su medida final y se recorta (card-resize.js).
+const holdCards = createCardHold({
+  layout: $('layout'),
+  stage: $('stage'),
+  center: [$('ws-center'), $('agent-log')],
+  cores: () => [...document.querySelectorAll('#layout > .panel > .panel-core')],
+  // Con el grafo plegado no se puede usar su barra ni el enfoque. `inert` vuelve a resolver el
+  // estilo de todo lo que lleva el centro (con un workspace abierto, unos 60 ms): se pone y se
+  // quita al acabar la transición, cuando ya no se mueve nada.
+  onSettle: () => ($('stage').inert = expanded.left || expanded.right),
+});
+
 function renderExpanded() {
   const layout = $('layout');
   // Minimizada, una carta no puede estar expandida.
@@ -140,8 +154,7 @@ function renderExpanded() {
     b.setAttribute('aria-label', `${on ? 'Contraer' : 'Expandir'} ${what}`);
     b.title = `${on ? 'Contraer' : 'Expandir'} ${what}`;
   });
-  // Con el grafo plegado no se puede usar su barra ni el enfoque.
-  $('stage').inert = expanded.left || expanded.right;
+  holdCards();
 }
 
 // WebKitGTK deja rastros de 1 px (el borde de la carta en cada fotograma de la transición) en
