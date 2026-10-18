@@ -3612,6 +3612,27 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .ws-entry-meta { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; }
 .ws-entry-meta:empty { display: none; }
 .ws-entry-chevron { display: flex; color: var(--faint); }
+/* Los workspaces del panel (main.js): cabecera con su «+», una fila por workspace con su × dentro
+   de la tarjeta y, al final, «Agregar workspace». Sin ninguno solo se ve la entrada de arriba. */
+.ws-entries { flex-shrink: 0; display: flex; flex-direction: column; gap: 8px; }
+.ws-entries > [hidden] { display: none; }
+.ws-list-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.ws-list-label { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); }
+/* Con muchos, la lista se desplaza: cuatro filas y media a la vista. */
+.ws-list { display: flex; flex-direction: column; gap: 8px; max-height: 324px; margin: 0; padding: 0; list-style: none; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(var(--ink-rgb), 0.14) transparent; }
+.ws-list:empty { display: none; }
+.ws-entry-row { position: relative; }
+.ws-entry-row > .ws-entry { width: 100%; grid-template-columns: 40px minmax(0, 1fr) 36px; padding-right: 8px; }
+.ws-entry-row > .ws-entry:disabled { opacity: 0.6; }
+.ws-entry-row .ws-entry-name { display: flex; align-items: center; gap: 8px; }
+.ws-entry-name-text { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* El × va encima de la tarjeta, en el hueco de su última columna (no puede ir dentro del botón). */
+.icon-btn.ws-entry-remove { position: absolute; top: 50%; right: 8px; translate: 0 -50%; }
+.ws-entry.ws-entry-add { grid-template-columns: 40px minmax(0, 1fr); border-style: dashed; background: transparent; }
+.ws-entry-add .ws-entry-icon { color: var(--dim); }
+@media (hover: hover) {
+  .ws-entry.ws-entry-add:hover .ws-entry-icon { color: var(--fg); }
+}
 .ws-sub-label { margin-top: 18px; }
 .ws-sub-label[hidden], .ws-sub-empty[hidden] { display: none; }
 .ws-sub-count { color: var(--faint); font-weight: 500; }
@@ -4107,9 +4128,9 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .ws-recent-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ws-recent-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 13.5px; font-weight: 500; }
 .ws-recent-path { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--mono); font-size: 11.5px; color: var(--dim); }
-.icon-btn.ws-recent-forget { width: 36px; height: 36px; border-radius: var(--r-sm); color: var(--faint); transition-property: transform, background-color, color; }
+.icon-btn:is(.ws-recent-forget, .ws-entry-remove) { width: 36px; height: 36px; border-radius: var(--r-sm); color: var(--faint); transition-property: transform, background-color, color; }
 @media (hover: hover) {
-  .icon-btn.ws-recent-forget:hover { background: rgba(var(--ink-rgb), 0.08); color: var(--fg); }
+  .icon-btn:is(.ws-recent-forget, .ws-entry-remove):hover { background: rgba(var(--ink-rgb), 0.08); color: var(--fg); }
 }
 @media (max-width: 520px) {
   .ws-choices { grid-template-columns: minmax(0, 1fr); }
