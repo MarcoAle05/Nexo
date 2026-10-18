@@ -3733,6 +3733,18 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
   .ws-state[data-state="active"] { animation: breathe 1.8s var(--ease) infinite; }
 }
 
+/* Un workspace que espera tu respuesta (ws-attention.js): el punto lleva la forma y el color del
+   estado «Esperando respuesta» de las pestañas (anillo con su centro, --accent-soft) y nunca va
+   solo: en Recientes y en la lista de worktrees, con el texto; en el botón Agentes, con su
+   nombre accesible. Sin animación: se queda hasta que se contesta. */
+.ws-attn { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; font-size: 11.5px; font-weight: 500; color: var(--fg); white-space: nowrap; }
+.ws-attn-dot, .views-attn { flex-shrink: 0; width: 10px; height: 10px; border-radius: var(--r-full); border: 2px solid var(--accent-soft); background: radial-gradient(circle, var(--accent-soft) 0 1.6px, transparent 2.2px); }
+.segmented.views button { position: relative; }
+.views-attn { position: absolute; top: 6px; right: 9px; pointer-events: none; }
+.views-attn[hidden] { display: none; }
+/* Sobre el relleno de la vista elegida el anillo se separa con el tono del botón. */
+.segmented.views button[aria-pressed="true"] .views-attn { box-shadow: 0 0 0 2px var(--bg); background-color: var(--bg); }
+
 /* Agentes de la carta. */
 .ws-agents { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
 .ws-agent-main {

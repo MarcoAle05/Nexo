@@ -28,6 +28,7 @@ import { commandFor, createSkills } from './skills.js';
 import { createSettings } from './settings.js';
 import { currentTheme, onTheme } from './themes.js';
 import { activity, createWorkspace } from './workspace.js';
+import { agentsButtonLabel, createAttention, createWatch, watchedPath } from './ws-attention.js';
 import { formatTokens } from './registro.js';
 import { STATE_LABEL as AGENT_STATE } from './ws-stream.js';
 
@@ -1678,6 +1679,53 @@ const agentLog = createAgentLog({
   fail,
 });
 
+// ---------------------------------------------------------------- atención de los workspaces
+// Un workspace cuyo orquestador o uno de sus agentes espera una respuesta (un permiso, una
+// pregunta o un plan) lleva un punto aunque no se esté mirando: en el botón Agentes, en
+// Recientes y en la lista de worktrees (ws-attention.js). El backend emite el evento global
+// `workspace-attention` y, para no avisar al escritorio de lo que ya se ve, se le dice qué
+// workspace hay en pantalla y si la ventana tiene el foco, solo cuando cambia.
+const attention = createAttention();
+const agentsButton = document.querySelector('.segmented.views [data-view="agentes"]');
+const agentsDot = document.createElement('span');
+agentsDot.className = 'views-attn';
+agentsDot.setAttribute('aria-hidden', 'true');
+agentsDot.hidden = true;
+agentsButton.append(agentsDot);
+let windowFocused = document.hasFocus();
+const watch = createWatch((args) => invoke('workspace_watch', args).catch(() => {}));
+
+function renderAttention() {
+  const label = agentsButtonLabel(attention.count());
+  agentsDot.hidden = !label;
+  if (label) agentsButton.setAttribute('aria-label', label);
+  else agentsButton.removeAttribute('aria-label');
+  workspace?.attentionChanged();
+}
+
+function syncWatch() {
+  if (!desktop) return;
+  watch({ path: watchedPath({ view, mode: agentsMode, path: workspace?.current?.path }), focused: windowFocused });
+}
+
+if (desktop) {
+  // El estado de todos se pide con el oyente ya puesto: así no se pierde un cambio entre los dos.
+  listen('workspace-attention', ({ payload }) => {
+    if (attention.set(payload)) renderAttention();
+  })
+    .then(() => invoke('workspace_attention'))
+    .then((list) => attention.load(list) && renderAttention())
+    .catch(() => {});
+  window.addEventListener('focus', () => {
+    windowFocused = true;
+    syncWatch();
+  });
+  window.addEventListener('blur', () => {
+    windowFocused = false;
+    syncWatch();
+  });
+}
+
 // ---------------------------------------------------------------- workspace
 // La vista Agentes en modo workspace: una carpeta de proyecto con su orquestador y sus agentes
 // (workspace.js). Nexo sigue en la carta derecha y también sale en la lista de agentes.
@@ -1701,6 +1749,7 @@ workspace = createWorkspace({
   },
   onMode: setAgentsMode,
   onChange: renderWorkspaceSummary,
+  waiting: (path) => attention.waiting(path),
 });
 
 function setAgentsMode(mode) {
@@ -1727,6 +1776,8 @@ $('ws-entry').addEventListener('click', (event) => {
 // El panel de Agentes de nexo enseña también el workspace: su entrada y, con su nombre, los
 // subapartados de sus agentes (los que desplegó el orquestador) y de sus skills.
 function renderWorkspaceSummary(ws, summary = workspace?.summary()) {
+  // Abrir, cambiar o dejar un workspace cambia lo que hay en pantalla.
+  syncWatch();
   $('ws-entry-name').textContent = ws ? ws.name : 'Abre o crea una carpeta de proyecto';
   $('ws-entry-name').title = ws?.path ?? '';
   const agentsNow = summary?.agents ?? [];
@@ -1865,6 +1916,7 @@ syncGraphActive = () => {
   galaxy.setActive(scene === 'galaxia' && open);
   agentLog.activate(scene === 'registro' && open);
   workspace?.setVisible(scene === 'workspace');
+  syncWatch();
 };
 document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
 {

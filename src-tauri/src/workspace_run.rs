@@ -7,7 +7,8 @@
 //! - Cada workspace tiene su proceso, su historial en memoria y a quién se lo manda. Al
 //!   cambiar de workspace la interfaz se desconecta (`workspace_detach`): si el orquestador
 //!   no está haciendo nada se cierra (la sesión se retoma al volver) y, si está trabajando, se
-//!   cierra cuando termine él y sus agentes en segundo plano.
+//!   cierra cuando termine él, sus agentes en segundo plano y el turno que Claude Code abre
+//!   solo al acabar un agente.
 //! - Al leer la salida, cada `task_started` de un subagente se registra en
 //!   `.nexo/agentes/` (`workspace::register_task`): pase lo que pase en la interfaz, todo
 //!   agente desplegado queda en su workspace.
@@ -15,6 +16,9 @@
 //!   lee de las transcripciones de Claude Code y se le repite a la interfaz (`history`).
 //! - Lo que el orquestador sabe de nexo va en `--append-system-prompt` y en una skill de un
 //!   plugin propio cargado con `--plugin-dir` (fuera de la carpeta del usuario).
+//! - El lector lleva también lo que espera respuesta (los permisos sin contestar) y si hay
+//!   trabajo: cada cambio sale en el evento global `workspace-attention` (lo oye la interfaz
+//!   esté donde esté) y lo que pide o termina avisa al escritorio (`avisos.rs`).
 
 use std::collections::HashMap;
 use std::fs;
@@ -27,7 +31,9 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use serde_json::{Value, json};
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::avisos::{self, Mirando, Suceso};
 
 use crate::claude_code::{
     BACKLOG_MAX, ChatEvent, ChatOptions, INHERITED_ENV, find_claude, keep_in_backlog, option_args,
@@ -48,6 +54,65 @@ struct Live {
     background: AtomicUsize,
     /// La interfaz se fue a otro workspace: cerrar en cuanto no quede nada en marcha.
     stop_when_idle: AtomicBool,
+    /// Peticiones `can_use_tool` sin contestar, por `request_id`.
+    pending: Mutex<HashMap<String, Pending>>,
+    /// El último `result` fue un error.
+    failed: AtomicBool,
+    /// Terminó una tarea en segundo plano y Claude Code va a empezar solo otro turno: entre el
+    /// `background_tasks_changed` vacío y su `init` no está libre (no se avisa dos veces).
+    follow_up: AtomicBool,
+    /// Lo último que se contó a la interfaz (`workspace-attention`).
+    told: Mutex<Attention>,
+    /// nexo lo cerró a propósito: lo que llegue después no avisa y el final no es una caída.
+    closed: AtomicBool,
+}
+
+/// Una petición sin contestar: quién la hace (el `agent_id`; sin él, el orquestador) y con qué
+/// herramienta. Nunca su entrada.
+#[derive(Debug, Clone)]
+struct Pending {
+    agent: Option<String>,
+    tool: String,
+}
+
+/// El estado de atención de un workspace: cuántas peticiones esperan respuesta y si hay
+/// trabajo en marcha.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Attention {
+    waiting: usize,
+    busy: bool,
+}
+
+impl Attention {
+    fn free(&self) -> bool {
+        !self.busy && self.waiting == 0
+    }
+}
+
+/// Lo que se emite en `workspace-attention` (y devuelve `workspace_attention`).
+#[derive(Debug, Clone, Serialize)]
+pub struct WsAttention {
+    path: String,
+    waiting: usize,
+    busy: bool,
+}
+
+fn tell(app: &AppHandle, root: &Path, a: Attention) {
+    let event = WsAttention {
+        path: root.display().to_string(),
+        waiting: a.waiting,
+        busy: a.busy,
+    };
+    if let Err(e) = app.emit("workspace-attention", event) {
+        log::warn!("No se pudo emitir workspace-attention: {e}");
+    }
+}
+
+/// Lo que el lector cuenta de cada línea: un estado nuevo para la interfaz o algo que avisar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Cambio {
+    Estado(Attention),
+    Suceso(Suceso),
 }
 
 struct Proc {
@@ -76,6 +141,9 @@ struct Run {
 #[derive(Default)]
 pub struct WorkspaceRuns {
     runs: Mutex<HashMap<PathBuf, Run>>,
+    /// Qué workspace tiene la interfaz en pantalla y si la ventana tiene el foco
+    /// (`workspace_watch`): de eso no se avisa.
+    watch: Mutex<Mirando>,
 }
 
 #[derive(Serialize)]
@@ -86,11 +154,18 @@ pub struct WsStarted {
     applied: Extras,
 }
 
-fn stop(proc: Option<Proc>) {
-    if let Some(mut p) = proc {
-        let _ = p.child.kill();
-        let _ = p.child.wait();
+/// Cierra el proceso. Si seguía vivo, lo cerró nexo a propósito: no es una caída, lo que quede
+/// por leer ya no avisa y el workspace deja de esperar (devuelve su estado nuevo, si cambió,
+/// para contárselo a la interfaz). Uno que ya había terminado lo cuenta su lector.
+fn stop(proc: Option<Proc>) -> Option<Attention> {
+    let mut p = proc?;
+    let was_alive = matches!(p.child.try_wait(), Ok(None));
+    if was_alive {
+        p.live.closed.store(true, Ordering::Relaxed);
     }
+    let _ = p.child.kill();
+    let _ = p.child.wait();
+    if was_alive { settle(&p.live) } else { None }
 }
 
 fn alive(proc: &mut Option<Proc>) -> bool {
@@ -606,23 +681,94 @@ pub(crate) fn history(projects: &Path, session: &str, agents: &[RegAgent]) -> Ve
 
 // ---------------------------------------------------------------- lector
 
-/// Lo que el lector tiene que mirar de cada línea: los agentes nuevos se registran y los
-/// turnos y tareas en segundo plano dicen si el orquestador está haciendo algo.
-fn watch_line(line: &str, live: &Live, on_task: &dyn Fn(&Value)) {
+/// Lo que el lector tiene que mirar de cada línea: los agentes nuevos se registran, los
+/// turnos y tareas en segundo plano dicen si el orquestador está haciendo algo y las
+/// peticiones de permiso, si espera respuesta. Devuelve la petición si es nueva.
+fn watch_line(line: &str, live: &Live, on_task: &dyn Fn(&Value)) -> Option<Suceso> {
     let head = &line[..line.len().min(96)];
-    if head.starts_with(r#"{"type":"result""#) {
+    if let Some(result) = turn_result(line) {
         live.turn.store(false, Ordering::Relaxed);
+        live.follow_up.store(false, Ordering::Relaxed);
+        live.failed
+            .store(result["is_error"] == true, Ordering::Relaxed);
     } else if head.starts_with(r#"{"type":"system","subtype":"init""#) {
         live.turn.store(true, Ordering::Relaxed);
+        live.follow_up.store(false, Ordering::Relaxed);
+    } else if head.starts_with(r#"{"type":"control_request""#) {
+        return asked(line, live);
+    } else if head.starts_with(r#"{"type":"control_cancel_request""#) {
+        if let Ok(v) = serde_json::from_str::<Value>(line) {
+            forget(live, v["request_id"].as_str());
+        }
     } else if head.contains(r#""subtype":"task_started""#) {
         if let Ok(v) = serde_json::from_str::<Value>(line) {
             on_task(&v);
         }
+    } else if head.contains(r#""subtype":"task_notification""#) {
+        live.follow_up.store(true, Ordering::Relaxed);
     } else if head.contains(r#""subtype":"background_tasks_changed""#)
         && let Ok(v) = serde_json::from_str::<Value>(line)
     {
         let count = v["tasks"].as_array().map_or(0, |t| t.len());
         live.background.store(count, Ordering::Relaxed);
+    }
+    None
+}
+
+/// La línea que cierra un turno. Claude Code no la empieza por `type` como las demás (empieza
+/// por `{"duration_api_ms":…` y `"type":"result"` va hacia el final; visto con 2.1.301 y
+/// 2.1.302), así que se busca el campo y se comprueba que es el de fuera y no uno anidado.
+fn turn_result(line: &str) -> Option<Value> {
+    if !line.contains(r#""type":"result""#) {
+        return None;
+    }
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .filter(|v| v["type"] == "result")
+}
+
+/// Una petición de control: si es un permiso (`can_use_tool`, también las preguntas y los
+/// planes) que no se tenía, queda pendiente. Repetida, no cuenta otra vez.
+fn asked(line: &str, live: &Live) -> Option<Suceso> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    let request = &v["request"];
+    if request["subtype"] != "can_use_tool" {
+        return None;
+    }
+    let id = v["request_id"].as_str()?;
+    let pending = Pending {
+        agent: request["agent_id"].as_str().map(String::from),
+        tool: request["tool_name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    };
+    let mut all = live.pending.lock().ok()?;
+    if all.contains_key(id) {
+        return None;
+    }
+    all.insert(id.to_string(), pending.clone());
+    Some(Suceso::Pide {
+        agent: pending.agent,
+        tool: pending.tool,
+    })
+}
+
+fn forget(live: &Live, id: Option<&str>) {
+    if let (Some(id), Ok(mut all)) = (id, live.pending.lock()) {
+        all.remove(id);
+    }
+}
+
+/// Lo que la interfaz le manda al proceso y cambia su estado: un mensaje abre un turno y la
+/// respuesta a un permiso (`control_response`) lo quita de los pendientes.
+fn sent(line: &str, live: &Live) {
+    if line.starts_with(r#"{"type":"user""#) {
+        live.turn.store(true, Ordering::Relaxed);
+    } else if line.starts_with(r#"{"type":"control_response""#)
+        && let Ok(v) = serde_json::from_str::<Value>(line)
+    {
+        forget(live, v["response"]["request_id"].as_str());
     }
 }
 
@@ -630,6 +776,43 @@ fn idle(live: &Live) -> bool {
     !live.turn.load(Ordering::Relaxed) && live.background.load(Ordering::Relaxed) == 0
 }
 
+fn attention(live: &Live) -> Attention {
+    Attention {
+        waiting: live.pending.lock().map_or(0, |p| p.len()),
+        busy: !idle(live) || live.follow_up.load(Ordering::Relaxed),
+    }
+}
+
+/// Compara el estado con lo último que se contó y, si cambió, lo apunta y devuelve lo de antes
+/// y lo de ahora. Mientras no cambia no se cuenta nada.
+fn check(live: &Live) -> Option<(Attention, Attention)> {
+    let now = attention(live);
+    let mut told = live.told.lock().ok()?;
+    if *told == now {
+        return None;
+    }
+    Some((std::mem::replace(&mut *told, now), now))
+}
+
+/// El proceso se cerró: no queda turno, ni tareas, ni nada que esperar.
+fn settle(live: &Live) -> Option<Attention> {
+    if let Ok(mut all) = live.pending.lock() {
+        all.clear();
+    }
+    live.turn.store(false, Ordering::Relaxed);
+    live.background.store(0, Ordering::Relaxed);
+    live.follow_up.store(false, Ordering::Relaxed);
+    check(live).map(|(_, now)| now)
+}
+
+/// Al acabarse la salida: si no lo cerró nexo y había trabajo o algo esperando, Claude Code se
+/// cayó con trabajo a medias. En cualquier caso, el workspace deja de esperar.
+fn finish(live: &Live) -> (bool, Option<Attention>) {
+    let fell = !live.closed.load(Ordering::Relaxed) && !attention(live).free();
+    (fell, settle(live))
+}
+
+#[cfg(test)]
 fn pump(
     stdout: impl Read,
     shared: &Mutex<Shared>,
@@ -637,12 +820,25 @@ fn pump(
     on_task: &dyn Fn(&Value),
     on_idle: &dyn Fn(),
 ) {
+    pump_changes(stdout, shared, live, on_task, &|_| {}, on_idle);
+}
+
+/// El lector: guarda y reenvía cada línea, registra los agentes y cuenta lo que cambia
+/// (`on_change`). Un orquestador desconectado avisa de que terminó antes de cerrarse.
+fn pump_changes(
+    stdout: impl Read,
+    shared: &Mutex<Shared>,
+    live: &Live,
+    on_task: &dyn Fn(&Value),
+    on_change: &dyn Fn(Cambio),
+    on_idle: &dyn Fn(),
+) {
     for line in BufReader::new(stdout).lines() {
         let Ok(text) = line else { break };
         if text.trim().is_empty() {
             continue;
         }
-        watch_line(&text, live, on_task);
+        let asked = watch_line(&text, live, on_task);
         {
             let Ok(mut shared) = shared.lock() else { break };
             remember(&mut shared, &text);
@@ -650,7 +846,23 @@ fn pump(
                 let _ = sink.send(ChatEvent::Line { text });
             }
         }
-        if live.stop_when_idle.load(Ordering::Relaxed) && idle(live) {
+        // Fuera del cerrojo de `shared`: contar el estado y avisar no frena a la interfaz.
+        if !live.closed.load(Ordering::Relaxed) {
+            if let Some((before, now)) = check(live) {
+                on_change(Cambio::Estado(now));
+                if !before.free() && now.free() {
+                    let error = live.failed.load(Ordering::Relaxed);
+                    on_change(Cambio::Suceso(Suceso::Termino { error }));
+                }
+            }
+            if let Some(suceso) = asked {
+                on_change(Cambio::Suceso(suceso));
+            }
+        }
+        // Desconectado, se cierra cuando no queda nada: tampoco el turno que Claude Code abre
+        // solo al acabar un agente (`follow_up`), que es donde el orquestador cuenta lo que
+        // hizo. El aviso de fin ya salió arriba, al pasar a libre.
+        if live.stop_when_idle.load(Ordering::Relaxed) && attention(live).free() {
             on_idle();
         }
     }
@@ -733,7 +945,9 @@ fn start(
             applied: run.applied.clone().unwrap_or_default(),
         });
     }
-    stop(run.proc.take());
+    if let Some(a) = stop(run.proc.take()) {
+        tell(app, root, a);
+    }
 
     let (prompt, settings, plugin) = launch_setup(app, root, true)?;
     let args = launch_args(
@@ -820,9 +1034,28 @@ fn start(
                 }),
                 Err(_) => None,
             };
-            stop(taken);
+            if let Some(a) = stop(taken) {
+                tell(&handle, &folder, a);
+            }
         };
-        pump(stdout, &shared, &live, &on_task, &on_idle);
+        let escritorio = avisos::Escritorio(handle.clone());
+        let notify = |suceso: &Suceso| {
+            let state = handle.state::<WorkspaceRuns>();
+            let mirando = state.watch.lock().map(|m| m.clone()).unwrap_or_default();
+            avisos::avisar(&escritorio, &mirando, &folder, suceso);
+        };
+        let on_change = |cambio: Cambio| match cambio {
+            Cambio::Estado(a) => tell(&handle, &folder, a),
+            Cambio::Suceso(s) => notify(&s),
+        };
+        pump_changes(stdout, &shared, &live, &on_task, &on_change, &on_idle);
+        let (fell, settled) = finish(&live);
+        if fell {
+            notify(&Suceso::Cayo);
+        }
+        if let Some(a) = settled {
+            tell(&handle, &folder, a);
+        }
         // Fin de la salida: si el proceso sigue siendo el de este workspace, terminó solo.
         let state = handle.state::<WorkspaceRuns>();
         let ended = match state.runs.lock() {
@@ -881,11 +1114,14 @@ pub async fn workspace_send(
         .write_all(format!("{line}\n").as_bytes())
         .and_then(|_| proc.stdin.flush())
         .map_err(|e| e.to_string())?;
-    if line.starts_with(r#"{"type":"user""#) {
-        proc.live.turn.store(true, Ordering::Relaxed);
-    }
+    sent(&line, &proc.live);
+    let changed = check(&proc.live);
     if let Some(record) = record {
         remember(&mut *run.shared.lock().map_err(|e| e.to_string())?, &record);
+    }
+    drop(runs);
+    if let Some((_, now)) = changed {
+        tell(&app, &root, now);
     }
     Ok(())
 }
@@ -905,7 +1141,10 @@ pub fn workspace_stop(
         .map_err(|e| e.to_string())?
         .get_mut(&root)
         .and_then(|r| r.proc.take());
-    stop(taken);
+    // Parar a mano no avisa: solo se cuenta que ya no espera nada.
+    if let Some(a) = stop(taken) {
+        tell(&app, &root, a);
+    }
     Ok(())
 }
 
@@ -919,7 +1158,9 @@ pub fn workspace_reset(
     let root = ws_root(&app, &path)?;
     let mut runs = state.runs.lock().map_err(|e| e.to_string())?;
     let run = runs.entry(root.clone()).or_default();
-    stop(run.proc.take());
+    if let Some(a) = stop(run.proc.take()) {
+        tell(&app, &root, a);
+    }
     run.loaded = true;
     if let Ok(mut shared) = run.shared.lock() {
         shared.backlog.clear();
@@ -944,9 +1185,11 @@ pub fn workspace_detach(
     if let Ok(mut shared) = run.shared.lock() {
         shared.sink = None;
     }
-    let quiet = run.proc.as_ref().is_some_and(|p| idle(&p.live));
+    let quiet = run.proc.as_ref().is_some_and(|p| attention(&p.live).free());
     if quiet {
-        stop(run.proc.take());
+        if let Some(a) = stop(run.proc.take()) {
+            tell(&app, &root, a);
+        }
     } else if let Some(p) = &run.proc {
         p.live.stop_when_idle.store(true, Ordering::Relaxed);
     }
@@ -969,6 +1212,41 @@ pub fn workspace_running(
             None
         }
     }))
+}
+
+/// El estado de atención de todos los workspaces con proceso, para la interfaz recién cargada
+/// (también tras una recarga de Vite); después se entera por `workspace-attention`.
+#[tauri::command]
+pub fn workspace_attention(state: State<'_, WorkspaceRuns>) -> Result<Vec<WsAttention>, String> {
+    let mut runs = state.runs.lock().map_err(|e| e.to_string())?;
+    Ok(runs
+        .iter_mut()
+        .filter_map(|(root, run)| {
+            if !alive(&mut run.proc) {
+                return None;
+            }
+            let a = attention(&run.proc.as_ref()?.live);
+            Some(WsAttention {
+                path: root.display().to_string(),
+                waiting: a.waiting,
+                busy: a.busy,
+            })
+        })
+        .collect())
+}
+
+/// Qué workspace tiene la interfaz en pantalla (`None` fuera de un workspace) y si la ventana
+/// tiene el foco: de ese workspace no se avisa mientras se mira.
+#[tauri::command]
+pub fn workspace_watch(
+    app: AppHandle,
+    state: State<'_, WorkspaceRuns>,
+    path: Option<String>,
+    focused: bool,
+) -> Result<(), String> {
+    let path = path.map(|p| ws_root(&app, &p)).transpose()?;
+    *state.watch.lock().map_err(|e| e.to_string())? = Mirando { path, focused };
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1284,5 +1562,395 @@ conexiones de claude.ai: Mobbin; skills: pdf."
             "el encargo no se repite: ya va en task_started"
         );
         assert_eq!(lines[6]["status"], "completed");
+    }
+
+    // ------------------------------------------------------------ avisos (spec de avisos)
+
+    /// Un permiso con la forma real de Claude Code (`agent_id` si lo pide un agente).
+    fn permiso(id: &str, tool: &str, agent: Option<&str>) -> String {
+        let mut request = json!({ "subtype": "can_use_tool", "tool_name": tool,
+            "input": { "command": "rm -rf /tmp/x" }, "tool_use_id": format!("toolu_{id}") });
+        if let Some(a) = agent {
+            request["agent_id"] = json!(a);
+        }
+        format!(r#"{{"type":"control_request","request_id":"{id}","request":{request}}}"#)
+    }
+
+    /// Las líneas de `allowLine` y `denyLine` (`src/chat-model.js`), tal cual las manda la
+    /// interfaz por `workspace_send`.
+    fn allow_line(id: &str) -> String {
+        format!(
+            r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"{id}","response":{{"behavior":"allow","updatedInput":{{}}}}}}}}"#
+        )
+    }
+
+    fn deny_line(id: &str) -> String {
+        format!(
+            r#"{{"type":"control_response","response":{{"subtype":"success","request_id":"{id}","response":{{"behavior":"deny","message":"El usuario no dio permiso."}}}}}}"#
+        )
+    }
+
+    fn waiting(live: &Live) -> usize {
+        attention(live).waiting
+    }
+
+    /// Una línea del fixture compacta (se guardó con espacios), con `type` y `subtype` delante.
+    /// Ojo: así son casi todas las de Claude Code, pero no la de `result`, que los lleva hacia
+    /// el final; eso lo prueba `el_final_del_turno_se_ve_aunque_type_no_vaya_delante`.
+    fn compact(line: &str) -> String {
+        let v: Value = serde_json::from_str(line).unwrap();
+        let mut out = format!(r#"{{"type":{}"#, v["type"]);
+        if !v["subtype"].is_null() {
+            out += &format!(r#","subtype":{}"#, v["subtype"]);
+        }
+        for (k, val) in v.as_object().unwrap() {
+            if k != "type" && k != "subtype" {
+                out += &format!(",{}:{val}", Value::String(k.clone()));
+            }
+        }
+        out + "}"
+    }
+
+    fn fixture() -> String {
+        include_str!("../../tests/fixtures/workspace/agente-en-segundo-plano.jsonl")
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| compact(l) + "\n")
+            .collect()
+    }
+
+    /// Pasa las líneas por el lector y apunta lo que cuenta (y cuándo se cerraría).
+    fn leer(salida: &str, live: &Live) -> Vec<String> {
+        let shared = Mutex::new(Shared::default());
+        let seen = std::cell::RefCell::new(Vec::new());
+        pump_changes(
+            salida.as_bytes(),
+            &shared,
+            live,
+            &|_| {},
+            &|c| {
+                seen.borrow_mut().push(match c {
+                    Cambio::Estado(a) => format!("estado {} {}", a.waiting, a.busy),
+                    Cambio::Suceso(s) => format!("{s:?}"),
+                })
+            },
+            &|| seen.borrow_mut().push("cierra".into()),
+        );
+        seen.into_inner()
+    }
+
+    fn avisos_de(seen: &[String]) -> Vec<&String> {
+        seen.iter().filter(|s| !s.starts_with("estado")).collect()
+    }
+
+    /// El final de un turno con los campos en el orden en que lo escribe Claude Code (visto
+    /// con 2.1.302 en un turno real): `type` va hacia el final.
+    const RESULT_REAL: &str = r#"{"duration_api_ms":3810,"stop_reason":"end_turn","session_id":"s1","is_error":false,"num_turns":2,"type":"result","subtype":"success"}"#;
+
+    #[test]
+    fn el_final_del_turno_se_ve_aunque_type_no_vaya_delante() {
+        let live = Live::default();
+        let none = |_: &Value| {};
+        watch_line(r#"{"type":"system","subtype":"init"}"#, &live, &none);
+        // Un `"type":"result"` anidado en otra línea no cierra el turno.
+        watch_line(
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"result","text":"x"}]}}"#,
+            &live,
+            &none,
+        );
+        assert!(!idle(&live));
+        watch_line(RESULT_REAL, &live, &none);
+        assert!(idle(&live));
+        assert!(!live.failed.load(Ordering::Relaxed));
+        watch_line(
+            &RESULT_REAL.replace(r#""is_error":false"#, r#""is_error":true"#),
+            &live,
+            &none,
+        );
+        assert!(live.failed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn desconectado_espera_al_turno_que_abre_claude_code_al_acabar_un_agente() {
+        // El orden de un turno real (2.1.302): lanza un agente en segundo plano y termina; al
+        // acabar el agente, Claude Code abre solo otro turno para contarlo.
+        let salida = [
+            r#"{"type":"system","subtype":"init"}"#,
+            r#"{"type":"system","subtype":"background_tasks_changed","tasks":[{"id":"t1"}]}"#,
+            r#"{"type":"system","subtype":"task_started","task_id":"t1","task_type":"local_agent"}"#,
+            RESULT_REAL,
+            r#"{"type":"system","subtype":"task_updated","task_id":"t1","patch":{"status":"completed"}}"#,
+            r#"{"type":"system","subtype":"task_notification","task_id":"t1","status":"completed"}"#,
+            r#"{"type":"system","subtype":"background_tasks_changed","tasks":[]}"#,
+            r#"{"type":"system","subtype":"init"}"#,
+            RESULT_REAL,
+        ]
+        .join("\n");
+        let live = Live::default();
+        live.stop_when_idle.store(true, Ordering::Relaxed);
+        let seen = leer(&salida, &live);
+        let at = seen.iter().position(|s| s == "cierra").unwrap();
+        // No se cierra con el agente acabado y el turno de después por venir: solo al final.
+        assert_eq!(seen[at..].iter().filter(|s| *s == "cierra").count(), 1);
+        assert_eq!(avisos_de(&seen[..at]), ["Termino { error: false }"]);
+        assert_eq!(seen[at - 1], "Termino { error: false }");
+        assert_eq!(seen.len(), at + 1, "se cierra con la última línea");
+    }
+
+    #[test]
+    fn el_lector_cuenta_los_permisos_sin_contestar() {
+        let live = Live::default();
+        let none = |_: &Value| {};
+        watch_line(r#"{"type":"system","subtype":"init"}"#, &live, &none);
+        let first = watch_line(&permiso("r1", "Bash", None), &live, &none);
+        assert_eq!(
+            first,
+            Some(Suceso::Pide {
+                agent: None,
+                tool: "Bash".into()
+            })
+        );
+        assert_eq!(
+            watch_line(&permiso("r1", "Bash", None), &live, &none),
+            None,
+            "repetida no cuenta otra vez"
+        );
+        let agent = watch_line(&permiso("r2", "Edit", Some("a1")), &live, &none);
+        assert_eq!(
+            agent,
+            Some(Suceso::Pide {
+                agent: Some("a1".into()),
+                tool: "Edit".into()
+            })
+        );
+        // Otras peticiones de control no esperan respuesta del usuario.
+        watch_line(
+            r#"{"type":"control_request","request_id":"r3","request":{"subtype":"mcp_status"}}"#,
+            &live,
+            &none,
+        );
+        assert_eq!(waiting(&live), 2);
+        assert!(!idle(&live), "una petición pendiente deja el turno abierto");
+        assert_eq!(
+            attention(&live),
+            Attention {
+                waiting: 2,
+                busy: true
+            }
+        );
+    }
+
+    #[test]
+    fn un_permiso_contestado_o_cancelado_deja_de_esperar() {
+        let live = Live::default();
+        let none = |_: &Value| {};
+        for (id, tool) in [("r1", "Bash"), ("r2", "Write"), ("r3", "AskUserQuestion")] {
+            watch_line(&permiso(id, tool, None), &live, &none);
+        }
+        assert_eq!(waiting(&live), 3);
+        sent(&allow_line("r1"), &live);
+        assert_eq!(waiting(&live), 2);
+        sent(&deny_line("r2"), &live);
+        assert_eq!(waiting(&live), 1);
+        watch_line(
+            r#"{"type":"control_cancel_request","request_id":"r3"}"#,
+            &live,
+            &none,
+        );
+        assert_eq!(waiting(&live), 0);
+        sent(&allow_line("nunca-vista"), &live);
+        assert_eq!(waiting(&live), 0);
+    }
+
+    #[test]
+    fn al_cerrarse_el_proceso_no_espera_nada() {
+        let live = Live::default();
+        let none = |_: &Value| {};
+        watch_line(r#"{"type":"system","subtype":"init"}"#, &live, &none);
+        watch_line(&permiso("r1", "Bash", None), &live, &none);
+        check(&live);
+        let (_, settled) = finish(&live);
+        assert_eq!(
+            settled,
+            Some(Attention {
+                waiting: 0,
+                busy: false
+            })
+        );
+        assert_eq!(waiting(&live), 0);
+        assert!(idle(&live));
+        assert_eq!(finish(&live).1, None, "ya estaba contado");
+    }
+
+    #[test]
+    fn solo_se_emite_cuando_cambia_el_estado() {
+        let salida = [
+            r#"{"type":"system","subtype":"init"}"#.to_string(),
+            r#"{"type":"stream_event","event":{}}"#.to_string(),
+            permiso("r1", "Bash", None),
+            permiso("r1", "Bash", None),
+            r#"{"type":"stream_event","event":{}}"#.to_string(),
+            r#"{"type":"control_cancel_request","request_id":"r1"}"#.to_string(),
+            r#"{"type":"result","subtype":"success","is_error":false}"#.to_string(),
+            r#"{"type":"stream_event","event":{}}"#.to_string(),
+        ]
+        .join("\n");
+        let live = Live::default();
+        let seen = leer(&salida, &live);
+        let estados: Vec<&String> = seen.iter().filter(|s| s.starts_with("estado")).collect();
+        assert_eq!(
+            estados,
+            [
+                "estado 0 true",
+                "estado 1 true",
+                "estado 0 true",
+                "estado 0 false"
+            ]
+        );
+        // Lo que manda la interfaz también cuenta una sola vez.
+        let live = Live::default();
+        watch_line(&permiso("r9", "Bash", None), &live, &|_| {});
+        assert!(check(&live).is_some());
+        sent(&allow_line("r9"), &live);
+        assert!(check(&live).is_some());
+        assert!(check(&live).is_none());
+    }
+
+    #[test]
+    fn avisa_una_vez_al_quedar_libre_y_no_en_cada_turno() {
+        // Un turno real que lanza un agente en segundo plano y termina; al acabar el agente,
+        // Claude Code abre solo otro turno. Es un único trabajo: un aviso, al final.
+        let live = Live::default();
+        let seen = leer(&fixture(), &live);
+        assert_eq!(avisos_de(&seen), ["Termino { error: false }"]);
+        assert_eq!(seen.last().unwrap(), "Termino { error: false }");
+        // Desconectado se cierra al quedar libre, y avisa antes de cerrarse.
+        let live = Live::default();
+        live.stop_when_idle.store(true, Ordering::Relaxed);
+        let seen = leer(&fixture(), &live);
+        let at = seen.iter().position(|s| s == "cierra").unwrap();
+        assert_eq!(avisos_de(&seen[..at]), ["Termino { error: false }"]);
+    }
+
+    #[test]
+    fn un_turno_con_error_avisa_del_error() {
+        let salida = concat!(
+            r#"{"type":"system","subtype":"init"}"#,
+            "\n",
+            r#"{"type":"result","subtype":"error_during_execution","is_error":true}"#,
+            "\n",
+            r#"{"type":"system","subtype":"init"}"#,
+            "\n",
+            r#"{"type":"result","subtype":"success","is_error":false}"#,
+            "\n",
+        );
+        let seen = leer(salida, &Live::default());
+        assert_eq!(
+            avisos_de(&seen),
+            ["Termino { error: true }", "Termino { error: false }"]
+        );
+    }
+
+    #[test]
+    fn parar_el_orquestador_a_mano_no_avisa() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let live = Arc::new(Live::default());
+        let proc = Proc {
+            id: 0,
+            child,
+            stdin,
+            live: live.clone(),
+        };
+        let antes = format!(
+            "{}\n{}\n",
+            r#"{"type":"system","subtype":"init"}"#,
+            permiso("r1", "Bash", None)
+        );
+        leer(&antes, &live);
+        assert_eq!(
+            stop(Some(proc)),
+            Some(Attention {
+                waiting: 0,
+                busy: false
+            }),
+            "se cuenta que ya no espera"
+        );
+        // Lo que quedaba por leer tras pararlo no avisa, y el final no es una caída.
+        let despues = format!(
+            "{}\n{}\n",
+            permiso("r2", "Bash", None),
+            r#"{"type":"result","subtype":"success"}"#
+        );
+        assert!(leer(&despues, &live).is_empty());
+        assert_eq!(finish(&live), (false, None));
+    }
+
+    #[test]
+    fn si_claude_code_se_cae_con_trabajo_avisa() {
+        let live = Live::default();
+        leer(
+            &format!(
+                "{}\n{}\n",
+                r#"{"type":"system","subtype":"init"}"#,
+                permiso("r1", "Bash", None)
+            ),
+            &live,
+        );
+        let (fell, settled) = finish(&live);
+        assert!(fell);
+        assert_eq!(
+            settled,
+            Some(Attention {
+                waiting: 0,
+                busy: false
+            })
+        );
+        // Con el trabajo terminado, cerrarse no es una caída.
+        let live = Live::default();
+        leer(&fixture(), &live);
+        assert_eq!(finish(&live), (false, None));
+    }
+
+    #[test]
+    fn un_aviso_que_falla_no_para_el_lector() {
+        struct Falla(std::cell::Cell<usize>);
+        impl avisos::Aviso for Falla {
+            fn enviar(&self, _: &avisos::Texto) -> Result<(), String> {
+                self.0.set(self.0.get() + 1);
+                Err("sin servicio de avisos".into())
+            }
+        }
+        let root = avisos::tests::temp("falla");
+        let falla = Falla(std::cell::Cell::new(0));
+        let shared = Mutex::new(Shared::default());
+        let live = Live::default();
+        let estados = std::cell::Cell::new(0);
+        let salida = format!(
+            "{}\n{}\n{}\n{}\n",
+            r#"{"type":"system","subtype":"init"}"#,
+            permiso("r1", "Bash", None),
+            permiso("r2", "Read", Some("a1")),
+            r#"{"type":"result","subtype":"success"}"#
+        );
+        pump_changes(
+            salida.as_bytes(),
+            &shared,
+            &live,
+            &|_| {},
+            &|c| match c {
+                Cambio::Estado(_) => estados.set(estados.get() + 1),
+                Cambio::Suceso(s) => avisos::avisar(&falla, &Mirando::default(), &root, &s),
+            },
+            &|| {},
+        );
+        assert_eq!(falla.0.get(), 2, "los dos permisos se intentaron avisar");
+        assert_eq!(shared.lock().unwrap().backlog.len(), 4, "y se leyó todo");
+        assert_eq!(estados.get(), 4);
+        assert_eq!(waiting(&live), 2);
     }
 }

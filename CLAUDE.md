@@ -50,7 +50,7 @@ Si `cargo` no está en el PATH de la sesión: `source ~/.cargo/env`.
 | `render.md` | Cómo pinta WebKitGTK (GPU y CPU de serie, escalera de seguridad si cae, composición entera, `drmWaitVBlank`) | `render.rs`, `main.rs`, `build.rs` |
 | `rendimiento.md` | Rendimiento de lo que se pinta en WebKitGTK | `styles.css`, `galaxy.js`, `graph.js`, `notes.js`, `render.rs` |
 | `skills-y-agentes.md` | Skills y agentes del vault, su órbita y la carta Agentes | `skills.rs`, `agents.rs`, `skills.js`, `agents.js` |
-| `workspace.md` | Workspaces de la vista Agentes: carpetas de proyecto, su orquestador, el registro de sus agentes, los extras, los worktrees de git, las pestañas y las ventanas | `workspace.rs`, `workspace_run.rs`, `worktree.rs`, `workspace.js`, `ws-*.js` y sus pruebas |
+| `workspace.md` | Workspaces de la vista Agentes: carpetas de proyecto, su orquestador, el registro de sus agentes, los extras, los worktrees de git, los avisos de escritorio, las pestañas y las ventanas | `workspace.rs`, `workspace_run.rs`, `worktree.rs`, `avisos.rs`, `workspace.js`, `ws-*.js` y sus pruebas, `docs/spec-avisos-workspaces.md` |
 | `galaxia.md` | La galaxia inicial (WebGL, dos lienzos, `frameFor`) | `galaxy.js` y sus pruebas |
 | `grafo-vista.md` | El grafo en canvas y la vista de notas en Markdown | `graph.js`, `note-view.js` |
 | `notas.md` | Apartado Notas: datos, editor, lienzo, zoom y escritorios | `notes.js`, `note-editor.js`, `desk-layout.js`, `desks.js`, `notas.rs` |
