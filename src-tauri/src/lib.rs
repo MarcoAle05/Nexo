@@ -1,5 +1,6 @@
 mod agents;
 mod agy;
+mod avisos;
 mod browser;
 mod claude;
 mod claude_code;
@@ -26,6 +27,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(nexo::ChatState::default())
         .manage(claude_code::ClaudeCodeState::default())
         .manage(agy::AgyState::default())
@@ -102,6 +104,8 @@ pub fn run() {
             workspace_run::workspace_reset,
             workspace_run::workspace_detach,
             workspace_run::workspace_running,
+            workspace_run::workspace_attention,
+            workspace_run::workspace_watch,
             worktree::worktree_list,
             worktree::worktree_form,
             worktree::worktree_plan,

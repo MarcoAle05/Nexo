@@ -12,6 +12,7 @@ import { createModal } from './modal.js';
 import { formatTokens } from './registro.js';
 import { fileMeta, isMarkdown, languageOf, renderFile } from './ws-code.js';
 import { MAX_OPEN, addTab, closeTab, fits, focusWindow, minimizeWindow, neighbor, normalizeWindows, openWindow, setMode, tileLayout, wheelDelta } from './ws-layout.js';
+import { WAITING_TEXT } from './ws-attention.js';
 import { STATE_LABEL, agentState, createWorkspaceStream } from './ws-stream.js';
 
 const svg = (paths, size = 16, width = 1.4) =>
@@ -78,7 +79,7 @@ export function setupLabel(view) {
   return view.code == null ? 'Falló' : `Falló · código ${view.code}`;
 }
 
-export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFiles, ask, fail, renderMarkdown, onLink = () => {}, nexo, onMode = () => {}, onChange = () => {} }) {
+export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFiles, ask, fail, renderMarkdown, onLink = () => {}, nexo, onMode = () => {}, onChange = () => {}, waiting = () => false }) {
   const $ = (id) => document.getElementById(id);
   const core = $('ws-core');
   const center = $('ws-center');
@@ -110,6 +111,21 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   let setupView = null; // el setup de orca.yaml de un worktree recién creado: estado y salida
 
   // ---------------------------------------------------------------- anuncios y guardado
+  // Una fila de Recientes o de la lista de worktrees de un workspace que espera una respuesta
+  // (un permiso o una pregunta sin contestar, ws-attention.js) lleva el punto y lo dice con
+  // texto, que también leen los lectores de pantalla: el color nunca va solo.
+  function paintAttention(row, where) {
+    const on = waiting(row.dataset.path);
+    let mark = where.querySelector(':scope > .ws-attn');
+    if (!on) return mark?.remove();
+    if (mark) return;
+    mark = el('span', 'ws-attn');
+    const dot = el('span', 'ws-attn-dot');
+    dot.setAttribute('aria-hidden', 'true');
+    mark.append(dot, WAITING_TEXT);
+    where.append(mark);
+  }
+
   function announce(text) {
     const region = $('ws-live');
     region.textContent = '';
@@ -157,12 +173,14 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
         const li = el('li', 'ws-recent-item');
         const open = el('button', 'ws-recent-open');
         open.type = 'button';
+        open.dataset.path = r.path;
         const icon = el('span', 'ws-recent-icon');
         icon.innerHTML = ICON.folder;
         const text = el('span', 'ws-recent-text');
         const name = el('span', 'ws-recent-name', r.name);
         if (ws?.path === r.path) name.append(el('span', 'ws-badge', 'Abierto'));
         text.append(name, el('span', 'ws-recent-path', r.path));
+        paintAttention(open, text);
         open.append(icon, text);
         open.title = r.path;
         open.addEventListener('click', () => {
@@ -305,11 +323,13 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     const items = trees.items.map((item) => {
       const button = el('button', 'vault-option ws-wt-item');
       button.type = 'button';
+      button.dataset.path = item.path;
       if (item.current) button.setAttribute('aria-current', 'true');
       const name = el('span', 'ws-wt-name');
       name.append(el('span', 'ws-wt-name-text', item.name));
       if (item.main) name.append(el('span', 'ws-badge', 'Principal'));
       button.append(name, el('small', '', item.missing ? 'La carpeta ya no está' : item.branch));
+      paintAttention(button, button);
       button.title = item.path;
       button.disabled = item.missing;
       button.addEventListener('click', () => {
@@ -1818,6 +1838,12 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     openDialog,
     openWorkspace,
     openAgent: (task) => openKey(task ? `a:${task}` : 'main', { focus: true }),
+    // Cambió qué workspaces esperan respuesta: las filas de Recientes y de la lista de worktrees
+    // se ponen al día en su sitio, sin rehacer la lista (el foco no se mueve con el menú abierto).
+    attentionChanged() {
+      for (const row of $('ws-recent').querySelectorAll('.ws-recent-open')) paintAttention(row, row.querySelector('.ws-recent-text'));
+      for (const row of treeMenu.querySelectorAll('.ws-wt-item')) paintAttention(row, row);
+    },
     // El centro se ve (la vista Agentes en modo workspace): recolocar lo que haga falta.
     setVisible(on) {
       visible = on;

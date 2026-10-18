@@ -37,6 +37,7 @@ memchr = "2"
 # orca.yaml (setup y carpetas compartidas de los worktrees, como en Orca).
 yaml-rust2 = { version = "0.13.0", default-features = false }
 nexo-core = { path = "../crates/nexo-core" }
+tauri-plugin-notification = "2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2"

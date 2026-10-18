@@ -47,14 +47,14 @@
    `--paper-rgb`/`--bar-rgb`/`--raised-rgb` las tarjetas (cartas y menús, barras, lo que flota) y
    `--accent-rgb` los lavados y bordes del acento. Cada tarjeta cambia sus canales por los `--s-*`
    del tema, que por defecto son los del fondo: solo los cambian los temas con tarjetas de la otra
-   polaridad (negras sobre blanco o sobre gris), donde el texto de las tarjetas no puede ser el
-   del fondo.
+   polaridad (Blanco con negro: tarjetas negras sobre blanco), donde el texto de las tarjetas no
+   puede ser el del fondo.
    El tema va en `data-theme` de <html> (lo pone `public/tema.js` antes de pintar y `themes.js`
    al elegirlo; sin él, Órbita). Los bloques valen para cualquier elemento con `data-theme` y los
    `--s-*` se heredan, así cada miniatura del selector se pinta con su tema aunque esté dentro de
    una tarjeta de otro. Orden (misma especificidad: manda el orden): fórmulas; Órbita y lo común;
-   lo común a los fondos claros; las tarjetas oscuras sobre fondo claro; cada tema. Las paletas de
-   los lienzos, que no heredan el CSS, están en `themes.js`. */
+   lo común a los fondos claros; cada tema. Las paletas de los lienzos, que no heredan el CSS,
+   están en `themes.js`. */
 
 /* Fórmulas: en la raíz, en cada [data-theme] y en cada tarjeta, que las recalcula con sus canales. */
 :root, [data-theme], .segmented.views, .settings, .tp-bar, .tp-card, .panel, .toolbar, .focus-pill, .vault-menu, .desk-card, .desk-map, .desk-zoom, .desks-button, .ne-menu, .plane-open, .skill-pill, .skill-pop, .ws-bar, .ws-win, .ws-loading {
@@ -216,7 +216,7 @@
   --s-state-on: var(--state-on);
 }
 /* Lo común a los fondos claros. */
-:is([data-theme="gris"], [data-theme="niebla"], [data-theme="blanco"], [data-theme="claro"]) {
+:is([data-theme="arena"], [data-theme="niebla"], [data-theme="blanco"], [data-theme="claro"]) {
   --scheme: light;
   --ink-rgb: 0, 0, 0;
   --ink-inv-rgb: 255, 255, 255;
@@ -245,40 +245,6 @@
   --code-attr: #a12e6c;
   --code-meta: #4d5c70;
   --state-on: #0b7a55;
-}
-/* Tarjetas negras sobre un fondo claro (Gris con negro, Blanco con negro): texto blanco y el
-   blanco de acento dentro de ellas; lo que va sobre el fondo, en negro. */
-:is([data-theme="gris"], [data-theme="blanco"]) {
-  --accent-rgb: 10, 10, 10;
-  --accent: #0a0a0a;
-  --accent-press: #262626;
-  --accent-soft: #0a0a0a;
-  --accent-gradient: linear-gradient(90deg, #0a0a0a, #8e8e93);
-  --s-scheme: dark;
-  --s-fg-rgb: 245, 245, 245;
-  --s-ink-rgb: 255, 255, 255;
-  --s-ink-inv-rgb: 0, 0, 0;
-  --s-deep-rgb: var(--paper-rgb);
-  --s-dim-a: 0.6;
-  --s-faint-a: 0.52;
-  --s-accent-rgb: 245, 245, 245;
-  --s-accent: #f5f5f5;
-  --s-accent-press: #d4d4d8;
-  --s-on-accent: #0a0a0a;
-  --s-accent-soft: #f5f5f5;
-  --s-accent-gradient: linear-gradient(90deg, #f5f5f5, #8e8e93);
-  --s-well: rgba(0, 0, 0, 0.35);
-  --s-well-soft: rgba(0, 0, 0, 0.28);
-  --s-check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2.5 6.2 2.3 2.3 4.7-5' fill='none' stroke='%23050507' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-  /* El código, dentro de las tarjetas negras, con los colores de los temas oscuros. */
-  --s-code-keyword: #c9a6ff;
-  --s-code-string: #8ee6b4;
-  --s-code-number: #ffb68c;
-  --s-code-function: #8cc8ff;
-  --s-code-type: #f5d38a;
-  --s-code-attr: #f4a8d6;
-  --s-code-meta: #a9b6c6;
-  --s-state-on: #5ffcc0;
 }
 /* Negro con gris: fondo negro y tarjetas grises neutras, sin color (las mismas luminosidades
    OKLCH que los temas de color: fondo 0,14, carta 0,285, chat 0,21, texto 0,96, acento 0,78). */
@@ -424,15 +390,46 @@
   --accent-gradient: linear-gradient(90deg, #c6613f, #e8a387);
   --glow-a: 0.05;
 }
-/* Gris con negro: fondo gris medio y tarjetas negras. */
-[data-theme="gris"] {
-  --fg-rgb: 10, 10, 12;
-  --deep-rgb: 199, 199, 204;
-  --paper-rgb: 17, 17, 17;
-  --bar-rgb: 17, 17, 17;
-  --raised-rgb: 26, 26, 26;
-  --dim-a: 0.72;
-  --faint-a: 0.66;
+/* Arena: la paleta de una captura de referencia que dio el usuario. Tarjetas arena #bfb6a8 (la
+   barra y lo que flota, #c5bcad) sobre un fondo arena más claro (el mismo tono en OKLCH, L 0,86),
+   texto #282420, el morado #9367b0 de lo elegido en los lavados (en las marcas y el foco, el mismo
+   tono más hondo: sobre la arena el claro no llega a 3:1) y «Enviar» en la pizarra #899099 con el
+   texto oscuro. Las tarjetas son de tono medio: el texto tenue va casi opaco, y el código, los
+   puntos de estado y el registro, más hondos que en los otros claros, para pasar de 4,5:1 y 3:1. */
+[data-theme="arena"] {
+  --fg-rgb: 40, 36, 32;
+  --ink-rgb: 40, 36, 32;
+  --deep-rgb: 215, 208, 196;
+  --paper-rgb: 191, 182, 168;
+  --bar-rgb: 197, 188, 173;
+  --raised-rgb: 197, 188, 173;
+  --accent-rgb: 147, 103, 176;
+  --accent-line-rgb: 104, 72, 126;
+  --s-accent-line-rgb: var(--accent-line-rgb);
+  --accent-line-a: 0.9;
+  --dim-a: 0.86;
+  --faint-a: 0.8;
+  --accent: #899099;
+  --accent-press: #7a818a;
+  --on-accent: #282420;
+  --accent-soft: #68487e;
+  --accent-gradient: linear-gradient(90deg, #9367b0, #899099);
+  --log-rest: #a39a8c;
+  --log-on: #097b55;
+  --ctx-tools: #087a9a;
+  --ctx-mcp-info: #087b8b;
+  --ctx-memory: #b0506a;
+  --ctx-skills: #097f5e;
+  --ctx-initial: #8553d6;
+  --ctx-messages: #4a443c;
+  --code-keyword: #5826a3;
+  --code-string: #074f30;
+  --code-number: #783005;
+  --code-function: #124487;
+  --code-type: #633d00;
+  --code-attr: #7c2152;
+  --code-meta: #3a4656;
+  --state-on: #086848;
 }
 /* Gris claro con azul claro: fondo gris frío y tarjetas azul claro, con un azul más hondo de
    acento (el claro no se ve sobre las tarjetas). */
@@ -455,7 +452,8 @@
   --accent-soft: #2773c0;
   --accent-gradient: linear-gradient(90deg, #8ec9ff, #2773c0);
 }
-/* Blanco con negro: fondo blanco y tarjetas negras. */
+/* Blanco con negro: fondo blanco y tarjetas negras, el único tema con tarjetas de la otra
+   polaridad. Texto blanco y el blanco de acento dentro de ellas; lo que va sobre el fondo, en negro. */
 [data-theme="blanco"] {
   --fg-rgb: 10, 10, 10;
   --deep-rgb: 250, 250, 250;
@@ -464,6 +462,36 @@
   --raised-rgb: 24, 24, 24;
   --dim-a: 0.64;
   --faint-a: 0.58;
+  --accent-rgb: 10, 10, 10;
+  --accent: #0a0a0a;
+  --accent-press: #262626;
+  --accent-soft: #0a0a0a;
+  --accent-gradient: linear-gradient(90deg, #0a0a0a, #8e8e93);
+  --s-scheme: dark;
+  --s-fg-rgb: 245, 245, 245;
+  --s-ink-rgb: 255, 255, 255;
+  --s-ink-inv-rgb: 0, 0, 0;
+  --s-deep-rgb: var(--paper-rgb);
+  --s-dim-a: 0.6;
+  --s-faint-a: 0.52;
+  --s-accent-rgb: 245, 245, 245;
+  --s-accent: #f5f5f5;
+  --s-accent-press: #d4d4d8;
+  --s-on-accent: #0a0a0a;
+  --s-accent-soft: #f5f5f5;
+  --s-accent-gradient: linear-gradient(90deg, #f5f5f5, #8e8e93);
+  --s-well: rgba(0, 0, 0, 0.35);
+  --s-well-soft: rgba(0, 0, 0, 0.28);
+  --s-check-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='m2.5 6.2 2.3 2.3 4.7-5' fill='none' stroke='%23050507' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  /* El código, dentro de las tarjetas negras, con los colores de los temas oscuros. */
+  --s-code-keyword: #c9a6ff;
+  --s-code-string: #8ee6b4;
+  --s-code-number: #ffb68c;
+  --s-code-function: #8cc8ff;
+  --s-code-type: #f5d38a;
+  --s-code-attr: #f4a8d6;
+  --s-code-meta: #a9b6c6;
+  --s-state-on: #5ffcc0;
 }
 /* Claro, a lo Apple: gris muy claro de fondo, cartas blancas, texto casi negro y el azul de
    sistema de acento. */
@@ -3704,6 +3732,18 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 @media (prefers-reduced-motion: no-preference) {
   .ws-state[data-state="active"] { animation: breathe 1.8s var(--ease) infinite; }
 }
+
+/* Un workspace que espera tu respuesta (ws-attention.js): el punto lleva la forma y el color del
+   estado «Esperando respuesta» de las pestañas (anillo con su centro, --accent-soft) y nunca va
+   solo: en Recientes y en la lista de worktrees, con el texto; en el botón Agentes, con su
+   nombre accesible. Sin animación: se queda hasta que se contesta. */
+.ws-attn { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; font-size: 11.5px; font-weight: 500; color: var(--fg); white-space: nowrap; }
+.ws-attn-dot, .views-attn { flex-shrink: 0; width: 10px; height: 10px; border-radius: var(--r-full); border: 2px solid var(--accent-soft); background: radial-gradient(circle, var(--accent-soft) 0 1.6px, transparent 2.2px); }
+.segmented.views button { position: relative; }
+.views-attn { position: absolute; top: 6px; right: 9px; pointer-events: none; }
+.views-attn[hidden] { display: none; }
+/* Sobre el relleno de la vista elegida el anillo se separa con el tono del botón. */
+.segmented.views button[aria-pressed="true"] .views-attn { box-shadow: 0 0 0 2px var(--bg); background-color: var(--bg); }
 
 /* Agentes de la carta. */
 .ws-agents { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }

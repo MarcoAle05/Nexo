@@ -50,6 +50,18 @@ const GRAPH_CORAL = {
   ink: [240, 239, 236],
 };
 
+// Arena toma la paleta de una captura de referencia: el morado de lo elegido, la pizarra de
+// «Enviar» y el amarillo de los archivos, en tonos hondos que se ven sobre el fondo arena.
+const GRAPH_ARENA = {
+  nebula: ['#68487e', '#4f5a68', '#8a5a2b', '#2f6f62', '#7a4f9a', '#8e4a64', '#5c55a0', '#3d6a82'],
+  star: '#9a6a00',
+  nova: '#4f5a68',
+  core: '#3d2f52',
+  ghost: '#8a8279',
+  spark: null,
+  ink: [40, 36, 32],
+};
+
 // Galaxia: tintes de los puntos (RGB lineal de 0 a 1, en el orden de TINTS de galaxy.js:
 // blanco, lila, violeta, azul y rosa en Órbita), cómo se mezclan y cuánto se apagan. Sobre un
 // fondo oscuro la luz se suma (`add`); sobre uno claro, sumar luz no se ve, así que los puntos
@@ -123,12 +135,12 @@ export const THEMES = [
     graph: GRAPH_CORAL,
   },
   {
-    id: 'gris',
-    name: 'Gris con negro',
-    hint: 'Tarjetas negras sobre gris',
+    id: 'arena',
+    name: 'Arena',
+    hint: 'Tarjetas arena con lavanda',
     scheme: 'light',
-    galaxy: galaxy('over', 0.55, [[0.04, 0.04, 0.05], [0.16, 0.16, 0.18], [0.26, 0.26, 0.29], [0.1, 0.1, 0.12], [0.2, 0.2, 0.22]]),
-    graph: GRAPH_LIGHT,
+    galaxy: galaxy('over', 0.7, [[0.16, 0.14, 0.13], [0.58, 0.4, 0.69], [0.41, 0.28, 0.49], [0.36, 0.39, 0.44], [0.63, 0.51, 0.68]]),
+    graph: GRAPH_ARENA,
   },
   {
     id: 'niebla',
