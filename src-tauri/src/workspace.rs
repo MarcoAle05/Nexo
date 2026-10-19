@@ -35,7 +35,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::skills::frontmatter;
 
@@ -2330,6 +2330,143 @@ pub async fn workspace_extras(
         .map_err(|e| e.to_string())?
 }
 
+// ---------------------------------------------------------------- vigilante
+
+/// Lo que cambia el catálogo de Extras, del perfil y del repertorio. De `~/.claude.json`, que
+/// Claude Code reescribe a menudo, solo los MCP; de `settings.json`, solo los plugins
+/// encendidos y los `skillOverrides` (Orca también lo reescribe con sus hooks).
+pub(crate) fn repertoire_fingerprint(home: &Path) -> String {
+    let read = |p: PathBuf| {
+        fs::read_to_string(p)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .unwrap_or(Value::Null)
+    };
+    // Cada entrada de una carpeta con la fecha de su SKILL.md (cambia su descripción).
+    let listing = |dir: PathBuf| -> Vec<(String, u64)> {
+        let mut out: Vec<(String, u64)> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| {
+                let at = fs::metadata(e.path().join("SKILL.md"))
+                    .and_then(|m| m.modified())
+                    .map(|t| millis(t) as u64)
+                    .unwrap_or(0);
+                (e.file_name().to_string_lossy().into_owned(), at)
+            })
+            .collect();
+        out.sort();
+        out
+    };
+    let settings = read(home.join(".claude/settings.json"));
+    let installed: Vec<String> =
+        read(home.join(".claude/plugins/installed_plugins.json"))["plugins"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+    json!({
+        "enabled": settings["enabledPlugins"],
+        "overrides": settings["skillOverrides"],
+        "mcp": read(home.join(".claude.json"))["mcpServers"],
+        "installed": installed,
+        "skills": listing(home.join(".claude/skills")),
+        "repertoire": listing(repertoire_dir(home)),
+        "repertoire_mcp": repertoire_mcp(home),
+    })
+    .to_string()
+}
+
+/// Fechas de los archivos de los que sale `repertoire_fingerprint`: solo si cambia alguna se
+/// vuelve a leer (`~/.claude.json` pesa unos cientos de KB).
+fn repertoire_mtimes(home: &Path) -> Vec<Option<SystemTime>> {
+    [
+        home.join(".claude/settings.json"),
+        home.join(".claude.json"),
+        home.join(".claude/plugins/installed_plugins.json"),
+        home.join(".claude/skills"),
+        repertoire_dir(home),
+        repertoire_mcp_path(home),
+    ]
+    .iter()
+    .map(|p| fs::metadata(p).and_then(|m| m.modified()).ok())
+    .collect()
+}
+
+/// Los `extras` de los workspaces del panel, para avisar cuando otro (el agente de nexo, con
+/// la skill del repertorio) los cambia en su `workspace.json`.
+#[derive(Default)]
+pub(crate) struct ExtrasWatch {
+    seen: HashMap<PathBuf, (Option<SystemTime>, Extras)>,
+}
+
+impl ExtrasWatch {
+    /// Los workspaces cuyos `extras` cambiaron desde la vez anterior. El primero que se ve no
+    /// cuenta: es el punto de partida. Lo que escribe la interfaz también sale (no se sabe
+    /// quién escribió); la interfaz no hace nada si ya los tenía.
+    pub(crate) fn check(&mut self, roots: &[PathBuf]) -> Vec<(PathBuf, Extras)> {
+        let mut changed = Vec::new();
+        self.seen.retain(|root, _| roots.contains(root));
+        for root in roots {
+            let at = fs::metadata(config_path(root))
+                .and_then(|m| m.modified())
+                .ok();
+            if self.seen.get(root).is_some_and(|(seen, _)| *seen == at) {
+                continue;
+            }
+            let extras = read_config(root).extras;
+            if let Some((_, before)) = self.seen.get(root)
+                && *before != extras
+            {
+                changed.push((root.clone(), extras.clone()));
+            }
+            self.seen.insert(root.clone(), (at, extras));
+        }
+        changed
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct ExtrasChanged {
+    path: String,
+    extras: Extras,
+}
+
+/// Vigila, cada segundo, lo que puede cambiar fuera de Extras: el perfil y el repertorio
+/// (`claude plugin …`, `claude mcp …`, una skill copiada a la carpeta, el agente de nexo) y los
+/// `extras` de los workspaces del panel. Lo primero vacía la caché de catálogos y emite
+/// `repertoire-changed`; lo segundo, `workspace-extras-changed` (`{ path, extras }`).
+pub fn watch(app: AppHandle) {
+    std::thread::spawn(move || {
+        let Ok(home) = app.path().home_dir() else {
+            return;
+        };
+        let mut mtimes = repertoire_mtimes(&home);
+        let mut fingerprint = repertoire_fingerprint(&home);
+        let mut extras = ExtrasWatch::default();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let now = repertoire_mtimes(&home);
+            if now != mtimes {
+                mtimes = now;
+                let next = repertoire_fingerprint(&home);
+                if next != fingerprint {
+                    fingerprint = next;
+                    if let Ok(mut cache) = app.state::<WorkspaceCatalogs>().cache.lock() {
+                        cache.clear();
+                    }
+                    let _ = app.emit("repertoire-changed", ());
+                }
+            }
+            let roots: Vec<PathBuf> = read_list(&app).open;
+            for (root, extras) in extras.check(&roots) {
+                let path = root.display().to_string();
+                let _ = app.emit("workspace-extras-changed", ExtrasChanged { path, extras });
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3001,6 +3138,71 @@ mod tests {
         );
         assert!(!fallback.skills.iter().any(|s| s.name == "pdf"));
         fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn el_vigilante_ve_lo_que_cambia_el_catalogo_y_no_lo_demas() {
+        let home = temp("vigilante");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let settings = |extra: &str| {
+            fs::write(
+                home.join(".claude/settings.json"),
+                format!(r#"{{"enabledPlugins":{{"a@b":true}},"hooks":{{{extra}}}}}"#),
+            )
+            .unwrap()
+        };
+        settings("");
+        fs::write(
+            home.join(".claude.json"),
+            r#"{"numStartups":1,"mcpServers":{}}"#,
+        )
+        .unwrap();
+        let first = repertoire_fingerprint(&home);
+        // Orca reescribe sus hooks y Claude Code sus contadores: el catálogo no cambia.
+        settings(r#""Stop":[]"#);
+        fs::write(
+            home.join(".claude.json"),
+            r#"{"numStartups":2,"mcpServers":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(repertoire_fingerprint(&home), first);
+        // Un plugin apagado, un MCP nuevo o una skill en el repertorio, sí.
+        fs::write(
+            home.join(".claude/settings.json"),
+            r#"{"enabledPlugins":{"a@b":false}}"#,
+        )
+        .unwrap();
+        let second = repertoire_fingerprint(&home);
+        assert_ne!(second, first);
+        fs::create_dir_all(repertoire_dir(&home).join("nueva")).unwrap();
+        fs::write(repertoire_dir(&home).join("nueva/SKILL.md"), "---\n---\n").unwrap();
+        assert_ne!(repertoire_fingerprint(&home), second);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn el_vigilante_avisa_cuando_otro_cambia_los_extras_de_un_workspace() {
+        let a = temp("extras-a");
+        let b = temp("extras-b");
+        update_config(&a, |c| c.extras.plugins = vec!["uno@m".into()]).unwrap();
+        let mut watch = ExtrasWatch::default();
+        // La primera vez es el punto de partida.
+        assert!(watch.check(&[a.clone(), b.clone()]).is_empty());
+        // Guardar la interfaz (`ui`) no cambia los extras.
+        update_config(&a, |c| c.ui = json!({"section":"extras"})).unwrap();
+        assert!(watch.check(&[a.clone(), b.clone()]).is_empty());
+        // El agente enciende un MCP en `b` (que aún no tenía workspace.json).
+        update_config(&b, |c| c.extras.mcp = vec!["github".into()]).unwrap();
+        let changed = watch.check(&[a.clone(), b.clone()]);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].0, b);
+        assert_eq!(changed[0].1.mcp, ["github"]);
+        assert!(watch.check(&[a.clone(), b.clone()]).is_empty());
+        // Uno que sale del panel se olvida.
+        assert!(watch.check(std::slice::from_ref(&a)).is_empty());
+        assert_eq!(watch.seen.len(), 1);
+        fs::remove_dir_all(a).unwrap();
+        fs::remove_dir_all(b).unwrap();
     }
 
     #[test]

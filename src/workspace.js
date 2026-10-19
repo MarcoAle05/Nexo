@@ -1972,6 +1972,23 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
       } else closeOverview();
     },
     nexoChanged: () => scheduleRender(),
+    // Cambió el perfil o el repertorio fuera de Extras (el agente de nexo, `claude plugin …`,
+    // una skill copiada a la carpeta): el backend ya vació la caché y aquí se vuelve a leer.
+    repertoireChanged() {
+      if (ws && catalog && !catalog.loading) loadCatalog(false);
+    },
+    // Otro cambió los extras de un workspace en su workspace.json (el agente de nexo con la
+    // skill del repertorio): si es el abierto y no son los que ya tenía, se ven al momento y,
+    // si su orquestador corre con otros, sale «Reiniciar espacio de Workspace».
+    extrasChanged({ path, extras: next }) {
+      if (!ws || ws.path !== path) return;
+      const fresh = { ...EMPTY_EXTRAS(), ...next };
+      if (sameExtras(fresh, extras)) return;
+      extras = fresh;
+      renderExtras();
+      renderFoot();
+      announce('Los extras de este workspace cambiaron fuera de esta carta.');
+    },
     get current() {
       return ws;
     },
