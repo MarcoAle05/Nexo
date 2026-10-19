@@ -1729,6 +1729,10 @@ if (desktop) {
     .then(() => invoke('workspace_attention'))
     .then((list) => attention.load(list) && renderAttention())
     .catch(() => {});
+  // El perfil, el repertorio o los extras de un workspace cambiaron fuera de Extras (el agente
+  // de nexo con la skill nexo:repertorio): lo vigila workspace.rs.
+  listen('repertoire-changed', () => workspace?.repertoireChanged()).catch(() => {});
+  listen('workspace-extras-changed', ({ payload }) => workspace?.extrasChanged(payload)).catch(() => {});
   window.addEventListener('focus', () => {
     windowFocused = true;
     syncWatch();

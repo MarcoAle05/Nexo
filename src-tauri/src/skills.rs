@@ -235,14 +235,30 @@ fn millis(time: SystemTime) -> u64 {
 /// Lee las skills del vault, de la más antigua a la más nueva (así una skill nueva no
 /// mueve de sitio a las demás alrededor de la galaxia).
 pub fn list(root: &Path) -> Vec<SkillInfo> {
-    let Ok(entries) = fs::read_dir(skills_dir(root)) else {
+    read_skills(&skills_dir(root), false)
+}
+
+/// Lee la carpeta del repertorio: solo nombres seguros (van a un plugin, `repertorio:<nombre>`)
+/// y también enlaces a una carpeta, que es como instala `npx skills` y como pasa ahí una skill
+/// del perfil.
+pub fn list_in(dir: &Path) -> Vec<SkillInfo> {
+    read_skills(dir, true)
+}
+
+fn read_skills(dir: &Path, repertoire: bool) -> Vec<SkillInfo> {
+    let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut skills: Vec<SkillInfo> = entries
         .flatten()
         .filter_map(|entry| {
             let id = entry.file_name().to_str()?.to_string();
-            if id.starts_with('.') || !entry.file_type().ok()?.is_dir() {
+            let usable = if repertoire {
+                crate::workspace::safe_id(&id) && entry.path().is_dir()
+            } else {
+                !id.starts_with('.') && entry.file_type().ok()?.is_dir()
+            };
+            if !usable {
                 return None;
             }
             let file = entry.path().join("SKILL.md");
@@ -499,6 +515,22 @@ description: "Dice \"hola\"\ny sigue"
         t.escribe(".claude/skills/suelto.md", "archivo suelto");
         let ids: Vec<String> = list(&t.0).into_iter().map(|s| s.id).collect();
         assert_eq!(ids, vec!["alfa"]);
+    }
+
+    #[test]
+    fn list_in_ignora_nombres_inseguros_y_carpetas_sin_skill() {
+        let t = Temporal::nueva("repertorio");
+        for id in ["alfa-2_B", ".oculta", "a@b", "a.b", "con espacio"] {
+            t.escribe(
+                &format!("repertorio/{id}/SKILL.md"),
+                "---\ndescription: Prueba\n---\n",
+            );
+        }
+        t.escribe("repertorio/vacia/notas.md", "sin skill");
+        let skills = list_in(&t.0.join("repertorio"));
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].id, "alfa-2_B");
+        assert_eq!(skills[0].description, "Prueba");
     }
 
     #[test]

@@ -1136,15 +1136,12 @@ pub async fn agent_context(
             // El de un workspace, con lo mismo que lleva al arrancar: su papel, el plugin de
             // nexo y solo los extras encendidos (si no, saldría todo lo instalado).
             let settings = if workspace {
-                let (prompt, settings, plugin) =
-                    crate::workspace_run::launch_setup(&app, &cwd, false)?;
-                args.extend([
-                    "--append-system-prompt".into(),
-                    prompt,
-                    "--plugin-dir".into(),
-                    plugin.to_string_lossy().into_owned(),
-                ]);
-                settings
+                let setup = crate::workspace_run::launch_setup(&app, &cwd, false)?;
+                args.extend(["--append-system-prompt".into(), setup.prompt]);
+                for dir in setup.plugins {
+                    args.extend(["--plugin-dir".into(), dir.to_string_lossy().into_owned()]);
+                }
+                setup.settings
             } else {
                 json!({})
             };
@@ -1194,10 +1191,14 @@ pub async fn agent_context(
                 tauri::async_runtime::spawn_blocking(move || {
                     // Los agentes de un workspace cargan lo mismo que su orquestador.
                     let settings = if workspace {
-                        let (_, settings, plugin) =
-                            crate::workspace_run::launch_setup(&app, &cwd, false)?;
-                        args.extend(["--plugin-dir".into(), plugin.to_string_lossy().into_owned()]);
-                        settings
+                        let setup = crate::workspace_run::launch_setup(&app, &cwd, false)?;
+                        for dir in setup.plugins {
+                            args.extend([
+                                "--plugin-dir".into(),
+                                dir.to_string_lossy().into_owned(),
+                            ]);
+                        }
+                        setup.settings
                     } else {
                         json!({})
                     };

@@ -99,6 +99,8 @@ pub fn run() {
             workspace::workspace_read,
             workspace::workspace_agents,
             workspace::workspace_extras,
+            workspace::workspace_repertoire_open,
+            workspace::workspace_repertoire_move,
             workspace_run::workspace_start,
             workspace_run::workspace_send,
             workspace_run::workspace_stop,
@@ -116,6 +118,7 @@ pub fn run() {
         .setup(|app| {
             render::attach(app);
             graph::watch(app.handle().clone());
+            workspace::watch(app.handle().clone());
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()

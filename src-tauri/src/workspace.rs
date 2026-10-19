@@ -16,6 +16,11 @@
 //!   tocar la configuración de Claude Code. Qué hay se le pregunta a Claude Code con
 //!   peticiones de control que no llaman al modelo (`initialize`, `mcp_status`,
 //!   `get_context_usage`).
+//! - Repertorio de nexo: lo que el usuario no quiere en su perfil global y sí en nexo. Los
+//!   plugins instalados y apagados en el perfil, las skills de `~/nexo/repertorio/`, las de
+//!   claude.ai apagadas en el perfil (`skillOverrides`) y los MCP de
+//!   `~/nexo/repertorio/.mcp.json`; lo del perfil pasa ahí con «Mover al repertorio»
+//!   (`workspace_repertoire_move`).
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -25,9 +30,12 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, mpsc};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use serde::{Deserialize, Serialize};
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_json::value::RawValue;
 use serde_json::{Map, Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::skills::frontmatter;
 
@@ -365,6 +373,9 @@ pub fn workspace_close(app: AppHandle, path: String) -> Result<(), String> {
 /// servidores MCP, de conexiones de claude.ai y de skills.
 #[derive(Default, Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Extras {
+    /// Nombres de carpetas de skills en el repertorio de nexo.
+    #[serde(default)]
+    pub repertoire: Vec<String>,
     #[serde(default)]
     pub plugins: Vec<String>,
     #[serde(default)]
@@ -900,6 +911,518 @@ pub struct PluginItem {
     /// Trae hooks: encendido, los del perfil del usuario también se ejecutan (ver
     /// `extras_settings`).
     pub hooks: bool,
+    /// Encendido en el perfil global e instalado para el usuario: puede pasar al repertorio.
+    pub movable: bool,
+}
+
+/// Un plugin apagado en el perfil, un MCP de `~/nexo/repertorio/.mcp.json`, una skill de
+/// `~/nexo/repertorio/` o una del perfil apagada ahí (`skillOverrides`).
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct RepertoireItem {
+    /// `plugin`, `mcp`, `skill` (una carpeta del repertorio) o `profile-skill` (una skill del
+    /// perfil, casi siempre de claude.ai, que se enciende por nombre).
+    pub kind: String,
+    /// El id del plugin, el nombre del MCP, la carpeta de la skill o el nombre de la del perfil.
+    pub id: String,
+    pub name: String,
+    /// En un MCP, el programa o el dominio (como `ServerItem::detail`).
+    pub description: String,
+    pub skills: usize,
+    pub servers: usize,
+    pub hooks: bool,
+    /// En un MCP: `stdio`, `http`… y cómo contestó al sondearlo.
+    pub transport: String,
+    pub status: String,
+    /// En una skill del perfil: `claude.ai` o `user`, como `SkillItem::source`.
+    pub source: String,
+}
+
+impl From<PluginItem> for RepertoireItem {
+    fn from(p: PluginItem) -> Self {
+        Self {
+            kind: "plugin".into(),
+            id: p.id,
+            name: p.name,
+            description: p.description,
+            skills: p.skills,
+            servers: p.servers,
+            hooks: p.hooks,
+            transport: String::new(),
+            status: String::new(),
+            source: String::new(),
+        }
+    }
+}
+
+pub(crate) fn repertoire_dir(home: &Path) -> PathBuf {
+    home.join("nexo/repertorio")
+}
+
+/// Los MCP del repertorio, con el formato de `.mcp.json` (`{"mcpServers": {nombre: config}}`).
+pub(crate) fn repertoire_mcp_path(home: &Path) -> PathBuf {
+    repertoire_dir(home).join(".mcp.json")
+}
+
+pub(crate) fn repertoire_mcp(home: &Path) -> Map<String, Value> {
+    fs::read_to_string(repertoire_mcp_path(home))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v["mcpServers"].as_object().cloned())
+        .unwrap_or_default()
+}
+
+/// Escribe un archivo que puede llevar claves (la configuración de un MCP): solo lo lee el
+/// usuario y se cambia de una vez, por un temporal.
+pub(crate) fn write_private(path: &Path, text: &str) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("tmp");
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&tmp).map_err(|e| e.to_string())?;
+    // `mode` solo vale al crearlo: un temporal que quedara de antes también se cierra.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
+    }
+    file.write_all(text.as_bytes()).map_err(|e| e.to_string())?;
+    drop(file);
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// Plugins instalados para el usuario (`scope: user`), sin los sincronizados.
+fn user_plugins(home: &Path) -> Vec<String> {
+    fs::read_to_string(home.join(".claude/plugins/installed_plugins.json"))
+        .ok()
+        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
+        .map(|v| {
+            v["plugins"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter(|(id, installs)| {
+                    !id.ends_with("@synced")
+                        && installs
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|i| i["scope"] == "user")
+                })
+                .map(|(id, _)| id.clone())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Los plugins del repertorio conservan sus ids de `enabledPlugins`.
+fn repertoire_ids(home: &Path) -> Vec<String> {
+    let enabled = enabled_plugins(home);
+    user_plugins(home)
+        .into_iter()
+        .filter(|id| !enabled.contains(id))
+        .collect()
+}
+
+/// Añade al catálogo los MCP y las skills del repertorio. Los MCP que contestaron a la sonda
+/// ya están (con su estado); los demás salen del archivo, sin estado.
+fn add_repertoire_skills(catalog: &mut Catalog, home: &Path) {
+    catalog.repertoire_dir = "~/nexo/repertorio".into();
+    for (name, config) in repertoire_mcp(home) {
+        if catalog
+            .repertoire
+            .iter()
+            .any(|i| i.kind == "mcp" && i.id == name)
+        {
+            continue;
+        }
+        catalog.repertoire.push(RepertoireItem {
+            kind: "mcp".into(),
+            id: name.clone(),
+            name,
+            description: server_detail(&config),
+            skills: 0,
+            servers: 1,
+            hooks: false,
+            transport: config["type"].as_str().unwrap_or("stdio").to_string(),
+            status: String::new(),
+            source: String::new(),
+        });
+    }
+    catalog.repertoire.extend(
+        crate::skills::list_in(&repertoire_dir(home))
+            .into_iter()
+            .map(|s| RepertoireItem {
+                kind: "skill".into(),
+                id: s.id,
+                name: s.name,
+                description: s.description,
+                skills: 1,
+                servers: 0,
+                hooks: false,
+                transport: String::new(),
+                status: String::new(),
+                source: String::new(),
+            }),
+    );
+    let rank = |kind: &str| match kind {
+        "plugin" => 0,
+        "mcp" => 1,
+        _ => 2,
+    };
+    catalog
+        .repertoire
+        .sort_by_key(|i| (rank(&i.kind), i.name.to_lowercase()));
+}
+
+/// Las skills que instaló Orca (`npx skills`, fuente `stablyai/orca`): las mantiene Orca en el
+/// perfil y las usan sus terminales, así que no pasan al repertorio.
+fn orca_skills(home: &Path) -> HashSet<String> {
+    fs::read_to_string(home.join(".agents/.skill-lock.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v["skills"].as_object().cloned())
+        .map(|skills| {
+            skills
+                .into_iter()
+                .filter(|(_, s)| {
+                    s["source"]
+                        .as_str()
+                        .is_some_and(|src| src.starts_with("stablyai/orca"))
+                })
+                .map(|(name, _)| name)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// La carpeta de `~/.claude/skills/` de una skill del perfil que puede ir al repertorio: por el
+/// nombre de la carpeta o por el `name:` de su SKILL.md. Las de Orca y las sincronizadas no.
+fn profile_skill_dir(home: &Path, name: &str) -> Option<PathBuf> {
+    let orca = orca_skills(home);
+    let dir = home.join(".claude/skills");
+    let usable = |folder: &str| safe_id(folder) && folder != "synced" && !orca.contains(folder);
+    if usable(name) && dir.join(name).join("SKILL.md").is_file() {
+        return Some(dir.join(name));
+    }
+    fs::read_dir(&dir).ok()?.flatten().find_map(|entry| {
+        let folder = entry.file_name().to_str()?.to_string();
+        let text = fs::read_to_string(entry.path().join("SKILL.md")).ok()?;
+        let named = frontmatter(&text)
+            .into_iter()
+            .any(|(k, v)| k == "name" && v == name);
+        (usable(&folder) && named).then(|| entry.path())
+    })
+}
+
+/// Qué skills del perfil pueden ir al repertorio (las de `~/.claude/skills/` que no son de
+/// Orca y las de claude.ai de `movable_synced`); los plugins y los MCP ya lo saben al construir
+/// el catálogo.
+fn mark_movable(catalog: &mut Catalog, home: &Path) {
+    for skill in &mut catalog.skills {
+        skill.movable = match skill.source.as_str() {
+            "user" => profile_skill_dir(home, &skill.name).is_some(),
+            "claude.ai" => movable_synced(home, &skill.name),
+            _ => false,
+        };
+    }
+}
+
+/// Las skills que el usuario apagó en su perfil (`"skillOverrides": {nombre: "off"}` de
+/// `~/.claude/settings.json`): las del perfil que están en el repertorio.
+fn profile_off_skills(home: &Path) -> Vec<String> {
+    fs::read_to_string(home.join(".claude/settings.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .and_then(|v| v["skillOverrides"].as_object().cloned())
+        .map(|m| {
+            m.into_iter()
+                .filter(|(_, v)| v == "off")
+                .map(|(name, _)| name)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Las skills sincronizadas de claude.ai (`~/.claude/skills/synced/<cubo>/<nombre>/SKILL.md`).
+fn synced_skill_names(home: &Path) -> HashSet<String> {
+    let mut out = HashSet::new();
+    for bucket in fs::read_dir(home.join(".claude/skills/synced"))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        for entry in fs::read_dir(bucket.path()).into_iter().flatten().flatten() {
+            if entry.path().join("SKILL.md").is_file()
+                && let Some(name) = entry.file_name().to_str()
+            {
+                out.insert(name.to_string());
+            }
+        }
+    }
+    out
+}
+
+/// Una skill de claude.ai que puede pasar al repertorio. No se mueve de su carpeta (la
+/// sincronización la devolvería): se apaga en el perfil por su nombre. Por eso no vale una que
+/// se llama como otra del perfil (Claude Code la llama entonces `anthropic-skills:<nombre>`, y
+/// apagarla apagaría también la otra, como la `computer-use` de Orca).
+fn movable_synced(home: &Path, name: &str) -> bool {
+    !name.contains(':')
+        && synced_skill_names(home).contains(name)
+        && !home.join(".claude/skills").join(name).exists()
+        && !orca_skills(home).contains(name)
+}
+
+/// Un objeto JSON con sus claves en el orden del archivo y cada valor tal cual está escrito:
+/// así nexo cambia una clave de `~/.claude/settings.json` sin reordenar ni reformatear lo demás
+/// (el `Map` de serde_json ordena las claves).
+struct OrderedObject(Vec<(String, Box<RawValue>)>);
+
+impl<'de> Deserialize<'de> for OrderedObject {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Entries;
+        impl<'de> Visitor<'de> for Entries {
+            type Value = OrderedObject;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("un objeto JSON")
+            }
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<OrderedObject, A::Error> {
+                let mut out = Vec::new();
+                while let Some(entry) = map.next_entry::<String, Box<RawValue>>()? {
+                    out.push(entry);
+                }
+                Ok(OrderedObject(out))
+            }
+        }
+        deserializer.deserialize_map(Entries)
+    }
+}
+
+impl Serialize for OrderedObject {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in &self.0 {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+/// Pone `"skillOverrides": {nombre: valor}` en `~/.claude/settings.json` sin tocar el resto
+/// del archivo (ni el orden de sus claves ni cómo están escritas).
+fn set_skill_override(home: &Path, name: &str, value: &str) -> Result<(), String> {
+    let path = home.join(".claude/settings.json");
+    let mut settings = match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<OrderedObject>(&text)
+            .map_err(|e| format!("No se pudo leer ~/.claude/settings.json: {e}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => OrderedObject(Vec::new()),
+        Err(e) => return Err(e.to_string()),
+    };
+    let at = settings.0.iter().position(|(k, _)| k == "skillOverrides");
+    let mut overrides: Map<String, Value> = at
+        .and_then(|i| serde_json::from_str(settings.0[i].1.get()).ok())
+        .unwrap_or_default();
+    overrides.insert(name.to_string(), Value::String(value.to_string()));
+    // Con la sangría del archivo (dos espacios por nivel): el objeto va un nivel por dentro.
+    let text = serde_json::to_string_pretty(&overrides)
+        .map_err(|e| e.to_string())?
+        .replace('\n', "\n  ");
+    let raw = RawValue::from_string(text).map_err(|e| e.to_string())?;
+    match at {
+        Some(i) => settings.0[i].1 = raw,
+        None => settings.0.push(("skillOverrides".into(), raw)),
+    }
+    let text = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension("json.nexo");
+    fs::write(&tmp, text + "\n").map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn workspace_repertoire_open(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let dir = repertoire_dir(&app.path().home_dir().map_err(|e| e.to_string())?);
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(dir.to_string_lossy().into_owned(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------- mover al repertorio
+
+/// Una orden del CLI de Claude Code sobre el perfil (`plugin disable`, `mcp remove`): así
+/// cambia sus archivos él, que reescribe `~/.claude.json` a menudo.
+fn claude_cli(claude: &Path, home: &Path, args: &[&str]) -> Result<(), String> {
+    let mut command = Command::new(claude);
+    for key in crate::claude_code::INHERITED_ENV {
+        command.env_remove(key);
+    }
+    let out = command
+        .args(args)
+        .current_dir(home)
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("No se pudo abrir Claude Code: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    // Lo último que dijo (el motivo); el CLI no escribe claves en estas órdenes.
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Err(text
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .map_or_else(
+            || format!("Claude Code terminó con {}", out.status),
+            |l| l.trim().to_string(),
+        ))
+}
+
+/// Un plugin encendido en el perfil pasa al repertorio apagándolo ahí: sigue instalado (y
+/// se actualiza con `claude plugin update`) y nexo lo enciende por workspace.
+fn move_plugin(
+    home: &Path,
+    id: &str,
+    run: &dyn Fn(&[&str]) -> Result<(), String>,
+) -> Result<(), String> {
+    if !enabled_plugins(home).iter().any(|p| p == id) || !user_plugins(home).iter().any(|p| p == id)
+    {
+        return Err("Ese plugin no está encendido en tu perfil.".into());
+    }
+    run(&["plugin", "disable", "--scope", "user", "--", id])
+}
+
+/// Un MCP del perfil (`~/.claude.json`) pasa tal cual al archivo del repertorio y después se
+/// quita del perfil; si no se puede quitar, el repertorio vuelve a como estaba.
+fn move_mcp(
+    home: &Path,
+    name: &str,
+    run: &dyn Fn(&[&str]) -> Result<(), String>,
+) -> Result<(), String> {
+    let config = fs::read_to_string(home.join(".claude.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+        .map(|v| v["mcpServers"][name].clone())
+        .filter(Value::is_object)
+        .ok_or("Ese MCP no está en tu perfil.")?;
+    let mut servers = repertoire_mcp(home);
+    if servers.contains_key(name) {
+        return Err(format!("Ya hay un MCP «{name}» en el repertorio."));
+    }
+    let path = repertoire_mcp_path(home);
+    let save = |servers: &Map<String, Value>| {
+        let text = serde_json::to_string_pretty(&json!({ "mcpServers": servers }))
+            .map_err(|e| e.to_string())?;
+        write_private(&path, &text)
+    };
+    servers.insert(name.to_string(), config);
+    save(&servers)?;
+    if let Err(e) = run(&["mcp", "remove", "--scope", "user", "--", name]) {
+        servers.remove(name);
+        save(&servers)?;
+        return Err(format!("No se pudo quitar «{name}» de tu perfil: {e}"));
+    }
+    Ok(())
+}
+
+/// Una skill de `~/.claude/skills/` (no de Orca) pasa a `~/nexo/repertorio/`. Si es un enlace
+/// (las de `npx skills`, a `~/.agents/skills/`), pasa el enlace con la ruta entera: la skill
+/// se queda donde está y `npx skills update` la sigue poniendo al día.
+fn move_skill(home: &Path, name: &str) -> Result<Moved, String> {
+    // Una de claude.ai se queda en su carpeta y se apaga en el perfil.
+    if profile_skill_dir(home, name).is_none() && movable_synced(home, name) {
+        set_skill_override(home, name, "off")?;
+        return Ok(Moved {
+            kind: "profile-skill".into(),
+            id: name.to_string(),
+        });
+    }
+    let from = profile_skill_dir(home, name)
+        .ok_or("Esa skill no está en ~/.claude/skills o la mantiene Orca.")?;
+    let folder = from
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or("Nombre de carpeta no válido.")?;
+    let dir = repertoire_dir(home);
+    let to = dir.join(folder);
+    if to.symlink_metadata().is_ok() {
+        return Err(format!("Ya hay una skill «{folder}» en el repertorio."));
+    }
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let link = fs::symlink_metadata(&from).map_err(|e| e.to_string())?;
+    if link.file_type().is_symlink() {
+        let target = fs::canonicalize(&from).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, &to).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&target, &to).map_err(|e| e.to_string())?;
+        fs::remove_file(&from).map_err(|e| e.to_string())?;
+    } else {
+        fs::rename(&from, &to).map_err(|e| format!("No se pudo mover la carpeta: {e}"))?;
+    }
+    Ok(Moved {
+        kind: "skill".into(),
+        id: folder.to_string(),
+    })
+}
+
+/// Lo que quedó en el repertorio: su `kind` y su id (los de `RepertoireItem`).
+#[derive(Serialize, Debug, PartialEq)]
+pub struct Moved {
+    pub kind: String,
+    pub id: String,
+}
+
+/// «Mover al repertorio» desde Extras: `kind` es `plugin`, `mcp` o `skill` e `id`, lo que da
+/// el catálogo. Cada caso comprueba en los archivos del perfil que eso está ahí. Devuelve cómo
+/// quedó en el repertorio (una skill de `~/.claude/skills/` pasa a ser una carpeta, que puede no
+/// llamarse como ella; una de claude.ai, una `profile-skill` con su nombre).
+#[tauri::command]
+pub async fn workspace_repertoire_move(
+    app: AppHandle,
+    kind: String,
+    id: String,
+) -> Result<Moved, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let home = app.path().home_dir().map_err(|e| e.to_string())?;
+        let claude = || crate::claude_code::find_claude(&app).ok_or("No encontré Claude Code.");
+        let moved = match kind.as_str() {
+            "plugin" => {
+                let claude = claude()?;
+                move_plugin(&home, &id, &|args| claude_cli(&claude, &home, args)).map(|_| Moved {
+                    kind: "plugin".into(),
+                    id,
+                })
+            }
+            "mcp" => {
+                let claude = claude()?;
+                move_mcp(&home, &id, &|args| claude_cli(&claude, &home, args)).map(|_| Moved {
+                    kind: "mcp".into(),
+                    id,
+                })
+            }
+            "skill" => move_skill(&home, &id),
+            _ => Err("Eso no se puede mover al repertorio.".into()),
+        }?;
+        // Cambió el perfil: el catálogo de todos los workspaces se vuelve a leer.
+        if let Ok(mut cache) = app.state::<WorkspaceCatalogs>().cache.lock() {
+            cache.clear();
+        }
+        Ok(moved)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -910,6 +1433,9 @@ pub struct ServerItem {
     /// El programa o el dominio (nada de cabeceras ni variables: pueden llevar claves).
     pub detail: String,
     pub status: String,
+    /// Es del perfil del usuario (no de una carpeta ni de claude.ai): puede pasar al
+    /// repertorio.
+    pub movable: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -918,6 +1444,8 @@ pub struct SkillItem {
     pub description: String,
     /// `user` (las de `~/.claude/skills/`) o `claude.ai` (sincronizadas).
     pub source: String,
+    /// De `~/.claude/skills/` y no de Orca: puede pasar al repertorio (`mark_movable`).
+    pub movable: bool,
 }
 
 /// Hooks que se pueden encender en un workspace. Claude Code no sabe apagar unos y dejar
@@ -938,6 +1466,8 @@ pub struct HookItem {
 
 #[derive(Serialize, Clone, Debug, Default, PartialEq)]
 pub struct Catalog {
+    pub repertoire: Vec<RepertoireItem>,
+    pub repertoire_dir: String,
     pub plugins: Vec<PluginItem>,
     pub mcp: Vec<ServerItem>,
     pub connectors: Vec<ServerItem>,
@@ -1198,6 +1728,10 @@ fn hooks_on(catalog: &Catalog, on: &Extras) -> bool {
         .plugins
         .iter()
         .any(|p| p.hooks && on.plugins.contains(&p.id))
+        || catalog
+            .repertoire
+            .iter()
+            .any(|p| p.kind == "plugin" && p.hooks && on.plugins.contains(&p.id))
         || catalog.hooks.iter().any(|h| on.hooks.contains(&h.id))
 }
 
@@ -1266,6 +1800,8 @@ pub(crate) fn build_catalog(
     context: &Value,
     plugins: &HashMap<String, (String, String, bool)>,
     enabled: &[String],
+    repertoire: &[String],
+    off_skills: &[String],
 ) -> Catalog {
     let descriptions: HashMap<&str, &str> = init["commands"]
         .as_array()
@@ -1295,6 +1831,29 @@ pub(crate) fn build_catalog(
                     *plugin_skills.entry(p.to_string()).or_default() += 1;
                 }
             }
+            // Apagada en el perfil y encendida en la sonda: está en el repertorio.
+            Some(source @ ("userSettings" | "syncedSkills"))
+                if off_skills.iter().any(|s| s == name) =>
+            {
+                catalog.repertoire.push(RepertoireItem {
+                    kind: "profile-skill".into(),
+                    id: name.to_string(),
+                    name: name.to_string(),
+                    description: clean_description(
+                        descriptions.get(name).copied().unwrap_or_default(),
+                    ),
+                    skills: 1,
+                    servers: 0,
+                    hooks: false,
+                    transport: String::new(),
+                    status: String::new(),
+                    source: if source == "userSettings" {
+                        "user".into()
+                    } else {
+                        "claude.ai".into()
+                    },
+                })
+            }
             Some(source @ ("userSettings" | "syncedSkills")) => catalog.skills.push(SkillItem {
                 name: name.to_string(),
                 description: clean_description(descriptions.get(name).copied().unwrap_or_default()),
@@ -1303,6 +1862,8 @@ pub(crate) fn build_catalog(
                 } else {
                     "claude.ai".into()
                 },
+                // Lo afina `mark_movable` (las de Orca no se mueven).
+                movable: source == "userSettings",
             }),
             _ => {}
         }
@@ -1311,16 +1872,20 @@ pub(crate) fn build_catalog(
         let Some(name) = server["name"].as_str() else {
             continue;
         };
+        let source = server["source"].as_str().or(server["scope"].as_str());
+        let kind = server["config"]["type"]
+            .as_str()
+            .unwrap_or("stdio")
+            .to_string();
+        let status = server["status"].as_str().unwrap_or_default().to_string();
         let item = || ServerItem {
             name: name.to_string(),
-            kind: server["config"]["type"]
-                .as_str()
-                .unwrap_or("stdio")
-                .to_string(),
+            kind: kind.clone(),
             detail: server_detail(&server["config"]),
-            status: server["status"].as_str().unwrap_or_default().to_string(),
+            status: status.clone(),
+            movable: source == Some("user"),
         };
-        match server["source"].as_str().or(server["scope"].as_str()) {
+        match source {
             Some("plugin") => {
                 if let Some(p) = name
                     .strip_prefix("plugin:")
@@ -1332,6 +1897,19 @@ pub(crate) fn build_catalog(
             Some("claudeai") => catalog.connectors.push(item()),
             // Los de `.mcp.json` son de la propia carpeta: no son extras del perfil.
             Some("project") => {}
+            // Los de `--mcp-config`: en la sonda solo va el archivo del repertorio.
+            Some("dynamic") => catalog.repertoire.push(RepertoireItem {
+                kind: "mcp".into(),
+                id: name.to_string(),
+                name: name.to_string(),
+                description: server_detail(&server["config"]),
+                skills: 0,
+                servers: 1,
+                hooks: false,
+                transport: kind.clone(),
+                status: status.clone(),
+                source: String::new(),
+            }),
             _ => catalog.mcp.push(item()),
         }
     }
@@ -1340,7 +1918,7 @@ pub(crate) fn build_catalog(
         .chain(plugin_servers.keys())
         .cloned()
         .collect();
-    for id in enabled {
+    for id in enabled.iter().chain(repertoire) {
         if let Some((name, _)) = id.split_once('@') {
             names.push(name.to_string());
         }
@@ -1348,13 +1926,13 @@ pub(crate) fn build_catalog(
     let mut seen = HashSet::new();
     names.sort();
     for name in names {
-        if !seen.insert(name.clone()) || name == "nexo" {
+        if !seen.insert(name.clone()) || name == "nexo" || name == "repertorio" {
             continue;
         }
         let Some((id, description, synced)) = plugins.get(&name) else {
             continue;
         };
-        catalog.plugins.push(PluginItem {
+        let item = PluginItem {
             id: id.clone(),
             name: name.clone(),
             description: description.clone(),
@@ -1362,7 +1940,13 @@ pub(crate) fn build_catalog(
             servers: plugin_servers.get(&name).copied().unwrap_or(0),
             synced: *synced,
             hooks: false,
-        });
+            movable: !synced && enabled.contains(id),
+        };
+        if repertoire.contains(id) {
+            catalog.repertoire.push(item.into());
+        } else {
+            catalog.plugins.push(item);
+        }
     }
     catalog.skills.sort_by_key(|a| a.name.to_lowercase());
     catalog
@@ -1375,6 +1959,13 @@ pub(crate) fn extras_settings(catalog: &Catalog, on: &Extras) -> Value {
         .plugins
         .iter()
         .map(|p| (p.id.clone(), Value::Bool(on.plugins.contains(&p.id))))
+        .chain(
+            catalog
+                .repertoire
+                .iter()
+                .filter(|p| p.kind == "plugin")
+                .map(|p| (p.id.clone(), Value::Bool(on.plugins.contains(&p.id)))),
+        )
         .collect();
     let denied: Vec<Value> = catalog
         .mcp
@@ -1388,12 +1979,26 @@ pub(crate) fn extras_settings(catalog: &Catalog, on: &Extras) -> Value {
         )
         .map(|s| json!({ "serverName": s.name }))
         .collect();
-    let skills: Map<String, Value> = catalog
+    let mut skills: Map<String, Value> = catalog
         .skills
         .iter()
         .filter(|s| !on.skills.contains(&s.name))
         .map(|s| (s.name.clone(), Value::String("off".into())))
         .collect();
+    // Las del perfil que están en el repertorio van apagadas en el perfil: encendidas aquí
+    // necesitan un `"on"` explícito (`--settings` manda sobre el perfil).
+    for item in catalog
+        .repertoire
+        .iter()
+        .filter(|i| i.kind == "profile-skill")
+    {
+        let value = if on.skills.contains(&item.id) {
+            "on"
+        } else {
+            "off"
+        };
+        skills.insert(item.id.clone(), Value::String(value.into()));
+    }
     let mut settings =
         json!({ "enabledPlugins": plugins, "deniedMcpServers": denied, "skillOverrides": skills });
     // Un catálogo de reserva puede no conocer todas las conexiones: si no hay ninguna
@@ -1430,24 +2035,33 @@ pub(crate) fn extras_settings(catalog: &Catalog, on: &Extras) -> Value {
 }
 
 /// Le pregunta a Claude Code, en la carpeta del workspace y con la configuración del usuario,
-/// qué carga, sin llamar al modelo: unas respuestas de control y se cierra.
-fn probe_catalog(claude: &Path, root: &Path) -> Result<(Value, Value, Value), String> {
+/// qué carga, sin llamar al modelo: unas respuestas de control y se cierra. Con `mcp_config`
+/// (el archivo del repertorio) también dice cómo contestan sus MCP.
+fn probe_catalog(
+    claude: &Path,
+    root: &Path,
+    settings: &Value,
+    mcp_config: Option<&Path>,
+) -> Result<(Value, Value, Value), String> {
     let mut command = Command::new(claude);
     for key in crate::claude_code::INHERITED_ENV {
         command.env_remove(key);
     }
+    command.args([
+        "-p",
+        "--input-format",
+        "stream-json",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--no-session-persistence",
+        "--settings",
+        &settings.to_string(),
+    ]);
+    if let Some(config) = mcp_config {
+        command.arg("--mcp-config").arg(config);
+    }
     let mut child = command
-        .args([
-            "-p",
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--no-session-persistence",
-            "--settings",
-            r#"{"disableAllHooks":true}"#,
-        ])
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1519,17 +2133,32 @@ pub(crate) fn fallback_catalog(home: &Path, root: &Path, why: String) -> Catalog
     };
     let enabled = enabled_plugins(home);
     let hooked = plugins_with_hooks(home);
+    let repertoire = repertoire_ids(home);
+    let mut catalog = Catalog::default();
     let plugins = known_plugins(home, root)
         .into_iter()
-        .filter(|(_, (id, _, synced))| *synced || enabled.contains(id))
+        .filter(|(name, (id, _, synced))| {
+            name != "nexo"
+                && name != "repertorio"
+                && (*synced || enabled.contains(id) || repertoire.contains(id))
+        })
         .map(|(name, (id, description, synced))| PluginItem {
             hooks: hooked.contains(&id),
+            movable: !synced && enabled.contains(&id),
             id,
             name,
             description,
             skills: 0,
             servers: 0,
             synced,
+        })
+        .filter_map(|p| {
+            if repertoire.contains(&p.id) {
+                catalog.repertoire.push(p.into());
+                None
+            } else {
+                Some(p)
+            }
         })
         .collect();
     let config = read(home.join(".claude.json")).unwrap_or(Value::Null);
@@ -1538,12 +2167,16 @@ pub(crate) fn fallback_catalog(home: &Path, root: &Path, why: String) -> Catalog
         kind: String::new(),
         detail: String::new(),
         status: String::new(),
+        movable: false,
     };
     let mut mcp: Vec<ServerItem> = config["mcpServers"]
         .as_object()
         .into_iter()
         .flatten()
-        .map(|(n, _)| server(n))
+        .map(|(n, _)| ServerItem {
+            movable: true,
+            ..server(n)
+        })
         .collect();
     let local = &config["projects"][root.to_string_lossy().as_ref()]["mcpServers"];
     mcp.extend(
@@ -1570,6 +2203,7 @@ pub(crate) fn fallback_catalog(home: &Path, root: &Path, why: String) -> Catalog
                 name: e.file_name().to_string_lossy().into_owned(),
                 description: String::new(),
                 source: source.into(),
+                movable: false,
             })
             .collect()
     };
@@ -1581,14 +2215,35 @@ pub(crate) fn fallback_catalog(home: &Path, root: &Path, why: String) -> Catalog
     {
         skills.extend(skill_dirs(bucket.path(), "claude.ai"));
     }
-    Catalog {
+    let off = profile_off_skills(home);
+    let (gone, skills): (Vec<SkillItem>, Vec<SkillItem>) =
+        skills.into_iter().partition(|s| off.contains(&s.name));
+    catalog
+        .repertoire
+        .extend(gone.into_iter().map(|s| RepertoireItem {
+            kind: "profile-skill".into(),
+            id: s.name.clone(),
+            name: s.name,
+            description: String::new(),
+            skills: 1,
+            servers: 0,
+            hooks: false,
+            transport: String::new(),
+            status: String::new(),
+            source: s.source,
+        }));
+    add_repertoire_skills(&mut catalog, home);
+    let mut catalog = Catalog {
         plugins,
         mcp,
         connectors,
         skills,
         hooks: hook_items(home, root, find_program("rtk", home)),
         error: Some(why),
-    }
+        ..catalog
+    };
+    mark_movable(&mut catalog, home);
+    catalog
 }
 
 /// El catálogo de extras de un workspace (en caché unos minutos: sondear tarda un segundo).
@@ -1602,13 +2257,33 @@ pub(crate) fn catalog_for(app: &AppHandle, root: &Path, force: bool) -> Result<C
     }
     let claude = crate::claude_code::find_claude(app).ok_or("No encontré Claude Code.")?;
     let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    let mut catalog = match probe_catalog(&claude, root) {
+    let repertoire = repertoire_ids(&home);
+    let enabled: Map<String, Value> = repertoire
+        .iter()
+        .map(|id| (id.clone(), Value::Bool(true)))
+        .collect();
+    // Lo apagado en el perfil que está en el repertorio se enciende en la sonda para verlo.
+    let off_skills = profile_off_skills(&home);
+    let overrides: Map<String, Value> = off_skills
+        .iter()
+        .map(|name| (name.clone(), Value::String("on".into())))
+        .collect();
+    let settings = json!({
+        "disableAllHooks": true,
+        "enabledPlugins": enabled,
+        "skillOverrides": overrides,
+    });
+    let mcp_config = repertoire_mcp_path(&home);
+    let mcp_config = (!repertoire_mcp(&home).is_empty()).then_some(mcp_config.as_path());
+    let mut catalog = match probe_catalog(&claude, root, &settings, mcp_config) {
         Ok((init, mcp, context)) => build_catalog(
             &init,
             &mcp,
             &context,
             &known_plugins(&home, root),
             &enabled_plugins(&home),
+            &repertoire,
+            &off_skills,
         ),
         // Sin respuesta, lo de los archivos (sin guardarlo: la próxima vez se vuelve a probar).
         Err(e) => return Ok(fallback_catalog(&home, root, e)),
@@ -1617,6 +2292,11 @@ pub(crate) fn catalog_for(app: &AppHandle, root: &Path, force: bool) -> Result<C
     for plugin in &mut catalog.plugins {
         plugin.hooks = hooked.contains(&plugin.id);
     }
+    for plugin in &mut catalog.repertoire {
+        plugin.hooks = hooked.contains(&plugin.id);
+    }
+    add_repertoire_skills(&mut catalog, &home);
+    mark_movable(&mut catalog, &home);
     catalog.hooks = hook_items(&home, root, find_program("rtk", &home));
     state
         .cache
@@ -1648,6 +2328,143 @@ pub async fn workspace_extras(
     tauri::async_runtime::spawn_blocking(move || catalog_for(&app, &root, force))
         .await
         .map_err(|e| e.to_string())?
+}
+
+// ---------------------------------------------------------------- vigilante
+
+/// Lo que cambia el catálogo de Extras, del perfil y del repertorio. De `~/.claude.json`, que
+/// Claude Code reescribe a menudo, solo los MCP; de `settings.json`, solo los plugins
+/// encendidos y los `skillOverrides` (Orca también lo reescribe con sus hooks).
+pub(crate) fn repertoire_fingerprint(home: &Path) -> String {
+    let read = |p: PathBuf| {
+        fs::read_to_string(p)
+            .ok()
+            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+            .unwrap_or(Value::Null)
+    };
+    // Cada entrada de una carpeta con la fecha de su SKILL.md (cambia su descripción).
+    let listing = |dir: PathBuf| -> Vec<(String, u64)> {
+        let mut out: Vec<(String, u64)> = fs::read_dir(dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| {
+                let at = fs::metadata(e.path().join("SKILL.md"))
+                    .and_then(|m| m.modified())
+                    .map(|t| millis(t) as u64)
+                    .unwrap_or(0);
+                (e.file_name().to_string_lossy().into_owned(), at)
+            })
+            .collect();
+        out.sort();
+        out
+    };
+    let settings = read(home.join(".claude/settings.json"));
+    let installed: Vec<String> =
+        read(home.join(".claude/plugins/installed_plugins.json"))["plugins"]
+            .as_object()
+            .map(|m| m.keys().cloned().collect())
+            .unwrap_or_default();
+    json!({
+        "enabled": settings["enabledPlugins"],
+        "overrides": settings["skillOverrides"],
+        "mcp": read(home.join(".claude.json"))["mcpServers"],
+        "installed": installed,
+        "skills": listing(home.join(".claude/skills")),
+        "repertoire": listing(repertoire_dir(home)),
+        "repertoire_mcp": repertoire_mcp(home),
+    })
+    .to_string()
+}
+
+/// Fechas de los archivos de los que sale `repertoire_fingerprint`: solo si cambia alguna se
+/// vuelve a leer (`~/.claude.json` pesa unos cientos de KB).
+fn repertoire_mtimes(home: &Path) -> Vec<Option<SystemTime>> {
+    [
+        home.join(".claude/settings.json"),
+        home.join(".claude.json"),
+        home.join(".claude/plugins/installed_plugins.json"),
+        home.join(".claude/skills"),
+        repertoire_dir(home),
+        repertoire_mcp_path(home),
+    ]
+    .iter()
+    .map(|p| fs::metadata(p).and_then(|m| m.modified()).ok())
+    .collect()
+}
+
+/// Los `extras` de los workspaces del panel, para avisar cuando otro (el agente de nexo, con
+/// la skill del repertorio) los cambia en su `workspace.json`.
+#[derive(Default)]
+pub(crate) struct ExtrasWatch {
+    seen: HashMap<PathBuf, (Option<SystemTime>, Extras)>,
+}
+
+impl ExtrasWatch {
+    /// Los workspaces cuyos `extras` cambiaron desde la vez anterior. El primero que se ve no
+    /// cuenta: es el punto de partida. Lo que escribe la interfaz también sale (no se sabe
+    /// quién escribió); la interfaz no hace nada si ya los tenía.
+    pub(crate) fn check(&mut self, roots: &[PathBuf]) -> Vec<(PathBuf, Extras)> {
+        let mut changed = Vec::new();
+        self.seen.retain(|root, _| roots.contains(root));
+        for root in roots {
+            let at = fs::metadata(config_path(root))
+                .and_then(|m| m.modified())
+                .ok();
+            if self.seen.get(root).is_some_and(|(seen, _)| *seen == at) {
+                continue;
+            }
+            let extras = read_config(root).extras;
+            if let Some((_, before)) = self.seen.get(root)
+                && *before != extras
+            {
+                changed.push((root.clone(), extras.clone()));
+            }
+            self.seen.insert(root.clone(), (at, extras));
+        }
+        changed
+    }
+}
+
+#[derive(Serialize, Clone)]
+struct ExtrasChanged {
+    path: String,
+    extras: Extras,
+}
+
+/// Vigila, cada segundo, lo que puede cambiar fuera de Extras: el perfil y el repertorio
+/// (`claude plugin …`, `claude mcp …`, una skill copiada a la carpeta, el agente de nexo) y los
+/// `extras` de los workspaces del panel. Lo primero vacía la caché de catálogos y emite
+/// `repertoire-changed`; lo segundo, `workspace-extras-changed` (`{ path, extras }`).
+pub fn watch(app: AppHandle) {
+    std::thread::spawn(move || {
+        let Ok(home) = app.path().home_dir() else {
+            return;
+        };
+        let mut mtimes = repertoire_mtimes(&home);
+        let mut fingerprint = repertoire_fingerprint(&home);
+        let mut extras = ExtrasWatch::default();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let now = repertoire_mtimes(&home);
+            if now != mtimes {
+                mtimes = now;
+                let next = repertoire_fingerprint(&home);
+                if next != fingerprint {
+                    fingerprint = next;
+                    if let Ok(mut cache) = app.state::<WorkspaceCatalogs>().cache.lock() {
+                        cache.clear();
+                    }
+                    let _ = app.emit("repertoire-changed", ());
+                }
+            }
+            let roots: Vec<PathBuf> = read_list(&app).open;
+            for (root, extras) in extras.check(&roots) {
+                let path = root.display().to_string();
+                let _ = app.emit("workspace-extras-changed", ExtrasChanged { path, extras });
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -1932,6 +2749,8 @@ mod tests {
             &context,
             &plugins,
             &["cloudflare@cloudflare".into()],
+            &[],
+            &[],
         );
         let ids: Vec<&str> = catalog.plugins.iter().map(|p| p.id.as_str()).collect();
         assert_eq!(
@@ -1975,6 +2794,7 @@ mod tests {
             connectors: vec![],
             skills: vec!["pdf".into()],
             hooks: vec![],
+            ..Extras::default()
         };
         let settings = extras_settings(&catalog, &on);
         assert_eq!(settings["enabledPlugins"]["data@synced"], true);
@@ -1986,6 +2806,473 @@ mod tests {
         assert_eq!(settings["skillOverrides"], json!({ "computer-use": "off" }));
         let none = extras_settings(&catalog, &Extras::default());
         assert_eq!(none["deniedMcpServers"].as_array().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn el_catalogo_separa_el_repertorio_y_conserva_sus_ids_de_plugins() {
+        let home = temp("repertorio-perfil");
+        let root = temp("repertorio-carpeta");
+        fs::create_dir_all(home.join(".claude/plugins")).unwrap();
+        fs::write(
+            home.join(".claude/settings.json"),
+            json!({"enabledPlugins":{"activo@tienda":true,"apagado@tienda":false}}).to_string(),
+        )
+        .unwrap();
+        fs::write(
+            home.join(".claude/plugins/installed_plugins.json"),
+            json!({"plugins":{
+                "activo@tienda":[{"scope":"user"}], "apagado@tienda":[{"scope":"user"}],
+                "local@tienda":[{"scope":"project","projectPath":root}],
+                "sincronizado@synced":[{"scope":"user"}]
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        fs::create_dir_all(home.join("nexo/repertorio/rea")).unwrap();
+        fs::write(
+            home.join("nexo/repertorio/rea/SKILL.md"),
+            "---\nname: REA\ndescription: Examina programas\n---\n",
+        )
+        .unwrap();
+        let ids = repertoire_ids(&home);
+        assert_eq!(ids, ["apagado@tienda"]);
+        let context = json!({"skills":{"skillFrontmatter":[
+            {"name":"apagado:skill","source":"plugin","pluginName":"apagado"},
+            {"name":"nexo:agentes","source":"plugin","pluginName":"nexo"},
+            {"name":"repertorio:rea","source":"plugin","pluginName":"repertorio"}
+        ]}});
+        let mut catalog = build_catalog(
+            &json!({}),
+            &json!({"mcpServers":[
+                {"name":"plugin:apagado:servidor","source":"plugin"}
+            ]}),
+            &context,
+            &known_plugins(&home, &root),
+            &enabled_plugins(&home),
+            &ids,
+            &[],
+        );
+        assert_eq!(
+            catalog
+                .plugins
+                .iter()
+                .map(|p| p.id.as_str())
+                .collect::<Vec<_>>(),
+            ["activo@tienda"]
+        );
+        assert_eq!(catalog.repertoire[0].id, "apagado@tienda");
+        assert_eq!(
+            (catalog.repertoire[0].skills, catalog.repertoire[0].servers),
+            (1, 1)
+        );
+        catalog.repertoire[0].hooks = true;
+        add_repertoire_skills(&mut catalog, &home);
+        assert_eq!(catalog.repertoire_dir, "~/nexo/repertorio");
+        assert_eq!(catalog.repertoire[1].kind, "skill");
+        assert_eq!(catalog.repertoire[1].description, "Examina programas");
+        let none = extras_settings(&catalog, &Extras::default());
+        assert_eq!(none["enabledPlugins"]["apagado@tienda"], false);
+        assert_eq!(none["disableAllHooks"], true);
+        let on = Extras {
+            plugins: vec!["apagado@tienda".into()],
+            ..Extras::default()
+        };
+        let settings = extras_settings(&catalog, &on);
+        assert_eq!(settings["enabledPlugins"]["apagado@tienda"], true);
+        assert!(settings["disableAllHooks"].is_null());
+        let fallback = fallback_catalog(&home, &root, "sin respuesta".into());
+        let plugin = fallback
+            .repertoire
+            .iter()
+            .find(|i| i.kind == "plugin")
+            .unwrap();
+        assert_eq!(plugin.id, "apagado@tienda");
+        assert_eq!(plugin.skills, 0);
+        assert!(fallback.repertoire.iter().any(|i| i.id == "rea"));
+        let old: Extras = serde_json::from_value(json!({"plugins":["apagado@tienda"]})).unwrap();
+        assert!(old.repertoire.is_empty());
+        assert_eq!(old.plugins, on.plugins);
+        fs::remove_dir_all(home).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn los_mcp_del_repertorio_salen_aparte_y_lo_del_perfil_sabe_si_se_puede_mover() {
+        let home = temp("repertorio-mcp");
+        fs::create_dir_all(home.join("nexo/repertorio")).unwrap();
+        fs::write(
+            repertoire_mcp_path(&home),
+            json!({"mcpServers":{
+                "rea":{"command":"/usr/bin/rea","env":{"CLAVE":"secreta"}},
+                "callado":{"type":"http","url":"https://mcp.ejemplo.com/v1?k=1"}
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let mcp = json!({"mcpServers":[
+            {"name":"rea","source":"dynamic","status":"connected","config":{"command":"/usr/bin/rea"}},
+            {"name":"github","source":"user","status":"connected","config":{"type":"http","url":"https://api.githubcopilot.com/mcp/"}},
+            {"name":"local","source":"local","config":{"command":"x"}}
+        ]});
+        let context = json!({"skills":{"skillFrontmatter":[
+            {"name":"mia","source":"userSettings"},
+            {"name":"pdf","source":"syncedSkills"},
+            {"name":"tienda:una","source":"plugin","pluginName":"tienda"}
+        ]}});
+        let plugins = HashMap::from([
+            (
+                "tienda".to_string(),
+                ("tienda@m".to_string(), String::new(), false),
+            ),
+            (
+                "data".to_string(),
+                ("data@synced".to_string(), String::new(), true),
+            ),
+        ]);
+        let mut catalog = build_catalog(
+            &json!({}),
+            &mcp,
+            &context,
+            &plugins,
+            &["tienda@m".into(), "data@synced".into()],
+            &[],
+            &[],
+        );
+        add_repertoire_skills(&mut catalog, &home);
+        let mcp: Vec<(&str, &str, &str)> = catalog
+            .repertoire
+            .iter()
+            .filter(|i| i.kind == "mcp")
+            .map(|i| (i.id.as_str(), i.description.as_str(), i.status.as_str()))
+            .collect();
+        // El que contestó, con su estado; el otro, del archivo y sin estado (ni la clave).
+        assert_eq!(
+            mcp,
+            [
+                ("callado", "mcp.ejemplo.com", ""),
+                ("rea", "rea", "connected")
+            ]
+        );
+        let movable: Vec<(&str, bool)> = catalog
+            .mcp
+            .iter()
+            .map(|s| (s.name.as_str(), s.movable))
+            .collect();
+        assert_eq!(movable, [("github", true), ("local", false)]);
+        let plugins: Vec<(&str, bool)> = catalog
+            .plugins
+            .iter()
+            .map(|p| (p.id.as_str(), p.movable))
+            .collect();
+        assert_eq!(plugins, [("data@synced", false), ("tienda@m", true)]);
+        // Sin la carpeta en ~/.claude/skills no hay nada que mover.
+        mark_movable(&mut catalog, &home);
+        assert!(catalog.skills.iter().all(|s| !s.movable));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mover_una_skill_al_repertorio_deja_las_de_orca_y_conserva_los_enlaces() {
+        let home = temp("mover-skill");
+        let skills = home.join(".claude/skills");
+        let skill = |dir: &Path, name: &str| {
+            fs::create_dir_all(dir).unwrap();
+            fs::write(dir.join("SKILL.md"), format!("---\nname: {name}\n---\n")).unwrap();
+        };
+        skill(&skills.join("propia"), "propia");
+        skill(&skills.join("carpeta-rara"), "Con otro nombre");
+        // Instalada con `npx skills`: un enlace relativo a ~/.agents/skills.
+        skill(&home.join(".agents/skills/enlazada"), "enlazada");
+        std::os::unix::fs::symlink("../../.agents/skills/enlazada", skills.join("enlazada"))
+            .unwrap();
+        skill(&home.join(".agents/skills/orca-cli"), "orca-cli");
+        std::os::unix::fs::symlink("../../.agents/skills/orca-cli", skills.join("orca-cli"))
+            .unwrap();
+        fs::write(
+            home.join(".agents/.skill-lock.json"),
+            json!({"skills":{"orca-cli":{"source":"stablyai/orca"},"enlazada":{"source":"otro/repo"}}})
+                .to_string(),
+        )
+        .unwrap();
+
+        let mut catalog = Catalog {
+            skills: ["propia", "Con otro nombre", "enlazada", "orca-cli"]
+                .map(|n| SkillItem {
+                    name: n.into(),
+                    description: String::new(),
+                    source: "user".into(),
+                    movable: true,
+                })
+                .to_vec(),
+            ..Catalog::default()
+        };
+        mark_movable(&mut catalog, &home);
+        let movable: Vec<bool> = catalog.skills.iter().map(|s| s.movable).collect();
+        assert_eq!(movable, [true, true, true, false]);
+
+        let dir = repertoire_dir(&home);
+        assert_eq!(move_skill(&home, "propia").unwrap().id, "propia");
+        assert!(dir.join("propia/SKILL.md").is_file());
+        assert!(!skills.join("propia").exists());
+        assert_eq!(
+            move_skill(&home, "Con otro nombre").unwrap(),
+            Moved {
+                kind: "skill".into(),
+                id: "carpeta-rara".into()
+            }
+        );
+        assert!(dir.join("carpeta-rara/SKILL.md").is_file());
+        move_skill(&home, "enlazada").unwrap();
+        // El enlace pasa con la ruta entera y la skill se queda en ~/.agents.
+        let target = fs::read_link(dir.join("enlazada")).unwrap();
+        assert!(target.is_absolute());
+        assert!(dir.join("enlazada/SKILL.md").is_file());
+        assert!(home.join(".agents/skills/enlazada/SKILL.md").is_file());
+        assert!(skills.join("enlazada").symlink_metadata().is_err());
+        let listed: Vec<String> = crate::skills::list_in(&dir)
+            .into_iter()
+            .map(|s| s.id)
+            .collect();
+        assert_eq!(listed.len(), 3);
+
+        assert!(move_skill(&home, "orca-cli").is_err());
+        assert!(skills.join("orca-cli").symlink_metadata().is_ok());
+        assert!(move_skill(&home, "../fuera").is_err());
+        skill(&skills.join("propia"), "propia");
+        assert!(move_skill(&home, "propia").unwrap_err().contains("Ya hay"));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn una_skill_de_claude_ai_pasa_al_repertorio_apagandola_en_el_perfil_sin_tocar_lo_demas() {
+        let home = temp("skill-sincronizada");
+        let synced = home.join(".claude/skills/synced/cubo");
+        for name in ["pdf", "computer-use", "docx"] {
+            fs::create_dir_all(synced.join(name)).unwrap();
+            fs::write(synced.join(name).join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+        }
+        // La de Orca se llama igual que una de claude.ai.
+        fs::create_dir_all(home.join(".claude/skills/computer-use")).unwrap();
+        fs::write(
+            home.join(".claude/skills/computer-use/SKILL.md"),
+            "---\nname: computer-use\n---\n",
+        )
+        .unwrap();
+        fs::create_dir_all(home.join(".agents")).unwrap();
+        fs::write(
+            home.join(".agents/.skill-lock.json"),
+            json!({"skills":{"computer-use":{"source":"stablyai/orca"}}}).to_string(),
+        )
+        .unwrap();
+        // Un perfil escrito como lo escribe Claude Code: su orden y su sangría se conservan.
+        let before = "{\n  \"model\": \"opus\",\n  \"hooks\": {\n    \"Stop\": []\n  },\n  \"enabledPlugins\": {\n    \"a@b\": false\n  }\n}\n";
+        fs::write(home.join(".claude/settings.json"), before).unwrap();
+
+        assert!(movable_synced(&home, "pdf"));
+        assert!(!movable_synced(&home, "computer-use"));
+        assert!(!movable_synced(&home, "anthropic-skills:computer-use"));
+        assert!(!movable_synced(&home, "no-existe"));
+        assert_eq!(
+            move_skill(&home, "pdf").unwrap(),
+            Moved {
+                kind: "profile-skill".into(),
+                id: "pdf".into()
+            }
+        );
+        assert!(
+            synced.join("pdf/SKILL.md").is_file(),
+            "no se mueve de su carpeta"
+        );
+        let after = fs::read_to_string(home.join(".claude/settings.json")).unwrap();
+        assert_eq!(
+            after,
+            format!(
+                "{}{}",
+                &before[..before.len() - 3],
+                ",\n  \"skillOverrides\": {\n    \"pdf\": \"off\"\n  }\n}\n"
+            )
+        );
+        move_skill(&home, "docx").unwrap();
+        assert_eq!(profile_off_skills(&home), ["docx", "pdf"]);
+        assert!(move_skill(&home, "computer-use").is_err());
+
+        // En el catálogo: la sonda la enciende y sale en el repertorio, no en las del perfil.
+        let context = json!({"skills":{"skillFrontmatter":[
+            {"name":"pdf","source":"syncedSkills"},
+            {"name":"xlsx","source":"syncedSkills"}
+        ]}});
+        let catalog = build_catalog(
+            &json!({}),
+            &json!({}),
+            &context,
+            &HashMap::new(),
+            &[],
+            &[],
+            &profile_off_skills(&home),
+        );
+        assert_eq!(catalog.skills.len(), 1);
+        assert_eq!(
+            (
+                catalog.repertoire[0].kind.as_str(),
+                catalog.repertoire[0].source.as_str()
+            ),
+            ("profile-skill", "claude.ai")
+        );
+        let none = extras_settings(&catalog, &Extras::default());
+        assert_eq!(none["skillOverrides"]["pdf"], "off");
+        let on = Extras {
+            skills: vec!["pdf".into()],
+            ..Extras::default()
+        };
+        assert_eq!(
+            extras_settings(&catalog, &on)["skillOverrides"]["pdf"],
+            "on"
+        );
+        let fallback = fallback_catalog(&home, &home, "sin respuesta".into());
+        assert!(
+            fallback
+                .repertoire
+                .iter()
+                .any(|i| i.kind == "profile-skill" && i.id == "pdf")
+        );
+        assert!(!fallback.skills.iter().any(|s| s.name == "pdf"));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn el_vigilante_ve_lo_que_cambia_el_catalogo_y_no_lo_demas() {
+        let home = temp("vigilante");
+        fs::create_dir_all(home.join(".claude")).unwrap();
+        let settings = |extra: &str| {
+            fs::write(
+                home.join(".claude/settings.json"),
+                format!(r#"{{"enabledPlugins":{{"a@b":true}},"hooks":{{{extra}}}}}"#),
+            )
+            .unwrap()
+        };
+        settings("");
+        fs::write(
+            home.join(".claude.json"),
+            r#"{"numStartups":1,"mcpServers":{}}"#,
+        )
+        .unwrap();
+        let first = repertoire_fingerprint(&home);
+        // Orca reescribe sus hooks y Claude Code sus contadores: el catálogo no cambia.
+        settings(r#""Stop":[]"#);
+        fs::write(
+            home.join(".claude.json"),
+            r#"{"numStartups":2,"mcpServers":{}}"#,
+        )
+        .unwrap();
+        assert_eq!(repertoire_fingerprint(&home), first);
+        // Un plugin apagado, un MCP nuevo o una skill en el repertorio, sí.
+        fs::write(
+            home.join(".claude/settings.json"),
+            r#"{"enabledPlugins":{"a@b":false}}"#,
+        )
+        .unwrap();
+        let second = repertoire_fingerprint(&home);
+        assert_ne!(second, first);
+        fs::create_dir_all(repertoire_dir(&home).join("nueva")).unwrap();
+        fs::write(repertoire_dir(&home).join("nueva/SKILL.md"), "---\n---\n").unwrap();
+        assert_ne!(repertoire_fingerprint(&home), second);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn el_vigilante_avisa_cuando_otro_cambia_los_extras_de_un_workspace() {
+        let a = temp("extras-a");
+        let b = temp("extras-b");
+        update_config(&a, |c| c.extras.plugins = vec!["uno@m".into()]).unwrap();
+        let mut watch = ExtrasWatch::default();
+        // La primera vez es el punto de partida.
+        assert!(watch.check(&[a.clone(), b.clone()]).is_empty());
+        // Guardar la interfaz (`ui`) no cambia los extras.
+        update_config(&a, |c| c.ui = json!({"section":"extras"})).unwrap();
+        assert!(watch.check(&[a.clone(), b.clone()]).is_empty());
+        // El agente enciende un MCP en `b` (que aún no tenía workspace.json).
+        update_config(&b, |c| c.extras.mcp = vec!["github".into()]).unwrap();
+        let changed = watch.check(&[a.clone(), b.clone()]);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].0, b);
+        assert_eq!(changed[0].1.mcp, ["github"]);
+        assert!(watch.check(&[a.clone(), b.clone()]).is_empty());
+        // Uno que sale del panel se olvida.
+        assert!(watch.check(std::slice::from_ref(&a)).is_empty());
+        assert_eq!(watch.seen.len(), 1);
+        fs::remove_dir_all(a).unwrap();
+        fs::remove_dir_all(b).unwrap();
+    }
+
+    #[test]
+    fn mover_un_mcp_lo_copia_al_repertorio_y_si_falla_lo_deshace() {
+        let home = temp("mover-mcp");
+        let rea = json!({"command":"rea","args":["mcp"],"env":{"JAVA_HOME":"/opt/java"}});
+        fs::write(
+            home.join(".claude.json"),
+            json!({"mcpServers":{"rea":rea,"github":{"type":"http","url":"https://x"}}})
+                .to_string(),
+        )
+        .unwrap();
+        let calls = std::cell::RefCell::new(Vec::new());
+        let ok = |args: &[&str]| {
+            calls.borrow_mut().push(args.join(" "));
+            Ok(())
+        };
+        move_mcp(&home, "rea", &ok).unwrap();
+        assert_eq!(*calls.borrow(), ["mcp remove --scope user -- rea"]);
+        assert_eq!(repertoire_mcp(&home)["rea"], rea);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(repertoire_mcp_path(&home))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert!(move_mcp(&home, "rea", &ok).unwrap_err().contains("Ya hay"));
+        assert!(move_mcp(&home, "no-esta", &ok).is_err());
+        let fails = |_: &[&str]| Err("sin permiso".to_string());
+        let error = move_mcp(&home, "github", &fails).unwrap_err();
+        assert!(error.contains("sin permiso"));
+        assert!(!repertoire_mcp(&home).contains_key("github"));
+        assert!(repertoire_mcp(&home).contains_key("rea"));
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    #[test]
+    fn mover_un_plugin_solo_apaga_uno_encendido_e_instalado_para_el_usuario() {
+        let home = temp("mover-plugin");
+        fs::create_dir_all(home.join(".claude/plugins")).unwrap();
+        fs::write(
+            home.join(".claude/settings.json"),
+            json!({"enabledPlugins":{"uno@m":true,"local@m":true,"data@synced":true,"apagado@m":false}})
+                .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            home.join(".claude/plugins/installed_plugins.json"),
+            json!({"plugins":{
+                "uno@m":[{"scope":"user"}], "apagado@m":[{"scope":"user"}],
+                "local@m":[{"scope":"project","projectPath":"/p"}]
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        let calls = std::cell::RefCell::new(Vec::new());
+        let run = |args: &[&str]| {
+            calls.borrow_mut().push(args.join(" "));
+            Ok(())
+        };
+        move_plugin(&home, "uno@m", &run).unwrap();
+        assert_eq!(*calls.borrow(), ["plugin disable --scope user -- uno@m"]);
+        for id in ["apagado@m", "local@m", "data@synced", "--all"] {
+            assert!(move_plugin(&home, id, &run).is_err(), "{id}");
+        }
+        assert_eq!(calls.borrow().len(), 1);
+        fs::remove_dir_all(home).unwrap();
     }
 
     #[test]
@@ -2027,6 +3314,7 @@ mod tests {
             servers: 0,
             synced: false,
             hooks,
+            movable: false,
         };
         let catalog = Catalog {
             plugins: vec![
