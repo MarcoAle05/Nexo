@@ -99,6 +99,8 @@ pub fn run() {
             workspace::workspace_read,
             workspace::workspace_agents,
             workspace::workspace_extras,
+            workspace::workspace_repertoire_open,
+            workspace::workspace_repertoire_move,
             workspace_run::workspace_start,
             workspace_run::workspace_send,
             workspace_run::workspace_stop,

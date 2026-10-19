@@ -25,7 +25,7 @@ Cada módulo está descrito en la regla de su zona: `vault.rs` aquí; `graph.rs`
 
 El streaming hacia la interfaz usa `tauri::ipc::Channel` (eventos `{kind, text}`; el progreso de `worktree_create`, `{step, text}`); las excepciones son dos eventos globales: `agy-activity`, porque el panel de actividad escucha todas las tareas de Antigravity, y `workspace-attention` (`{ path, waiting, busy }`), porque el punto de «espera tu respuesta» sale de todos los workspaces aunque la interfaz mire otro o esté en otra vista.
 
-Plugins de Tauri: `opener`, `dialog` y `notification` (`tauri-plugin-notification`, los avisos de escritorio de los workspaces, `avisos.rs`; en Linux va por D-Bus en Rust, sin librerías del sistema ni paquete de npm, y se llama solo desde Rust, así que no tiene permiso en `capabilities/`).
+Plugins de Tauri: `opener` (también desde Rust: `workspace_repertoire_open` crea y abre la carpeta del repertorio con `OpenerExt::open_path`, sin añadir permisos en `capabilities/`), `dialog` y `notification` (`tauri-plugin-notification`, los avisos de escritorio de los workspaces, `avisos.rs`; en Linux va por D-Bus en Rust, sin librerías del sistema ni paquete de npm, y se llama solo desde Rust, así que no tiene permiso en `capabilities/`).
 
 Dependencias externas en tiempo de ejecución: `markitdown-mcp` (instalado con `uv tool install --python 3.12 markitdown-mcp`, en `~/.local/bin`), `playwright-mcp` (`npm install -g --prefix ~/.local @playwright/mcp`; usa el Google Chrome instalado), `claude` (Claude Code CLI), `agy` (Antigravity CLI) y `git` (los worktrees; `gh`, si está, da el usuario de GitHub para sus ramas). En Linux, `main.rs` llama a `render::configure()` antes de crear nada: elige cómo pinta WebKitGTK (ver `render.rs`); no quitarlo.
 

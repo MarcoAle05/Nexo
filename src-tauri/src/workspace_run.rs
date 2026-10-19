@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -248,7 +248,28 @@ pub(crate) fn extras_prompt(catalog: &Catalog, on: &Extras) -> String {
         .iter()
         .map(|h| h.id.as_str())
         .collect();
-    let groups: [(&str, Vec<(String, bool)>); 5] = [
+    let groups: [(&str, Vec<(String, bool)>); 6] = [
+        (
+            "repertorio",
+            catalog
+                .repertoire
+                .iter()
+                .map(|i| {
+                    if i.kind == "plugin" {
+                        named(&i.name, on.plugins.contains(&i.id))
+                    } else if i.kind == "mcp" {
+                        named(&format!("MCP {}", i.name), on.mcp.contains(&i.id))
+                    } else if i.kind == "profile-skill" {
+                        named(&i.name, on.skills.contains(&i.id))
+                    } else {
+                        named(
+                            &format!("repertorio:{}", i.id),
+                            on.repertoire.contains(&i.id),
+                        )
+                    }
+                })
+                .collect(),
+        ),
         (
             "plugins",
             catalog
@@ -327,7 +348,7 @@ tu perfil y los de la carpeta."
     };
     format!(
         "Extras del workspace: nexo arranca Claude Code solo con lo que trae de serie (sus skills, agentes y \
-herramientas) y la skill de nexo. De lo que el usuario tiene en su perfil global (plugins, servidores MCP, \
+herramientas) y la skill de nexo. De lo que el usuario tiene en su perfil global y en su repertorio de nexo (plugins, servidores MCP, \
 conexiones de claude.ai, skills propias y hooks) solo carga lo que él encendió para esta carpeta.\n\
 - Encendido: {on}.\n\
 - Apagado (no está cargado: no lo puedes usar): {off}.\n\
@@ -341,23 +362,55 @@ al caso, nombra los apagados.",
     )
 }
 
-/// Lo que lleva el orquestador de un workspace además de las opciones del chat: su papel
-/// (con los extras), los ajustes que apagan lo que no está encendido y el plugin de nexo. El
-/// catálogo se vuelve a sondear con `fresh`: lo instalado hace un momento también debe
-/// arrancar apagado.
-pub(crate) fn launch_setup(
-    app: &AppHandle,
-    root: &Path,
-    fresh: bool,
-) -> Result<(String, Value, PathBuf), String> {
+/// Lo que lleva el orquestador de un workspace además de las opciones del chat.
+pub(crate) struct Setup {
+    /// Su papel, con los extras.
+    pub prompt: String,
+    /// Los ajustes que apagan lo que no está encendido (`--settings`).
+    pub settings: Value,
+    /// `--plugin-dir`: el plugin de nexo y, con skills del repertorio encendidas, el suyo.
+    pub plugins: Vec<PathBuf>,
+    /// `--mcp-config` con los MCP del repertorio encendidos, si hay alguno.
+    pub mcp: Option<PathBuf>,
+}
+
+/// Prepara el arranque del orquestador de un workspace. El catálogo se vuelve a sondear con
+/// `fresh`: lo instalado hace un momento también debe arrancar apagado.
+pub(crate) fn launch_setup(app: &AppHandle, root: &Path, fresh: bool) -> Result<Setup, String> {
     let catalog = catalog_or_fallback(app, root, fresh);
     let on = read_config(root).extras;
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    launch_setup_in(&data, &home, root, &catalog, &on)
+}
+
+/// La preparación sin runtime de Tauri permite comprobar los argumentos con el CLI real
+/// sin crear ventanas ni tocar la configuración de nexo.
+fn launch_setup_in(
+    data: &Path,
+    home: &Path,
+    root: &Path,
+    catalog: &Catalog,
+    on: &Extras,
+) -> Result<Setup, String> {
     let prompt = format!(
         "{}\n\n{}",
         orchestrator_prompt(root),
-        extras_prompt(&catalog, &on)
+        extras_prompt(catalog, on)
     );
-    Ok((prompt, extras_settings(&catalog, &on), install_plugin(app)?))
+    let mut plugins = vec![install_plugin_in(data)?];
+    if let Some(dir) =
+        repertoire_plugin_in(data, &workspace::repertoire_dir(home), root, catalog, on)?
+    {
+        plugins.push(dir);
+    }
+    let mcp = repertoire_mcp_in(data, &workspace::repertoire_mcp(home), root, catalog, on)?;
+    Ok(Setup {
+        prompt,
+        settings: extras_settings(catalog, on),
+        plugins,
+        mcp,
+    })
 }
 
 const SKILL: &str = r#"---
@@ -424,13 +477,8 @@ Si un papel se va a repetir en este workspace, defínelo en `.claude/agents/<nom
 
 /// Deja el plugin de nexo (la skill de los agentes del workspace) en la carpeta de datos de
 /// nexo y devuelve su ruta para `--plugin-dir`.
-fn install_plugin(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("workspace-plugin")
-        .join("nexo");
+fn install_plugin_in(data: &Path) -> Result<PathBuf, String> {
+    let dir = data.join("workspace-plugin").join("nexo");
     let skill = dir.join("skills/agentes-del-workspace");
     fs::create_dir_all(dir.join(".claude-plugin")).map_err(|e| e.to_string())?;
     fs::create_dir_all(&skill).map_err(|e| e.to_string())?;
@@ -453,16 +501,95 @@ fn install_plugin(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Prepara el plugin de las skills sueltas elegidas, fuera de la carpeta del usuario.
+fn repertoire_plugin_in(
+    data: &Path,
+    source: &Path,
+    root: &Path,
+    catalog: &Catalog,
+    on: &Extras,
+) -> Result<Option<PathBuf>, String> {
+    // El registro y el arranque pueden prepararlo a la vez.
+    static LOCK: Mutex<()> = Mutex::new(());
+    let _guard = LOCK.lock().map_err(|e| e.to_string())?;
+    let dir = data
+        .join("repertorio")
+        .join(crate::registro::project_dir_name(root))
+        .join("repertorio");
+    let skills = dir.join("skills");
+    if skills.exists() {
+        // remove_dir_all borra los enlaces, sin seguirlos hasta las skills originales.
+        fs::remove_dir_all(&skills).map_err(|e| e.to_string())?;
+    }
+    let selected: Vec<_> = catalog
+        .repertoire
+        .iter()
+        .filter(|i| i.kind == "skill" && workspace::safe_id(&i.id) && on.repertoire.contains(&i.id))
+        .collect();
+    if selected.is_empty() {
+        return Ok(None);
+    }
+    fs::create_dir_all(dir.join(".claude-plugin")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(&skills).map_err(|e| e.to_string())?;
+    fs::write(
+        dir.join(".claude-plugin/plugin.json"),
+        json!({
+            "name": "repertorio", "version": env!("CARGO_PKG_VERSION"),
+            "description": "Skills del repertorio que el usuario encendió para este workspace."
+        })
+        .to_string(),
+    )
+    .map_err(|e| e.to_string())?;
+    for item in selected {
+        let from = source.join(&item.id);
+        let to = skills.join(&item.id);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&from, &to).map_err(|e| e.to_string())?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&from, &to).map_err(|e| e.to_string())?;
+    }
+    Ok(Some(dir))
+}
+
+/// Deja en `<datos>/repertorio/<carpeta>/mcp.json` los MCP del repertorio encendidos en el
+/// workspace (solo los del catálogo, con su configuración tal cual: puede llevar claves, así
+/// que solo lo lee el usuario). Sin ninguno encendido, no hay archivo.
+fn repertoire_mcp_in(
+    data: &Path,
+    servers: &Map<String, Value>,
+    root: &Path,
+    catalog: &Catalog,
+    on: &Extras,
+) -> Result<Option<PathBuf>, String> {
+    let file = data
+        .join("repertorio")
+        .join(crate::registro::project_dir_name(root))
+        .join("mcp.json");
+    let chosen: Map<String, Value> = catalog
+        .repertoire
+        .iter()
+        .filter(|i| i.kind == "mcp" && on.mcp.contains(&i.id))
+        .filter_map(|i| Some((i.id.clone(), servers.get(&i.id)?.clone())))
+        .collect();
+    if chosen.is_empty() {
+        if file.exists() {
+            fs::remove_file(&file).map_err(|e| e.to_string())?;
+        }
+        return Ok(None);
+    }
+    let text =
+        serde_json::to_string(&json!({ "mcpServers": chosen })).map_err(|e| e.to_string())?;
+    workspace::write_private(&file, &text)?;
+    Ok(Some(file))
+}
+
 /// Argumentos del orquestador de un workspace: los del chat de nexo más su papel, el plugin
-/// de nexo y los ajustes que apagan los extras.
-#[allow(clippy::too_many_arguments)]
+/// de nexo (y el del repertorio), sus MCP y los ajustes que apagan los extras.
 fn launch_args(
     session: &str,
     saved: bool,
     name: &str,
-    prompt: &str,
-    plugin: &Path,
-    settings: &Value,
+    setup: &Setup,
     options: &ChatOptions,
 ) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = [
@@ -489,9 +616,14 @@ fn launch_args(
             name.into(),
         ]);
     }
-    args.extend(["--append-system-prompt".into(), prompt.into()]);
-    args.extend(["--plugin-dir".into(), plugin.to_string_lossy().into_owned()]);
-    args.extend(["--settings".into(), settings.to_string()]);
+    args.extend(["--append-system-prompt".into(), setup.prompt.clone()]);
+    for plugin in &setup.plugins {
+        args.extend(["--plugin-dir".into(), plugin.to_string_lossy().into_owned()]);
+    }
+    if let Some(mcp) = &setup.mcp {
+        args.extend(["--mcp-config".into(), mcp.to_string_lossy().into_owned()]);
+    }
+    args.extend(["--settings".into(), setup.settings.to_string()]);
     args.extend(option_args(options)?);
     Ok(args)
 }
@@ -949,16 +1081,8 @@ fn start(
         tell(app, root, a);
     }
 
-    let (prompt, settings, plugin) = launch_setup(app, root, true)?;
-    let args = launch_args(
-        &session,
-        saved,
-        &session_name(root),
-        &prompt,
-        &plugin,
-        &settings,
-        &options,
-    )?;
+    let setup = launch_setup(app, root, true)?;
+    let args = launch_args(&session, saved, &session_name(root), &setup, &options)?;
 
     let mut cmd = Command::new(&claude);
     cmd.args(&args)
@@ -1264,6 +1388,15 @@ mod tests {
         ChatOptions::default()
     }
 
+    fn setup(prompt: &str, plugins: &[&str], settings: Value) -> Setup {
+        Setup {
+            prompt: prompt.into(),
+            settings,
+            plugins: plugins.iter().map(PathBuf::from).collect(),
+            mcp: None,
+        }
+    }
+
     #[test]
     fn el_orquestador_arranca_con_su_papel_su_plugin_y_los_extras() {
         let settings = json!({ "enabledPlugins": { "a@b": false } });
@@ -1271,9 +1404,7 @@ mod tests {
             "u-1",
             false,
             "proyecto · nexo",
-            "papel",
-            Path::new("/datos/nexo"),
-            &settings,
+            &setup("papel", &["/datos/nexo"], settings.clone()),
             &opts(),
         )
         .unwrap();
@@ -1292,13 +1423,12 @@ mod tests {
         );
         assert!(args.contains(&"--forward-subagent-text".to_string()));
         assert!(at("--resume").is_none());
+        assert!(at("--mcp-config").is_none());
         let resumed = launch_args(
             "u-1",
             true,
             "x",
-            "papel",
-            Path::new("/p"),
-            &settings,
+            &setup("papel", &["/p"], settings.clone()),
             &opts(),
         )
         .unwrap();
@@ -1313,7 +1443,286 @@ mod tests {
             effort: None,
             permission_mode: Some("bypassPermissions".into()),
         };
-        assert!(launch_args("u", false, "x", "p", Path::new("/p"), &settings, &bad).is_err());
+        assert!(launch_args("u", false, "x", &setup("p", &["/p"], settings), &bad).is_err());
+    }
+
+    #[test]
+    fn los_argumentos_admiten_dos_carpetas_de_plugins_y_los_mcp_del_repertorio() {
+        let mut both = setup("papel", &["/datos/nexo", "/datos/repertorio"], json!({}));
+        both.mcp = Some(PathBuf::from("/datos/mcp.json"));
+        let args = launch_args("u", false, "prueba", &both, &opts()).unwrap();
+        let paths: Vec<_> = args
+            .windows(2)
+            .filter(|w| w[0] == "--plugin-dir")
+            .map(|w| w[1].as_str())
+            .collect();
+        assert_eq!(paths, ["/datos/nexo", "/datos/repertorio"]);
+        assert!(
+            args.windows(2)
+                .any(|w| w[0] == "--mcp-config" && w[1] == "/datos/mcp.json")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn el_plugin_del_repertorio_solo_enlaza_skills_del_catalogo_y_retira_las_viejas() {
+        use crate::workspace::RepertoireItem;
+        let root = temp("repertorio");
+        let data = root.join("datos");
+        let source = root.join("origen");
+        for id in ["alfa", "beta"] {
+            fs::create_dir_all(source.join(id)).unwrap();
+            fs::write(
+                source.join(id).join("SKILL.md"),
+                format!("---\nname: {id}\n---\n"),
+            )
+            .unwrap();
+        }
+        let item = |id: &str| RepertoireItem {
+            kind: "skill".into(),
+            id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            skills: 1,
+            servers: 0,
+            hooks: false,
+            transport: String::new(),
+            status: String::new(),
+            source: String::new(),
+        };
+        let catalog = Catalog {
+            repertoire: vec![item("alfa"), item("beta"), item("../fuera")],
+            ..Catalog::default()
+        };
+        let on = Extras {
+            repertoire: vec!["alfa".into(), "desconocida".into(), "../fuera".into()],
+            ..Extras::default()
+        };
+        let dir = repertoire_plugin_in(&data, &source, &root, &catalog, &on)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            fs::read_link(dir.join("skills/alfa")).unwrap(),
+            source.join("alfa")
+        );
+        assert_eq!(fs::read_dir(dir.join("skills")).unwrap().count(), 1);
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(dir.join(".claude-plugin/plugin.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(manifest["name"], "repertorio");
+        let on = Extras {
+            repertoire: vec!["beta".into()],
+            ..Extras::default()
+        };
+        repertoire_plugin_in(&data, &source, &root, &catalog, &on).unwrap();
+        assert!(!dir.join("skills/alfa").exists());
+        assert!(
+            source.join("alfa/SKILL.md").is_file(),
+            "no se sigue el enlace al borrar"
+        );
+        assert!(dir.join("skills/beta/SKILL.md").is_file());
+        assert!(
+            repertoire_plugin_in(&data, &source, &root, &catalog, &Extras::default())
+                .unwrap()
+                .is_none()
+        );
+        assert!(!dir.join("skills").exists());
+        assert!(source.join("beta/SKILL.md").is_file());
+        let prompt = extras_prompt(&catalog, &on);
+        assert!(prompt.contains("- Encendido: repertorio: repertorio:beta."));
+        assert!(prompt.contains("repertorio:alfa"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn los_mcp_del_repertorio_van_por_un_archivo_propio_solo_con_los_encendidos() {
+        use crate::workspace::RepertoireItem;
+        let root = temp("repertorio-mcp");
+        let data = root.join("datos");
+        let item = |id: &str| RepertoireItem {
+            kind: "mcp".into(),
+            id: id.into(),
+            name: id.into(),
+            description: String::new(),
+            skills: 0,
+            servers: 1,
+            hooks: false,
+            transport: "stdio".into(),
+            status: String::new(),
+            source: String::new(),
+        };
+        let catalog = Catalog {
+            repertoire: vec![item("rea"), item("github")],
+            ..Catalog::default()
+        };
+        let servers = json!({
+            "rea": {"command": "rea", "env": {"JAVA_HOME": "/opt/java"}},
+            "github": {"type": "http", "url": "https://x"},
+            "fuera": {"command": "nada"}
+        });
+        let servers = servers.as_object().unwrap();
+        let on = Extras {
+            mcp: vec!["rea".into(), "fuera".into()],
+            ..Extras::default()
+        };
+        let file = repertoire_mcp_in(&data, servers, &root, &catalog, &on)
+            .unwrap()
+            .unwrap();
+        let written: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        // Solo el encendido que está en el catálogo, con su configuración tal cual.
+        assert_eq!(written, json!({"mcpServers": {"rea": servers["rea"]}}));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&file).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        assert!(
+            repertoire_mcp_in(&data, servers, &root, &catalog, &Extras::default())
+                .unwrap()
+                .is_none()
+        );
+        assert!(!file.exists());
+        let prompt = extras_prompt(&catalog, &on);
+        assert!(prompt.contains("- Encendido: repertorio: MCP rea."));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "Usa Claude Code y el repertorio reales; solo initialize, sin turnos del modelo"]
+    fn el_arranque_real_carga_solo_el_repertorio_encendido() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let home = PathBuf::from(std::env::var_os("HOME").unwrap());
+        let root = temp("repertorio-real");
+        let catalog = workspace::fallback_catalog(&home, &root, "prueba sin sondeo".into());
+        assert!(
+            catalog
+                .repertoire
+                .iter()
+                .any(|i| i.id == "interfaces@interfaces")
+        );
+        assert!(
+            catalog
+                .repertoire
+                .iter()
+                .any(|i| i.id == "reverse-engineer-anything")
+        );
+        let project = home
+            .join(".claude/projects")
+            .join(crate::registro::project_dir_name(&root));
+        // Los comandos que da `initialize` y los MCP de `--mcp-config` que da `mcp_status`.
+        let probe = |on: &Extras| -> (Vec<String>, Vec<String>) {
+            let setup = launch_setup_in(&root.join("datos"), &home, &root, &catalog, on).unwrap();
+            let mut args = launch_args(
+                &uuid::Uuid::new_v4().to_string(),
+                false,
+                "Prueba repertorio",
+                &setup,
+                &opts(),
+            )
+            .unwrap();
+            args.push("--no-session-persistence".into());
+            let mut command = Command::new("claude");
+            // También fuera de Orca/Claude, sin heredar una sesión hija.
+            for (key, _) in
+                std::env::vars_os().filter(|(k, _)| k.to_string_lossy().starts_with("CLAUDE"))
+            {
+                command.env_remove(key);
+            }
+            let mut child = command
+                .args(args)
+                .current_dir(&root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut stdin = child.stdin.take().unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    if let Ok(v) = serde_json::from_str::<Value>(&line)
+                        && v["type"] == "control_response"
+                        && tx.send(v).is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            for (id, subtype) in [("prueba", "initialize"), ("prueba-mcp", "mcp_status")] {
+                let request =
+                    json!({"type":"control_request","request_id":id,"request":{"subtype":subtype}});
+                writeln!(stdin, "{request}").unwrap();
+            }
+            stdin.flush().unwrap();
+            let mut got: HashMap<String, Value> = HashMap::new();
+            while got.len() < 2 {
+                let Ok(v) = rx.recv_timeout(Duration::from_secs(40)) else {
+                    break;
+                };
+                if let Some(id) = v["response"]["request_id"].as_str() {
+                    got.insert(id.to_string(), v["response"].clone());
+                }
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            // Solo se elimina si está vacía; nunca una transcripción del usuario.
+            if project.exists() {
+                fs::remove_dir(&project).expect("la carpeta de la sonda debe estar vacía");
+                println!("Eliminada carpeta vacía: {}", project.display());
+            }
+            let answer = got.get("prueba").expect("initialize no contestó");
+            assert_eq!(answer["subtype"], "success");
+            let commands = answer["response"]["commands"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|c| c["name"].as_str().map(str::to_owned))
+                .collect();
+            let servers =
+                got.get("prueba-mcp").expect("mcp_status no contestó")["response"]["mcpServers"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|s| s["source"] == "dynamic")
+                    .filter_map(|s| s["name"].as_str().map(str::to_owned))
+                    .collect();
+            (commands, servers)
+        };
+        // Un MCP del repertorio, si ya hay alguno (`~/nexo/repertorio/.mcp.json`).
+        let server = catalog
+            .repertoire
+            .iter()
+            .find(|i| i.kind == "mcp")
+            .map(|i| i.id.clone());
+        let on = Extras {
+            plugins: vec!["interfaces@interfaces".into()],
+            repertoire: vec!["reverse-engineer-anything".into()],
+            mcp: server.iter().cloned().collect(),
+            ..Extras::default()
+        };
+        let (commands, servers) = probe(&on);
+        assert!(commands.iter().any(|c| c == "interfaces:better-ui"));
+        assert!(
+            commands
+                .iter()
+                .any(|c| c == "repertorio:reverse-engineer-anything")
+        );
+        assert_eq!(servers, server.iter().cloned().collect::<Vec<_>>());
+        let (commands, servers) = probe(&Extras::default());
+        assert!(
+            !commands
+                .iter()
+                .any(|c| c.starts_with("interfaces:") || c.starts_with("repertorio:"))
+        );
+        assert!(servers.is_empty());
+        println!(
+            "Claude Code: interfaces:better-ui, repertorio:reverse-engineer-anything y el MCP {server:?} presentes al encenderlos; ausentes con todo apagado."
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1335,6 +1744,7 @@ mod tests {
             kind: "http".into(),
             detail: String::new(),
             status: String::new(),
+            movable: false,
         };
         let plugin = |id: &str, name: &str| PluginItem {
             id: id.into(),
@@ -1344,6 +1754,7 @@ mod tests {
             servers: 0,
             synced: false,
             hooks: false,
+            movable: false,
         };
         let catalog = Catalog {
             plugins: vec![
@@ -1356,9 +1767,11 @@ mod tests {
                 name: "pdf".into(),
                 description: String::new(),
                 source: "claude.ai".into(),
+                movable: false,
             }],
             hooks: vec![],
             error: None,
+            ..Catalog::default()
         };
         let none = extras_prompt(&catalog, &Extras::default());
         assert!(none.contains("- Encendido: nada."));

@@ -21,6 +21,8 @@ export const ICON = {
   folder: svg('<path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/>'),
   folderOpen: svg('<path d="M2.5 15.5V5.5H8l1.5 2h6.5v2"/><path d="M2.5 15.5 5 9.5h12.5l-2.5 6z"/>'),
   folderPlus: svg('<path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/><path d="M10 9.5v4M8 11.5h4"/>'),
+  // Mover al repertorio: una flecha que entra en una caja.
+  stash: svg('<path d="M3.5 11v4.5h13V11"/><path d="M10 3.5v8.5M7 9l3 3 3-3"/>', 15, 1.5),
   file: svg('<path d="M5 2.5h6.5l3.5 3.5v11.5H5z"/><path d="M11.5 2.5V6H15"/>', 15),
   code: svg('<path d="M5 2.5h6.5l3.5 3.5v11.5H5z"/><path d="m8.5 10.5-1.5 1.5 1.5 1.5M11.5 10.5l1.5 1.5-1.5 1.5"/>', 15),
   doc: svg('<path d="M5 2.5h6.5l3.5 3.5v11.5H5z"/><path d="M7.5 10h5M7.5 13h3.5"/>', 15),
@@ -45,8 +47,9 @@ const el = (tag, className, text) => {
 };
 const baseName = (path) => String(path).split('/').filter(Boolean).pop() ?? String(path);
 const sameSet = (a = [], b = []) => a.length === b.length && a.every((x) => b.includes(x));
-const sameExtras = (a, b) => ['plugins', 'mcp', 'connectors', 'skills', 'hooks'].every((k) => sameSet(a?.[k] ?? [], b?.[k] ?? []));
-const EMPTY_EXTRAS = () => ({ plugins: [], mcp: [], connectors: [], skills: [], hooks: [] });
+const EXTRA_KEYS = ['plugins', 'mcp', 'connectors', 'skills', 'hooks', 'repertoire'];
+const sameExtras = (a, b) => EXTRA_KEYS.every((k) => sameSet(a?.[k] ?? [], b?.[k] ?? []));
+const EMPTY_EXTRAS = () => Object.fromEntries(EXTRA_KEYS.map((key) => [key, []]));
 
 // Icono de un archivo según su tipo.
 export function fileIcon(path) {
@@ -95,7 +98,8 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   let removed = new Set(); // agentes que quitó el orquestador: lo que aún llegue de ellos se ignora
   let defined = []; // .claude/agents/ del workspace
   let skills = []; // .claude/skills/ del workspace
-  let catalog = null; // { plugins, mcp, connectors, skills, error } | { loading } | { error }
+  let catalog = null; // { repertoire, plugins, mcp, connectors, skills, hooks, error } | { loading } | { error }
+  let focusAfterMove = null; // el interruptor de lo que se acaba de mover al repertorio
   let extras = EMPTY_EXTRAS();
   let applied = null; // extras con los que corre el orquestador
   let ui = {};
@@ -1684,21 +1688,36 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     }
   }
 
+  const pluginDetail = (p) => [p.skills ? `${p.skills} ${p.skills === 1 ? 'skill' : 'skills'}` : '', p.servers ? `${p.servers} MCP` : '', p.synced ? 'de claude.ai' : '', p.hooks ? 'trae hooks: encendido, también corren los de tu perfil' : '', p.description].filter(Boolean).join(' · ');
+  const MCP_STATUS = { 'needs-auth': 'sin iniciar sesión', failed: 'no arrancó al leerlo' };
+  const repertoireDetail = (i) => {
+    if (i.kind === 'plugin') return pluginDetail(i);
+    if (i.kind === 'mcp') return ['MCP', i.transport, i.description, MCP_STATUS[i.status]].filter(Boolean).join(' · ');
+    if (i.kind === 'profile-skill') return [i.source === 'claude.ai' ? 'de claude.ai' : 'de ~/.claude/skills', 'apagada fuera de nexo', i.description].filter(Boolean).join(' · ');
+    return ['de ~/nexo/repertorio', i.description].filter(Boolean).join(' · ');
+  };
+  // Cada plugin, MCP y skill de claude.ai del repertorio guarda su selección en la misma lista
+  // que en su grupo del perfil (`plugins`, `mcp`, `skills`): así pasar al repertorio no apaga
+  // nada. Las carpetas del repertorio van en `repertoire`.
+  const REPERTOIRE_KEY = { plugin: 'plugins', mcp: 'mcp', 'profile-skill': 'skills', skill: 'repertoire' };
+  // `move`: lo de ese grupo que está en el perfil puede pasar al repertorio (`movable`).
   const GROUPS = [
-    { key: 'plugins', title: 'Plugins', id: (p) => p.id, detail: (p) => [p.skills ? `${p.skills} ${p.skills === 1 ? 'skill' : 'skills'}` : '', p.servers ? `${p.servers} MCP` : '', p.synced ? 'de claude.ai' : '', p.hooks ? 'trae hooks: encendido, también corren los de tu perfil' : '', p.description].filter(Boolean).join(' · ') },
-    { key: 'mcp', title: 'MCP', id: (s) => s.name, detail: (s) => [s.kind, s.detail].filter(Boolean).join(' · ') },
+    { key: 'repertoire', title: 'Repertorio', items: (d) => d.repertoire, keyOf: (i) => REPERTOIRE_KEY[i.kind] ?? 'repertoire', id: (i) => i.id, detail: repertoireDetail },
+    { key: 'plugins', title: 'Plugins', move: 'plugin', id: (p) => p.id, detail: pluginDetail },
+    { key: 'mcp', title: 'MCP', move: 'mcp', id: (s) => s.name, detail: (s) => [s.kind, s.detail].filter(Boolean).join(' · ') },
     { key: 'connectors', title: 'Conexiones', id: (s) => s.name, detail: (s) => (s.status === 'needs-auth' ? 'Sin iniciar sesión en claude.ai' : 'Conexión de claude.ai'), name: (s) => s.name.replace(/^claude\.ai /, '') },
-    { key: 'skills', title: 'Skills sin plugin', id: (s) => s.name, detail: (s) => [s.source === 'claude.ai' ? 'de claude.ai' : 'de ~/.claude/skills', s.description].filter(Boolean).join(' · ') },
+    { key: 'skills', title: 'Skills sin plugin', move: 'skill', id: (s) => s.name, detail: (s) => [s.source === 'claude.ai' ? 'de claude.ai' : 'de ~/.claude/skills', s.description].filter(Boolean).join(' · ') },
     { key: 'hooks', title: 'Hooks', id: (h) => h.id, detail: (h) => h.detail },
   ];
+  const switchId = (group, id) => `ws-x-${group}-${id.replace(/[^a-z0-9]/gi, '-')}`;
   // Claude Code no separa los hooks: con uno encendido (o un plugin con hooks), los de los
   // archivos de ajustes (perfil y carpeta) corren también aunque estén apagados aquí.
-  const hooksForced = (data) => extras.hooks.length > 0 || (data.plugins ?? []).some((p) => p.hooks && extras.plugins.includes(p.id));
+  const hooksForced = (data) => extras.hooks.length > 0 || [...(data.plugins ?? []), ...(data.repertoire ?? []).filter((i) => i.kind === 'plugin')].some((p) => p.hooks && extras.plugins.includes(p.id));
 
   function renderExtras() {
     const box = $('ws-extras');
     const data = catalog?.loading ? catalog.previous : catalog;
-    const on = GROUPS.reduce((n, g) => n + (extras[g.key]?.length ?? 0), 0);
+    const on = EXTRA_KEYS.reduce((n, key) => n + (extras[key]?.length ?? 0), 0);
     $('ws-extras-count').textContent = on ? String(on) : '';
     $('ws-extras-refresh').classList.toggle('loading', Boolean(catalog?.loading));
     if (!data) {
@@ -1709,16 +1728,26 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     }
     const parts = [];
     for (const group of GROUPS) {
-      const items = data[group.key] ?? [];
-      if (!items.length) continue;
+      const items = (group.items ? group.items(data) : data[group.key]) ?? [];
+      if (!items.length && group.key !== 'repertoire') continue;
+      const keyOf = group.keyOf ?? (() => group.key);
       const wrap = el('div', 'ws-extras-group');
-      const count = items.filter((i) => extras[group.key].includes(group.id(i))).length;
+      const count = items.filter((i) => extras[keyOf(i)].includes(group.id(i))).length;
       const h = el('h4', 'ws-extras-h');
       h.append(el('span', '', group.title), el('span', 'ws-extras-n', count ? `${count} de ${items.length}` : String(items.length)));
+      if (group.key === 'repertoire') {
+        const open = el('button', 'icon-btn ws-sec-btn');
+        open.type = 'button';
+        open.setAttribute('aria-label', 'Abrir la carpeta del repertorio');
+        open.title = 'Abrir carpeta';
+        open.innerHTML = ICON.folderOpen;
+        open.addEventListener('click', () => invoke('workspace_repertoire_open').catch(fail));
+        h.append(open);
+      }
       const ul = el('ul', 'ws-extras-list');
       for (const item of items) {
         const id = group.id(item);
-        const checked = extras[group.key].includes(id);
+        const checked = extras[keyOf(item)].includes(id);
         const forced = group.key === 'hooks' && !item.added && !checked && hooksForced(data);
         const li = el('li');
         const button = el('button', 'ws-extra');
@@ -1727,8 +1756,9 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
         button.setAttribute('aria-checked', String(checked || forced));
         if (forced) button.setAttribute('aria-disabled', 'true');
         const text = el('span', 'ws-extra-text');
-        const nameId = `ws-x-${group.key}-${id.replace(/[^a-z0-9]/gi, '-')}`;
-        const name = el('span', 'ws-extra-name', group.name ? group.name(item) : item.name);
+        const nameId = switchId(group.key, id);
+        const label = group.name ? group.name(item) : item.name;
+        const name = el('span', 'ws-extra-name', label);
         name.id = nameId;
         const detail = el('span', 'ws-extra-detail', forced ? `${group.detail(item)} · corren porque hay otro hook encendido` : group.detail(item));
         detail.id = `${nameId}-d`;
@@ -1740,14 +1770,25 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
         sw.setAttribute('aria-hidden', 'true');
         sw.append(el('span'));
         button.append(text, sw);
-        button.addEventListener('click', () => !forced && toggleExtra(group.key, id));
+        button.addEventListener('click', () => !forced && toggleExtra(keyOf(item), id));
         li.append(button);
+        if (group.move && item.movable) {
+          li.className = 'ws-extra-row';
+          const move = el('button', 'icon-btn ws-sec-btn ws-extra-move');
+          move.type = 'button';
+          move.setAttribute('aria-label', `Mover ${label} al repertorio`);
+          move.title = 'Mover al repertorio: fuera de nexo deja de cargarse';
+          move.innerHTML = ICON.stash;
+          move.addEventListener('click', () => moveToRepertoire(group, item, id, label, move));
+          li.append(move);
+        }
         ul.append(li);
       }
       wrap.append(h, ul);
+      if (!items.length) wrap.append(el('p', 'ws-sec-note', 'Vacío. Pasa aquí lo de tu perfil con «Mover al repertorio» o copia en la carpeta la de una skill (con su SKILL.md).'));
       parts.push(wrap);
     }
-    if (!parts.length) parts.push(el('p', 'ws-sec-note', 'No tienes plugins, servidores MCP, conexiones, skills propias ni hooks en tu perfil global.'));
+    if (!GROUPS.some((g) => ((g.items ? g.items(data) : data[g.key]) ?? []).length)) parts.push(el('p', 'ws-sec-note', 'No tienes extras en tu perfil global ni en tu repertorio de nexo.'));
     if (catalog?.error && data) parts.push(el('p', 'ws-sec-note', `No se pudo volver a leer: ${catalog.error}`));
     // Rehacer la lista no debe hacer perder el foco del interruptor que se acaba de pulsar.
     const focused = document.activeElement?.closest?.('.ws-extra')?.getAttribute('aria-labelledby');
@@ -1755,11 +1796,40 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     const top = scroller?.scrollTop ?? 0;
     box.replaceChildren(...parts);
     if (scroller) scroller.scrollTop = top;
-    if (focused) {
-      const button = $(focused)?.closest('.ws-extra');
+    // Lo recién movido al repertorio se lleva el foco cuando ya está en su sitio.
+    const target = !catalog?.loading && focusAfterMove ? focusAfterMove : focused;
+    if (!catalog?.loading) focusAfterMove = null;
+    if (target) {
+      const button = $(target)?.closest('.ws-extra');
       button?.focus({ preventScroll: true });
       // El pie puede aparecer y quitarle alto a la sección: que el interruptor siga a la vista.
       requestAnimationFrame(() => button?.scrollIntoView({ block: 'nearest' }));
+    }
+  }
+
+  // «Mover al repertorio»: lo saca del perfil global (workspace.rs) y queda en el grupo
+  // Repertorio, encendido aquí si lo estaba. Una skill de ~/.claude/skills pasa a ser una
+  // carpeta del repertorio: cambia de lista (`skills` → `repertoire`) y su id es la carpeta. Una
+  // de claude.ai solo se apaga en el perfil y sigue en `skills` con su nombre.
+  async function moveToRepertoire(group, item, id, label, button) {
+    if (!ws) return;
+    const path = ws.path;
+    button.disabled = true;
+    button.classList.add('loading');
+    try {
+      const moved = await invoke('workspace_repertoire_move', { kind: group.move, id });
+      if (moved.kind === 'skill' && extras.skills.includes(id)) {
+        extras = { ...extras, skills: extras.skills.filter((x) => x !== id), repertoire: [...extras.repertoire, moved.id] };
+        extras = { ...EMPTY_EXTRAS(), ...(await invoke('workspace_set_extras', { path, extras })) };
+      }
+      focusAfterMove = switchId('repertoire', moved.id);
+      announce(`${label} está ahora en el repertorio. Fuera de nexo ya no se carga.`);
+      await loadCatalog(true);
+      renderFoot();
+    } catch (error) {
+      button.disabled = false;
+      button.classList.remove('loading');
+      fail(error);
     }
   }
 
@@ -1804,7 +1874,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
       const changed = stream.exit();
       if (changed.length) syncAgents(changed);
       await wins.get('main')?.chat.restart();
-      const on = GROUPS.reduce((n, g) => n + extras[g.key].length, 0);
+      const on = EXTRA_KEYS.reduce((n, key) => n + extras[key].length, 0);
       announce(`Workspace reiniciado con ${on ? `${on} ${on === 1 ? 'extra' : 'extras'}` : 'los extras apagados'}.`);
     } catch (error) {
       fail(error);
