@@ -775,11 +775,136 @@ fn agent_transcript(projects: &Path, session: &str, task: &str) -> Option<PathBu
         .find(|p| p.is_file())
 }
 
+/// Lo que hay entre `<nombre>` y `</nombre>` en un texto.
+fn tag<'a>(text: &'a str, name: &str) -> Option<&'a str> {
+    let open = format!("<{name}>");
+    let start = text.find(&open)? + open.len();
+    let end = text[start..].find(&format!("</{name}>"))? + start;
+    Some(text[start..end].trim())
+}
+
+/// Los `<task-notification>` de una parte de una línea (tarea, estado y resumen). Según la
+/// versión de Claude Code van en un mensaje del usuario (`message`), en una línea
+/// `queue-operation` (`content`) o en un `attachment`, a veces repetidos; los resultados de
+/// herramientas no cuentan (pueden ser un archivo que habla de ellos).
+fn notifications(v: &Value, out: &mut Vec<(String, String, String)>) {
+    match v {
+        Value::String(s) if s.contains("<task-notification>") => {
+            for block in s.split("<task-notification>").skip(1) {
+                let block = block.split("</task-notification>").next().unwrap_or(block);
+                if let (Some(task), Some(status)) = (tag(block, "task-id"), tag(block, "status")) {
+                    let summary = tag(block, "summary").unwrap_or_default();
+                    out.push((task.into(), status.into(), summary.into()));
+                }
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|i| notifications(i, out)),
+        Value::Object(map) if map.get("type").and_then(Value::as_str) != Some("tool_result") => {
+            map.values().for_each(|i| notifications(i, out))
+        }
+        _ => {}
+    }
+}
+
+/// Cómo acabó un agente en primer plano según el resultado de su llamada a Agent; `None` si
+/// es uno en segundo plano, que ahí solo dice que arrancó.
+fn result_end(line: &Value, block: &Value) -> Option<&'static str> {
+    let text = block["content"].to_string();
+    if line["toolUseResult"]["isAsync"] == true || text.contains("Async agent launched") {
+        return None;
+    }
+    Some(if text.to_lowercase().contains("interrupted by user") {
+        "stopped"
+    } else if block["is_error"] == true {
+        "failed"
+    } else {
+        "completed"
+    })
+}
+
+/// Cómo acabó cada agente (estado de Claude Code y resumen) según las transcripciones de la
+/// sesión que lo desplegó y de la de ahora: manda el último `<task-notification>` de su tarea
+/// o, si trabajó en primer plano, el resultado de su llamada a Agent. Un SendMessage que lo
+/// retoma borra lo de antes hasta el aviso siguiente (si no se pudo retomar, vuelve lo de
+/// antes). El agente que no sale aquí no se sabe cómo acabó: nunca se da por terminado.
+fn endings(paths: &[PathBuf], agents: &[&RegAgent]) -> HashMap<String, (String, String)> {
+    let by_tool: HashMap<&str, &str> = agents
+        .iter()
+        .filter_map(|a| Some((a.tool_use.as_deref()?, a.task.as_str())))
+        .collect();
+    let mut ends: HashMap<String, Option<(String, String)>> = HashMap::new();
+    let mut resumes: HashMap<String, (String, Option<(String, String)>)> = HashMap::new();
+    for path in paths {
+        let Ok(file) = fs::File::open(path) else {
+            continue;
+        };
+        for line in BufReader::new(file).lines() {
+            let Ok(line) = line else { break };
+            if !line.contains("<task-notification>")
+                && !line.contains(r#""SendMessage""#)
+                && !line.contains(r#""tool_result""#)
+            {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            let kind = v["type"].as_str().unwrap_or_default();
+            if kind != "assistant" {
+                let mut found = Vec::new();
+                for part in ["message", "content", "attachment"] {
+                    notifications(&v[part], &mut found);
+                }
+                for (task, status, summary) in found {
+                    if agents.iter().any(|a| a.task == task) {
+                        ends.insert(task, Some((status, summary)));
+                    }
+                }
+            }
+            let Some(blocks) = v["message"]["content"].as_array() else {
+                continue;
+            };
+            for block in blocks {
+                match (kind, block["type"].as_str()) {
+                    ("assistant", Some("tool_use")) if block["name"] == "SendMessage" => {
+                        let to = block["input"]["to"]
+                            .as_str()
+                            .or(block["input"]["recipient"].as_str());
+                        if let (Some(to), Some(id)) = (to, block["id"].as_str())
+                            && agents.iter().any(|a| a.task == to)
+                        {
+                            let before = ends.insert(to.to_string(), None).flatten();
+                            resumes.insert(id.to_string(), (to.to_string(), before));
+                        }
+                    }
+                    ("user", Some("tool_result")) => {
+                        let id = block["tool_use_id"].as_str().unwrap_or_default();
+                        if let Some((task, before)) = resumes.remove(id) {
+                            if block["is_error"] == true {
+                                ends.insert(task, before);
+                            }
+                        } else if let Some(task) = by_tool.get(id)
+                            && let Some(status) = result_end(&v, block)
+                        {
+                            ends.insert(task.to_string(), Some((status.into(), String::new())));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    ends.into_iter()
+        .filter_map(|(task, end)| Some((task, end?)))
+        .collect()
+}
+
 /// Toda la conversación guardada del workspace: la del orquestador y, detrás, la de cada
-/// agente registrado, cada una entre un `task_started` y un `task_notification` (los agentes
-/// de antes ya no están en marcha).
+/// agente registrado, cada una entre un `task_started` y un `task_notification` con cómo acabó
+/// (`endings`; `unknown` si no se sabe). Los agentes de antes ya no están en marcha.
 pub(crate) fn history(projects: &Path, session: &str, agents: &[RegAgent]) -> Vec<String> {
     let mut out = transcript_lines(&projects.join(format!("{session}.jsonl")), None, false);
+    let mut ends: HashMap<String, HashMap<String, (String, String)>> = HashMap::new();
     for agent in agents {
         let Some(tool) = agent.tool_use.as_deref() else {
             continue;
@@ -788,6 +913,21 @@ pub(crate) fn history(projects: &Path, session: &str, agents: &[RegAgent]) -> Ve
         if !workspace::safe_id(own) || !workspace::safe_id(&agent.task) {
             continue;
         }
+        let of_session = ends.entry(own.to_string()).or_insert_with(|| {
+            let mut paths = vec![projects.join(format!("{own}.jsonl"))];
+            if own != session {
+                paths.push(projects.join(format!("{session}.jsonl")));
+            }
+            let born: Vec<&RegAgent> = agents
+                .iter()
+                .filter(|a| a.session.as_deref().unwrap_or(session) == own)
+                .collect();
+            endings(&paths, &born)
+        });
+        let (status, summary) = of_session
+            .get(&agent.task)
+            .cloned()
+            .unwrap_or_else(|| ("unknown".into(), String::new()));
         let lines = agent_transcript(projects, own, &agent.task)
             .map(|p| transcript_lines(&p, Some(tool), true))
             .unwrap_or_default();
@@ -803,7 +943,7 @@ pub(crate) fn history(projects: &Path, session: &str, agents: &[RegAgent]) -> Ve
         out.push(
             json!({
                 "type": "system", "subtype": "task_notification", "task_id": agent.task, "tool_use_id": tool,
-                "status": "completed", "summary": "", "nexo_history": true
+                "status": status, "summary": summary, "nexo_history": true
             })
             .to_string(),
         );
@@ -1975,6 +2115,85 @@ conexiones de claude.ai: Mobbin; skills: pdf."
             "el encargo no se repite: ya va en task_started"
         );
         assert_eq!(lines[6]["status"], "completed");
+    }
+
+    #[test]
+    fn el_historial_dice_como_acabo_cada_agente() {
+        let projects = temp("historial-finales");
+        let spawn = |id: &str| json!({ "type": "assistant", "message": { "id": format!("m-{id}"), "model": "claude-opus-5-5", "content": [{ "type": "tool_use", "id": id, "name": "Agent", "input": { "run_in_background": true } }] } });
+        let launched = |id: &str| json!({ "type": "user", "toolUseResult": { "isAsync": true, "status": "async_launched" }, "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": id, "content": [{ "type": "text", "text": "Async agent launched successfully." }] }] } });
+        let note = |task: &str, status: &str, summary: &str| {
+            format!(
+                "<task-notification>\n<task-id>{task}</task-id>\n<tool-use-id>x</tool-use-id>\n<status>{status}</status>\n<summary>{summary}</summary>\n</task-notification>"
+            )
+        };
+        let send = |id: &str, to: &str| json!({ "type": "assistant", "message": { "id": format!("m-{id}"), "model": "claude-opus-5-5", "content": [{ "type": "tool_use", "id": id, "name": "SendMessage", "input": { "to": to, "message": "sigue" } }] } });
+        let result = |id: &str, text: &str, error: bool| json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": id, "content": text, "is_error": error }] } });
+        let mut lines = Vec::new();
+        for n in 1..=6 {
+            lines.push(spawn(&format!("toolu_{n}")));
+        }
+        lines.extend([
+            // a1: en segundo plano; su aviso, en una línea `queue-operation`.
+            launched("toolu_1"),
+            json!({ "type": "queue-operation", "operation": "enqueue", "content": note("a1", "failed", "Agent \"Revisor\" failed: API Error") }),
+            // a2: en primer plano, interrumpido.
+            result("toolu_2", "[Request interrupted by user for tool use]", true),
+            // a3: terminó y se retomó sin aviso después: la sesión se cortó con él en marcha.
+            launched("toolu_3"),
+            json!({ "type": "user", "message": { "role": "user", "content": note("a3", "completed", "Agent \"C\" finished") } }),
+            send("toolu_s3", "a3"),
+            result("toolu_s3", "{\"success\":true}", false),
+            // a4: detenido; el aviso, en un `attachment`, repetido.
+            launched("toolu_4"),
+            json!({ "type": "attachment", "attachment": { "type": "queued_command", "prompt": format!("{}{}", note("a4", "killed", "stopped"), note("a4", "killed", "stopped")) } }),
+            // a5: sin aviso; un archivo que habla de uno no cuenta.
+            launched("toolu_5"),
+            result("toolu_r", &note("a5", "completed", ""), false),
+            // a6: terminó; el SendMessage que no pudo retomarlo no cambia nada.
+            launched("toolu_6"),
+            json!({ "type": "user", "message": { "role": "user", "content": [{ "type": "text", "text": note("a6", "completed", "") }] } }),
+            send("toolu_s6", "a6"),
+            result("toolu_s6", "Agent not found", true),
+        ]);
+        write(&projects.join("s1.jsonl"), &lines);
+        let agents: Vec<RegAgent> = (1..=6)
+            .map(|n| RegAgent {
+                file: format!("a{n}"),
+                name: format!("Agente {n}"),
+                role: String::new(),
+                kind: "general-purpose".into(),
+                task: format!("a{n}"),
+                tool_use: Some(format!("toolu_{n}")),
+                session: Some("s1".into()),
+                created: String::new(),
+                prompt: String::new(),
+            })
+            .collect();
+        let ends: Vec<(String, String)> = history(&projects, "s1", &agents)
+            .iter()
+            .map(|l| serde_json::from_str::<Value>(l).unwrap())
+            .filter(|l| l["subtype"] == "task_notification")
+            .map(|l| {
+                (
+                    l["status"].as_str().unwrap().to_string(),
+                    l["summary"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        let statuses: Vec<&str> = ends.iter().map(|(s, _)| s.as_str()).collect();
+        assert_eq!(
+            statuses,
+            [
+                "failed",
+                "stopped",
+                "unknown",
+                "killed",
+                "unknown",
+                "completed"
+            ]
+        );
+        assert_eq!(ends[0].1, "Agent \"Revisor\" failed: API Error");
     }
 
     // ------------------------------------------------------------ avisos (spec de avisos)

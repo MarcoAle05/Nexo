@@ -301,7 +301,9 @@ export function createChat({
     return parts;
   }
 
-  // Un proceso de la herramienta Agent lleva, debajo, el botón que abre la ventana del agente.
+  // Un proceso de la herramienta Agent lleva, debajo, el botón que abre la ventana del agente,
+  // con su estado: el del proceso es el de la llamada, que en segundo plano acaba bien en
+  // cuanto el agente arranca, aunque luego falle.
   function agentButton(node, item) {
     const agent = AGENT_TOOLS.has(item.name) && agentFor ? agentFor(item.id) : null;
     let button = node.querySelector(':scope > .chat-proc-open');
@@ -312,8 +314,16 @@ export function createChat({
       button.addEventListener('click', () => onOpenAgent(agentFor(item.id)));
       node.querySelector(':scope > details').after(button);
     }
-    button.innerHTML = `${ICON.open}<span></span>`;
+    button.innerHTML = `${ICON.open}<span class="chat-proc-open-name"></span>`;
     button.lastChild.textContent = `Abrir la ventana de ${agent.name}`;
+    button.removeAttribute('aria-label');
+    if (agent.state && agent.stateText) {
+      const dot = el('span', 'ws-state');
+      dot.dataset.state = agent.state;
+      dot.setAttribute('aria-hidden', 'true');
+      button.append(dot, el('span', 'chat-proc-open-state', agent.stateText));
+      button.setAttribute('aria-label', `Abrir la ventana de ${agent.name}, ${agent.stateText.toLowerCase()}`);
+    }
   }
 
   function paintTool(node, item) {

@@ -1,7 +1,7 @@
 // Reparto de la salida del orquestador entre las ventanas de un workspace.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { agentState, createWorkspaceStream, usageTokens } from '../src/ws-stream.js';
+import { STATE_LABEL, agentState, createWorkspaceStream, endNotice, endStatus, usageTokens } from '../src/ws-stream.js';
 import { createChatModel } from '../src/chat-model.js';
 
 const spawn = (id, input) => ({ type: 'assistant', message: { id: `m-${id}`, model: 'claude-opus-5-5', content: [{ type: 'tool_use', id, name: 'Agent', input }], usage: { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 0 } } });
@@ -43,7 +43,9 @@ test('el estado y los tokens salen de las líneas de tareas', () => {
   const done = s.route({ type: 'system', subtype: 'task_notification', task_id: 'a1', status: 'completed', summary: 'Listo', usage: { total_tokens: 9100, tool_uses: 7, duration_ms: 20000 } });
   assert.deepEqual([...done.changed], ['a1']);
   assert.equal(agent.status, 'completed');
-  assert.equal(agentState(agent), 'idle');
+  assert.equal(agentState(agent), 'done');
+  assert.deepEqual(done.ended, ['a1']);
+  assert.deepEqual(done.targets, [], 'el que terminó bien no lleva nota');
   assert.equal(s.tokensOf(agent), 9100);
   // Retomado con SendMessage: la misma tarea vuelve a estar activa y no se duplica.
   const again = s.route(started('a1', 'toolu_2'));
@@ -122,7 +124,7 @@ test('una conversación real con un agente en segundo plano se reparte bien', as
   assert.equal(agent.type, 'Explore');
   assert.equal(agent.status, 'completed');
   assert.equal(s.tokensOf(agent), 8606);
-  assert.ok(states.includes('active') && states.at(-1) === 'idle', 'activo mientras trabaja, inactivo al acabar');
+  assert.ok(states.includes('active') && states.at(-1) === 'done', 'activo mientras trabaja, terminado al acabar');
   // En su ventana, lo suyo (razonamiento, herramienta y respuesta); en la del orquestador, la
   // llamada a Agent y sus dos respuestas, sin lo del agente dentro.
   assert.deepEqual(sub.state.items.map((i) => i.kind), ['thinking', 'tool', 'text']);
@@ -130,4 +132,86 @@ test('una conversación real con un agente en segundo plano se reparte bien', as
   assert.equal(agentCall.children.length, 0);
   assert.equal(main.state.items.filter((i) => i.kind === 'text').length, 2);
   assert.ok(s.mainTokens() > 0);
+});
+
+const notes = (out) => out.targets.filter((t) => t.msg.subtype === 'informational');
+
+test('cómo acabó una tarea: lo que no se sabe nunca es un éxito', () => {
+  assert.equal(endStatus('completed'), 'completed');
+  assert.equal(endStatus('failed'), 'failed');
+  assert.equal(endStatus('stopped'), 'stopped');
+  assert.equal(endStatus('killed'), 'stopped');
+  // Al retomar una sesión, Claude Code da por «stopped» lo que cortó el final de la anterior.
+  assert.equal(endStatus('stopped', 'Agent "Revisor" didn\'t finish before the previous session ended'), 'unknown');
+  assert.equal(endStatus('paused'), 'unknown');
+  assert.equal(endStatus(undefined), 'unknown');
+  assert.equal(agentState(undefined), 'unknown', 'sin noticias de un agente, no se sabe cómo acabó');
+  assert.equal(agentState({ status: 'raro' }), 'unknown');
+  assert.deepEqual(
+    ['active', 'waiting', 'done', 'failed', 'stopped', 'unknown', 'idle'].map((k) => STATE_LABEL[k]),
+    ['Activo', 'Esperando respuesta', 'Terminado', 'Falló', 'Detenido', 'Sin terminar', 'Inactivo'],
+  );
+});
+
+test('un agente que falla, se detiene o se corta lo dice y deja una nota en su ventana', () => {
+  const s = createWorkspaceStream();
+  s.route(spawn('toolu_1', {}));
+  s.route(started('a1', 'toolu_1'));
+  const failed = s.route({ type: 'system', subtype: 'task_notification', task_id: 'a1', status: 'failed', summary: 'API Error: 529 overloaded\nmás detalle' });
+  assert.equal(agentState(s.get('a1')), 'failed');
+  assert.deepEqual(failed.ended, ['a1']);
+  assert.deepEqual(notes(failed).map((t) => [t.to, t.msg.level, t.msg.content]), [['a1', 'error', 'El agente falló: API Error: 529 overloaded']]);
+  // Retomado, vuelve a estar activo; Detener: `task_updated` killed y después su aviso, una nota.
+  s.route(started('a1', 'toolu_2'));
+  assert.equal(agentState(s.get('a1')), 'active');
+  const killed = s.route({ type: 'system', subtype: 'task_updated', task_id: 'a1', patch: { status: 'killed' } });
+  assert.equal(agentState(s.get('a1')), 'stopped');
+  assert.deepEqual(notes(killed), []);
+  const stopped = s.route({ type: 'system', subtype: 'task_notification', task_id: 'a1', status: 'stopped' });
+  assert.deepEqual(notes(stopped).map((t) => t.msg.content), ['El agente se detuvo.']);
+  assert.deepEqual(notes(s.route({ type: 'system', subtype: 'task_notification', task_id: 'a1', status: 'stopped' })), [], 'el mismo final no deja otra nota');
+  // Claude Code se cierra con un agente en marcha: no se sabe cómo acabó.
+  s.route(spawn('toolu_3', {}));
+  s.route(started('a3', 'toolu_3'));
+  assert.deepEqual(s.exit(), ['a3']);
+  assert.equal(agentState(s.get('a3')), 'unknown');
+  assert.equal(STATE_LABEL[agentState(s.get('a3'))], 'Sin terminar');
+  assert.match(endNotice(s.get('a3')).content, /^El agente no terminó/);
+  assert.equal(endNotice({ status: 'completed' }), null);
+});
+
+test('un agente en primer plano acaba con el resultado de su llamada a Agent', () => {
+  const result = (id, content, is_error = false) => ({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content, is_error }] } });
+  const s = createWorkspaceStream();
+  for (const [task, tool] of [['a1', 'toolu_1'], ['a2', 'toolu_2'], ['a3', 'toolu_3'], ['a4', 'toolu_4']]) {
+    s.route(spawn(tool, {}));
+    s.route(started(task, tool));
+  }
+  s.route(result('toolu_1', 'Hecho: tres endpoints'));
+  s.route(result('toolu_2', 'Error: el agente no pudo seguir', true));
+  s.route(result('toolu_3', [{ type: 'text', text: '[Request interrupted by user for tool use]' }], true));
+  // Uno en segundo plano solo dice que arrancó: sigue activo hasta su aviso.
+  s.route(result('toolu_4', [{ type: 'text', text: 'Async agent launched successfully.' }]));
+  assert.deepEqual(['a1', 'a2', 'a3', 'a4'].map((id) => agentState(s.get(id))), ['done', 'failed', 'stopped', 'active']);
+  // Su aviso después no deja otra nota.
+  assert.deepEqual(notes(s.route({ type: 'system', subtype: 'task_notification', task_id: 'a2', status: 'failed' })), []);
+});
+
+test('en el historial cada agente acaba como dice su aviso, también si no se sabe', () => {
+  const s = createWorkspaceStream();
+  const model = createChatModel({ prompts: true });
+  const replay = [
+    started('a1', 'toolu_1', { nexo_history: true }),
+    sub('toolu_1', [{ type: 'text', text: 'Reviso.' }]),
+    { type: 'system', subtype: 'task_notification', task_id: 'a1', tool_use_id: 'toolu_1', status: 'unknown', summary: '', nexo_history: true },
+  ];
+  const ended = [];
+  for (const line of replay) {
+    const out = s.route(line);
+    ended.push(...out.ended);
+    for (const t of out.targets) if (t.to === 'a1') model.apply(t.msg);
+  }
+  assert.deepEqual(ended, ['a1']);
+  assert.equal(agentState(s.get('a1')), 'unknown');
+  assert.deepEqual(model.state.items.map((i) => [i.kind, i.level ?? '']), [['text', ''], ['notice', 'info']]);
 });

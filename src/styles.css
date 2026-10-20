@@ -3756,11 +3756,16 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .ws-tree-link { font-size: 11px; color: var(--faint); }
 .ws-tree-note { display: flex; align-items: center; min-height: 28px; padding-inline: calc(30px + (var(--level, 1) - 1) * 14px) 8px; font-size: 12px; color: var(--faint); }
 
-/* Punto de estado de un agente. La forma dice el estado sin el color: hueco (inactivo),
-   anillo con su centro (esperando respuesta) y lleno (activo). */
+/* Punto de estado de un agente. La forma dice el estado sin el color: hueco (inactivo o
+   terminado), anillo con su centro (esperando respuesta), lleno (activo), anillo discontinuo
+   (falló: la forma de los errores de la app), cuadradito (detenido: el símbolo de parar) y
+   medio lleno (sin terminar: a medias). */
 .ws-state { flex-shrink: 0; width: 10px; height: 10px; border-radius: var(--r-full); border: 1.5px solid rgba(var(--ink-rgb), 0.4); }
 .ws-state[data-state="active"] { border: 0; background: var(--state-on); }
 .ws-state[data-state="waiting"] { border: 2px solid var(--accent-soft); background: radial-gradient(circle, var(--accent-soft) 0 1.6px, transparent 2.2px); }
+.ws-state[data-state="failed"] { border: 1.5px dashed var(--fg); }
+.ws-state[data-state="stopped"] { border: 0; border-radius: 1.5px; background: var(--dim); scale: 0.8; }
+.ws-state[data-state="unknown"] { background: linear-gradient(90deg, rgba(var(--ink-rgb), 0.4) 50%, transparent 50%); }
 @media (prefers-reduced-motion: no-preference) {
   .ws-state[data-state="active"] { animation: breathe 1.8s var(--ease) infinite; }
 }
@@ -3987,6 +3992,9 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 
 .chat-proc-open svg { flex-shrink: 0; }
 .chat-proc-open span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* El estado del agente va detrás del nombre y no se recorta: se recorta el nombre. */
+.chat-proc-open .ws-state { margin-left: 2px; }
+.chat-proc-open .chat-proc-open-state { flex-shrink: 0; }
 
 /* Lector de archivos: números de línea fijos a la izquierda y el código coloreado. */
 .ws-code {

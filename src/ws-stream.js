@@ -4,13 +4,36 @@
 // con las líneas `system` de tareas (`task_started`, `task_progress`, `task_notification`,
 // `task_updated`). Aquí se lleva la cuenta de cada agente (nombre, tipo, encargo, estado y
 // tokens, que no se guardan en ningún sitio) y se decide a qué chat va cada línea: al del
-// orquestador (`main`) o al del agente. Sin DOM: se prueba con node.
+// orquestador (`main`) o al del agente, que al acabar mal recibe una nota de cómo acabó. Sin
+// DOM: se prueba con node.
 
 export const AGENT_TOOLS = new Set(['Agent', 'Task']);
 // Líneas que se guardan como mucho para un agente cuya tarea aún no ha empezado.
 const PENDING_MAX = 400;
 
 const RUNNING = new Set(['running', 'pending']);
+// Cómo acabó un agente (su `status`) en el estado que se enseña.
+const ENDED = { completed: 'done', failed: 'failed', stopped: 'stopped' };
+// Lo que dice Claude Code, al retomar una sesión, de una tarea que cortó el final de la anterior.
+const CUT = /didn't finish before the previous session ended/i;
+
+// Cómo acabó una tarea según Claude Code: terminó, falló, se detuvo (alguien la paró) o no se
+// sabe (`unknown`: un estado que nexo no conoce o una tarea que cortó el final de la sesión).
+// Lo que no se sabe nunca se da por terminado.
+export function endStatus(status, summary = '') {
+  if (status === 'completed' || status === 'failed') return status;
+  if (status === 'stopped' || status === 'killed') return CUT.test(summary) ? 'unknown' : 'stopped';
+  return 'unknown';
+}
+
+// Cómo acabó un agente según el resultado de su llamada a Agent (uno en primer plano, o sin
+// líneas de tarea). Uno en segundo plano solo dice que arrancó: de ahí no se sabe cómo acabó.
+function resultEnd(block) {
+  const text = JSON.stringify(block.content ?? '');
+  if (text.includes('Async agent launched')) return 'unknown';
+  if (/interrupted by user/i.test(text)) return 'stopped';
+  return block.is_error ? 'failed' : 'completed';
+}
 
 // Tokens de una llamada al modelo: todo lo que leyó y escribió (como el registro de agentes).
 export function usageTokens(usage) {
@@ -20,13 +43,42 @@ export function usageTokens(usage) {
 }
 
 // Estado que se enseña de un agente: esperando respuesta (tiene un permiso o una pregunta sin
-// contestar), activo (su tarea está en marcha) o inactivo.
+// contestar), activo (su tarea está en marcha) o cómo acabó: terminado, falló, detenido o sin
+// terminar (no se sabe: también el que nunca dio noticias). «Inactivo» es solo del orquestador
+// y de Nexo, que son conversaciones y no tareas que acaben.
 export function agentState(agent, waiting = false) {
   if (waiting) return 'waiting';
-  return agent && RUNNING.has(agent.status) ? 'active' : 'idle';
+  if (!agent) return 'unknown';
+  if (RUNNING.has(agent.status)) return 'active';
+  return ENDED[agent.status] ?? 'unknown';
 }
 
-export const STATE_LABEL = { active: 'Activo', waiting: 'Esperando respuesta', idle: 'Inactivo' };
+export const STATE_LABEL = { active: 'Activo', waiting: 'Esperando respuesta', idle: 'Inactivo', done: 'Terminado', failed: 'Falló', stopped: 'Detenido', unknown: 'Sin terminar' };
+
+// Lo que se anuncia de un agente que acaba de terminar mal (el que terminó bien, no: lo cuenta
+// el orquestador).
+export const ENDED_TEXT = { failed: 'falló', stopped: 'se detuvo', unknown: 'quedó sin terminar' };
+
+// La nota que cierra la conversación de un agente que no acabó bien, como un aviso del chat.
+export function endNotice(agent) {
+  const state = agentState(agent);
+  if (state === 'failed') {
+    // El resumen del aviso del historial empieza por «Agent "‹nombre›" failed:»; en directo
+    // puede ser lo último que escribió el agente: solo su primera línea.
+    const why = (agent.ending ?? '')
+      .replace(/^Agent "[^"]*" failed:?\s*/i, '')
+      .split('\n')
+      .find((l) => l.trim())
+      ?.trim()
+      .slice(0, 200);
+    return notice('error', why ? `El agente falló: ${why}` : 'El agente falló.');
+  }
+  if (state === 'stopped') return notice('info', 'El agente se detuvo.');
+  if (state === 'unknown') return notice('info', 'El agente no terminó: Claude Code se cerró antes de que acabara, o no quedó constancia de cómo acabó.');
+  return null;
+}
+
+const notice = (level, content) => ({ type: 'system', subtype: 'informational', level, content });
 
 export function createWorkspaceStream() {
   const agents = new Map(); // id de la tarea → agente
@@ -46,7 +98,7 @@ export function createWorkspaceStream() {
     let agent = agents.get(id);
     const created = !agent;
     if (!agent) {
-      agent = { id, toolUse: null, name: '', type: 'general-purpose', prompt: '', status: 'running', background: false, tokens: 0, toolUses: 0, durationMs: 0, summary: '', lastTool: '', parent: null, history: false, usage: new Map(), started: Date.now() };
+      agent = { id, toolUse: null, name: '', type: 'general-purpose', prompt: '', status: 'running', background: false, tokens: 0, toolUses: 0, durationMs: 0, summary: '', ending: '', noted: false, lastTool: '', parent: null, history: false, usage: new Map(), started: Date.now() };
       agents.set(id, agent);
     }
     for (const [k, v] of Object.entries(fields)) if (v != null && v !== '') agent[k] = v;
@@ -58,6 +110,20 @@ export function createWorkspaceStream() {
     const message = msg.message ?? {};
     for (const block of message.content ?? []) if (block?.type === 'tool_use' && block.id) ownerOfTool.set(block.id, agent.id);
     if (message.id && message.usage) agent.usage.set(message.id, Math.max(agent.usage.get(message.id) ?? 0, usageTokens(message.usage)));
+  }
+
+  // Un agente acaba: su estado, su nota (si no acabó bien) y la cuenta de los que acabaron en
+  // esta línea, para anunciarlos. El mismo final dos veces (el resultado de su llamada y su
+  // aviso) no deja dos notas.
+  function finish(agent, status, out, summary = '') {
+    out.changed.add(agent.id);
+    if (agent.noted && agent.status === status) return;
+    agent.status = status;
+    agent.ending = summary;
+    agent.noted = true;
+    out.ended.push(agent.id);
+    const note = endNotice(agent);
+    if (note) out.targets.push({ to: agent.id, msg: note });
   }
 
   function link(toolUse, id) {
@@ -83,7 +149,7 @@ export function createWorkspaceStream() {
   };
 
   function route(msg) {
-    const out = { targets: [], changed: new Set(), created: [] };
+    const out = { targets: [], changed: new Set(), created: [], ended: [] };
     if (!msg || typeof msg !== 'object') return out;
 
     if (msg.type === 'system') {
@@ -97,9 +163,11 @@ export function createWorkspaceStream() {
           prompt: msg.prompt || spawn.prompt,
           parent: msg.parent_task_id,
           background: msg.is_backgrounded,
-          status: msg.nexo_history ? 'completed' : 'running',
+          // Del historial: hasta su aviso (que va detrás) no se sabe cómo acabó.
+          status: msg.nexo_history ? 'unknown' : 'running',
           history: msg.nexo_history ? true : null,
         });
+        agent.noted = false;
         if (!agent.toolUse && msg.tool_use_id) agent.toolUse = msg.tool_use_id;
         if (!msg.nexo_history && !created) agent.status = 'running';
         if (created) out.created.push(agent.id);
@@ -118,14 +186,15 @@ export function createWorkspaceStream() {
         }
         if (msg.subtype === 'task_progress') {
           agent.status = 'running';
+          agent.noted = false;
           if (msg.summary) agent.summary = msg.summary;
           if (msg.last_tool_name) agent.lastTool = msg.last_tool_name;
         } else if (msg.subtype === 'task_notification') {
-          agent.status = msg.status === 'failed' ? 'failed' : msg.status === 'stopped' ? 'stopped' : 'completed';
           if (msg.summary) agent.summary = msg.summary;
+          finish(agent, endStatus(msg.status, msg.summary ?? ''), out, msg.summary ?? '');
         } else {
           const patch = msg.patch ?? {};
-          if (patch.status) agent.status = patch.status === 'killed' ? 'stopped' : patch.status;
+          if (patch.status) agent.status = RUNNING.has(patch.status) ? patch.status : endStatus(patch.status);
           if (patch.is_backgrounded != null) agent.background = patch.is_backgrounded;
         }
         out.changed.add(agent.id);
@@ -189,15 +258,27 @@ export function createWorkspaceStream() {
       }
       if (message.id && message.usage) mainUsage.set(message.id, Math.max(mainUsage.get(message.id) ?? 0, usageTokens(message.usage)));
     } else if (msg.type === 'user' && Array.isArray(msg.message?.content)) {
-      // La llamada a Agent terminó sin que llegara su tarea: el agente sale de la llamada.
       for (const block of msg.message.content) {
-        if (block?.type !== 'tool_result' || !spawns.has(block.tool_use_id) || byTool.has(block.tool_use_id)) continue;
+        if (block?.type !== 'tool_result' || !spawns.has(block.tool_use_id)) continue;
+        const id = byTool.get(block.tool_use_id);
+        if (id) {
+          // Un agente en primer plano acaba con su llamada (si no llegó antes su aviso).
+          const agent = agents.get(id);
+          const end = resultEnd(block);
+          if (agent && RUNNING.has(agent.status) && end !== 'unknown') finish(agent, end, out);
+          continue;
+        }
+        // La llamada a Agent terminó sin que llegara su tarea: el agente sale de la llamada.
         if (!pending.has(block.tool_use_id)) continue;
         const { agent, created, lines } = provisional(block.tool_use_id);
-        agent.status = 'completed';
         if (created) out.created.push(agent.id);
-        out.changed.add(agent.id);
         for (const line of lines) out.targets.push(toAgent(agent.id, line));
+        const end = resultEnd(block);
+        // Uno en segundo plano sigue trabajando: no se sabe cómo acabará, pero no se cortó.
+        if (end === 'unknown') {
+          agent.status = 'unknown';
+          out.changed.add(agent.id);
+        } else finish(agent, end, out);
       }
     }
     out.targets.push({ to: 'main', msg });
@@ -227,12 +308,15 @@ export function createWorkspaceStream() {
       for (const v of mainUsage.values()) sum += v;
       return sum;
     },
-    // Claude Code se cerró: ningún agente sigue en marcha.
+    // Claude Code se cerró: ningún agente sigue en marcha, y de los que lo estaban no se sabe
+    // cómo acabaron (aunque lo cerrara nexo). Su nota la pide quien lo cierra (`endNotice`).
     exit() {
       const changed = [];
       for (const agent of agents.values()) {
         if (RUNNING.has(agent.status)) {
-          agent.status = 'stopped';
+          agent.status = 'unknown';
+          agent.ending = '';
+          agent.noted = true;
           changed.push(agent.id);
         }
       }

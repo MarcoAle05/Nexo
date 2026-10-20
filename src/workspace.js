@@ -13,7 +13,7 @@ import { formatTokens } from './registro.js';
 import { fileMeta, isMarkdown, languageOf, renderFile } from './ws-code.js';
 import { MAX_OPEN, addTab, closeTab, fits, focusWindow, minimizeWindow, neighbor, normalizeWindows, openWindow, setMode, tileLayout, wheelDelta } from './ws-layout.js';
 import { WAITING_TEXT } from './ws-attention.js';
-import { STATE_LABEL, agentState, createWorkspaceStream } from './ws-stream.js';
+import { ENDED_TEXT, STATE_LABEL, agentState, createWorkspaceStream, endNotice } from './ws-stream.js';
 
 const svg = (paths, size = 16, width = 1.4) =>
   `<svg width="${size}" height="${size}" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
@@ -74,6 +74,14 @@ export const SETUP_KEY = 's:setup';
 export const keyKind = (key) => (key === 'main' ? 'main' : key.startsWith('a:') ? 'agent' : key.startsWith('s:') ? 'setup' : 'file');
 // Lo que dice la ventana del setup según cómo va (worktree.rs: `running`, `ok`, `error`,
 // `interrupted`).
+// El estado del punto del Setup: los mismos finales que un agente.
+export function setupState(view) {
+  if (!view) return 'idle';
+  if (view.state === 'running') return 'active';
+  if (view.state === 'ok') return 'done';
+  return view.state === 'interrupted' ? 'unknown' : 'failed';
+}
+
 export function setupLabel(view) {
   if (!view) return '';
   if (view.state === 'running') return 'Ejecutándose';
@@ -1025,17 +1033,37 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
   function infoOf(key) {
     if (key === 'main') return mainInfo();
     if (key.startsWith('a:')) return agentInfo(key.slice(2));
-    if (key === SETUP_KEY) return { key, name: 'Setup', role: setupView?.command ?? '', state: setupView?.state === 'running' ? 'active' : 'idle', label: setupLabel(setupView) };
+    if (key === SETUP_KEY) return { key, name: 'Setup', role: setupView?.command ?? '', state: setupState(setupView), label: setupLabel(setupView) };
     return { key, name: baseName(key.slice(2)), path: key.slice(2) };
   }
 
   // ---------------------------------------------------------------- protocolo del orquestador
+  // Se anuncian los agentes que acaban de acabar mal (el que terminó bien lo cuenta el
+  // orquestador); lo que se repite del historial, no.
+  function announceEnded(tasks) {
+    const said = tasks
+      .map(agentInfo)
+      .filter((info) => ENDED_TEXT[info.state])
+      .map((info) => `${info.name} ${ENDED_TEXT[info.state]}.`);
+    if (said.length) announce(said.join(' '));
+  }
+
+  // Claude Code se cerró: los agentes que seguían en marcha quedan sin terminar, con su nota.
+  function exited() {
+    const changed = stream.exit();
+    for (const task of changed) {
+      const note = endNotice(stream.get(task));
+      if (note && !removed.has(task)) ensureWindow(`a:${task}`)?.chat?.receive({ kind: 'line', msg: note, history: false });
+    }
+    if (changed.length) syncAgents(changed);
+    announceEnded(changed);
+  }
+
   function dispatch(event, mainEvent) {
     if (event.kind === 'exit') {
       mainEvent(event);
       for (const win of wins.values()) if (win.kind === 'agent') win.chat?.receive(event);
-      const changed = stream.exit();
-      if (changed.length) syncAgents(changed);
+      exited();
       return;
     }
     let msg;
@@ -1070,6 +1098,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     }
     if (out.created.length) refreshAgents();
     if (out.changed.size || out.created.length) syncAgents([...out.changed, ...out.created]);
+    if (!history) announceEnded(out.ended);
     // Lo que escriben el orquestador y sus agentes puede cambiar archivos y el registro.
     if (!history && (msg.type === 'result' || (msg.type === 'user' && Array.isArray(msg.message?.content) && msg.message.content.some((b) => b?.type === 'tool_result')))) {
       refreshTree();
@@ -1205,7 +1234,9 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
           onLink,
           agentFor: (toolUse) => {
             const agent = stream.byToolUse(toolUse);
-            return agent ? agentInfo(agent.id) : null;
+            if (!agent) return null;
+            const info = agentInfo(agent.id);
+            return { ...info, stateText: STATE_LABEL[info.state] };
           },
           onOpenAgent: (agent) => agent && openKey(agent.key, { focus: true }),
           onState: (s) => {
@@ -1871,8 +1902,7 @@ export function createWorkspace({ invoke, Channel, desktop, pickFolder, pickFile
     button.classList.add('working');
     try {
       await invoke('workspace_stop', { path });
-      const changed = stream.exit();
-      if (changed.length) syncAgents(changed);
+      exited();
       await wins.get('main')?.chat.restart();
       const on = EXTRA_KEYS.reduce((n, key) => n + extras[key].length, 0);
       announce(`Workspace reiniciado con ${on ? `${on} ${on === 1 ? 'extra' : 'extras'}` : 'los extras apagados'}.`);
