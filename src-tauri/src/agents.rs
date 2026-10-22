@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
+use serde_json::{Value, json};
 use tauri::AppHandle;
 
 use crate::skills::{AGENT_MARK, frontmatter};
@@ -107,6 +108,53 @@ pub fn list(root: &Path) -> Vec<AgentInfo> {
     agents
 }
 
+/// El cuerpo de un agente: lo que va después de su frontmatter (sus instrucciones).
+fn body_of(text: &str) -> &str {
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    let Some(rest) = text
+        .strip_prefix("---\n")
+        .or_else(|| text.strip_prefix("---\r\n"))
+    else {
+        return text;
+    };
+    let mut at = 0;
+    for line in rest.split_inclusive('\n') {
+        at += line.len();
+        if line.trim_end() == "---" {
+            return &rest[at..];
+        }
+    }
+    ""
+}
+
+/// Un agente del vault como lo pide `claude --agents` (para lanzarlo en una terminal de un
+/// workspace, ver `control.rs`): su nombre y `{ description, prompt, model?, tools? }`.
+pub(crate) fn definition(root: &Path, name: &str) -> Option<(String, Value)> {
+    let agent = list(root)
+        .into_iter()
+        .find(|a| a.name == name || a.id == name)?;
+    let file = agents_dir(root).join(format!("{}.md", agent.id));
+    let text = fs::read_to_string(file).ok()?;
+    let mut def = json!({
+        "description": agent.description,
+        "prompt": body_of(&text).trim(),
+    });
+    if let Some(model) = agent.model.filter(|m| m != "inherit") {
+        def["model"] = json!(model);
+    }
+    if let Some(tools) = agent.tools {
+        let tools: Vec<&str> = tools
+            .split(',')
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .collect();
+        if !tools.is_empty() {
+            def["tools"] = json!(tools);
+        }
+    }
+    Some((agent.name, def))
+}
+
 /// Huella de los agentes para el vigilante: ruta, tamaño y fecha de cada archivo.
 pub fn fingerprint(root: &Path) -> Vec<(String, u64, u64)> {
     let dir = agents_dir(root);
@@ -200,6 +248,24 @@ mod tests {
         assert_eq!(agents[1].name, "sub/anidado");
         assert_eq!(agents[1].description, "Hace algo en dos líneas.");
         assert_eq!(agents[1].model, None);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn un_agente_del_vault_se_pasa_a_claude_code_con_sus_instrucciones() {
+        let root = temp("definicion");
+        fs::write(
+            root.join(".claude/agents/revisor.md"),
+            "---\nname: revisor\ndescription: Revisa cosas.\nmodel: sonnet\neffort: low\ntools: Read, Grep\n---\n\nEres un revisor.\n---\nSigue.\n",
+        )
+        .unwrap();
+        let (name, def) = definition(&root, "revisor").unwrap();
+        assert_eq!(name, "revisor");
+        assert_eq!(
+            def,
+            json!({ "description": "Revisa cosas.", "prompt": "Eres un revisor.\n---\nSigue.", "model": "sonnet", "tools": ["Read", "Grep"] })
+        );
+        assert!(definition(&root, "otro").is_none());
         fs::remove_dir_all(root).unwrap();
     }
 

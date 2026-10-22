@@ -3,8 +3,8 @@
 // Sin DOM: se prueba con node.
 
 export const MAX_OPEN = 4;
-// Medidas por debajo de las que una ventana deja de servir: el chat necesita su barra y unas
-// líneas de conversación; el código, unas columnas.
+// Medidas por debajo de las que una ventana deja de servir: una terminal necesita unas 40
+// columnas y unas líneas; el código, unas columnas.
 export const MIN_W = 380;
 export const MIN_H = 300;
 
@@ -103,6 +103,15 @@ export function openWindow(state, key) {
     }
   }
   return { state: { ...s, open, mru: touch(s.mru, key), active: key }, evicted };
+}
+
+// Una ventana nueva (una terminal que se abre): se ve si estamos en mosaico y cabe junto a las
+// que ya se ven (`room`: el hueco tiene sitio para una más con su medida mínima); si no, queda
+// en su pestaña, sin minimizar ninguna. En «sola» ocupa el centro.
+export function openIfFits(state, key, room) {
+  if (state.mode === 'sola') return openWindow(state, key).state;
+  if (state.open.length < MAX_OPEN && room) return openWindow(state, key).state;
+  return addTab(state, key);
 }
 
 // La ventana que se usa ahora (foco en ella), sin cambiar cuáles se ven.

@@ -13,8 +13,7 @@
 //! ignorados que liste `.worktreeinclude` (un `.env`, por ejemplo), se enlazan las carpetas
 //! ignoradas de `worktree.sharedDirectories` de `orca.yaml` y se ejecuta su `scripts.setup` en
 //! segundo plano, con `ORCA_ROOT_PATH` y `ORCA_WORKTREE_PATH` (la salida va a
-//! `.nexo/setup.log`). El workspace nuevo arranca con los mismos extras encendidos que el de
-//! origen.
+//! `.nexo/setup.log`).
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -1469,8 +1468,8 @@ pub struct Created {
     warnings: Vec<String>,
 }
 
-/// Crea el worktree y lo deja como workspace actual (con los extras del de origen). El
-/// progreso va por el canal: `{step, text}`.
+/// Crea el worktree y lo deja como workspace actual. El progreso va por el canal:
+/// `{step, text}`.
 #[tauri::command]
 pub async fn worktree_create(
     app: AppHandle,
@@ -1493,8 +1492,6 @@ pub async fn worktree_create(
         let made = create_in(&repo, &root, &name, &base, &prefix, &dest, &used, &step)?;
         mark_used(&app, &repo, &made.name);
         step("open", format!("Abriendo {}…", made.name));
-        let extras = workspace::read_config(&root).extras;
-        workspace::update_config(&made.folder, |c| c.extras = extras)?;
         let info = workspace::remember(&app, &made.folder)?;
         let mut warnings = made.warnings;
         let mut started = false;

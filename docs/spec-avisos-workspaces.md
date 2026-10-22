@@ -8,6 +8,13 @@ trabajo. Es el punto 1 del informe «nexo frente a Orca» (`~/informe-nexo-vs-or
 **Estado:** aprobada el 17-10-2026. Las decisiones marcadas «(usuario)» las tomó el usuario ese día,
 con opciones o al cerrar las preguntas abiertas.
 
+**Desde el 22-10-2026** los workspaces trabajan con terminales y ya no tienen orquestador
+(`spec-terminales-workspaces.md`): el punto, los avisos y sus reglas siguen igual, pero lo que pasa
+sale de los hooks del Claude Code de cada terminal (`sesiones.rs`) y no de la salida del
+orquestador. «El orquestador» de los textos es ahora el nombre de la sesión de Claude, y un turno
+interrumpido (que no dispara `Stop`) se cierra al ver en su transcripción el fin del turno. Lo que
+sigue describe el diseño de entonces.
+
 ## Objetivo
 
 **El problema.** Al cambiar de workspace, la interfaz se desconecta (`workspace_detach`,

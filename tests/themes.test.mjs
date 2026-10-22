@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { THEMES, DEFAULT_THEME, themeById } from '../src/themes.js';
 import { TINTS, makePoints, recolor } from '../src/galaxy.js';
+import { TEXT_COLORS, luminance, terminalTheme } from '../src/ws-term-theme.js';
 
 const css = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 
@@ -167,5 +168,24 @@ test('el código del lector y los puntos de los agentes se leen en todos los tem
         assert.ok(r >= 3, `${theme.id}: ${name} (punto de estado) sobre ${label} da ${r.toFixed(2)}:1 (hace falta 3)`);
       }
     }
+  }
+});
+
+// Terminales del workspace: sus colores salen de los tokens de la ventana (ws-term-theme.js) y
+// los que se usan para escribir se leen sobre su fondo.
+test('la terminal de un workspace se lee en todos los temas', () => {
+  for (const theme of THEMES) {
+    const w = winTokensOf(theme);
+    const t = terminalTheme((name) => w[name], tokensOf(theme)['--bg']);
+    const bg = color(t.background);
+    for (const name of TEXT_COLORS) {
+      const r = ratio(color(t[name]), bg);
+      assert.ok(r >= 4.5, `${theme.id}: ${name} de la terminal (${t[name]}) sobre ${t.background} da ${r.toFixed(2)}:1 (hace falta 4,5)`);
+    }
+    const cursor = ratio(color(t.cursor), bg);
+    assert.ok(cursor >= 3, `${theme.id}: el cursor da ${cursor.toFixed(2)}:1 (hace falta 3)`);
+    assert.match(t.selectionBackground, /^(rgba?\(|#)/, `${theme.id}: la selección es un color`);
+    // El fondo de la terminal es el de la ventana: el de las tarjetas negras en «Blanco con negro».
+    assert.equal(luminance(color(t.foreground)) > luminance(bg), theme.scheme === 'dark' || theme.id === 'blanco', `${theme.id}: texto claro sobre fondo oscuro según sus tarjetas`);
   }
 });
