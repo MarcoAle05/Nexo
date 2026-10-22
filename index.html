@@ -481,9 +481,8 @@
             </div>
           </div>
         </div>
-        <!-- Workspace (vista «Agentes»): una carpeta de proyecto con su orquestador. Explorador de
-             archivos, agentes y Extras del perfil global; los cambios en los extras se aplican al
-             reiniciar el espacio. -->
+        <!-- Workspace (vista «Agentes»): una carpeta de proyecto en la que se trabaja con terminales.
+             Explorador de archivos y agentes (el Claude Code de cada terminal y sus subagentes). -->
         <div class="panel-core ws-core" id="ws-core" hidden>
           <div class="panel-head ws-head">
             <button type="button" class="icon-btn light ws-back" id="ws-back" aria-label="Volver a los agentes de nexo" title="Volver a los agentes de nexo">
@@ -518,7 +517,6 @@
           <div class="segmented small agents-tabs ws-tabs-sec" id="ws-sec-tabs" role="group" aria-label="Apartado del workspace" data-segmented>
             <button type="button" aria-pressed="true" data-ws-sec="files" aria-controls="ws-sec-files">Archivos</button>
             <button type="button" aria-pressed="false" data-ws-sec="agents" aria-controls="ws-sec-agents">Agentes <span class="agents-tab-count" id="ws-agents-count">0</span></button>
-            <button type="button" aria-pressed="false" data-ws-sec="extras" aria-controls="ws-sec-extras">Extras <span class="agents-tab-count" id="ws-extras-count"></span></button>
           </div>
 
           <div class="ws-sections" id="ws-sections">
@@ -537,31 +535,13 @@
                 <ul class="ws-agents" id="ws-agents" aria-label="Agentes del workspace"></ul>
               </div>
             </section>
-
-            <section class="ws-sec" id="ws-sec-extras" aria-label="Extras" hidden>
-              <div class="ws-sec-tools">
-                <p class="ws-sec-tools-note">Apagado, el orquestador no lo carga.</p>
-                <button type="button" class="icon-btn ws-sec-btn" id="ws-extras-refresh" aria-label="Volver a leer tu perfil de Claude Code" title="Volver a leer tu perfil"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></button>
-              </div>
-              <div class="ws-sec-body">
-                <div class="ws-extras" id="ws-extras"></div>
-              </div>
-            </section>
           </div>
 
           <div class="empty ws-none" id="ws-none" hidden>
             <span class="empty-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5.5V15.5h15V7.5H9.5L8 5.5z"/></svg></span>
             <p class="empty-title">Elige la carpeta de un proyecto</p>
-            <p class="empty-text">Tendrá su propio orquestador y sus agentes, con los archivos a mano y los extras que enciendas.</p>
+            <p class="empty-text">Trabajarás en ella con terminales (y Claude Code, si quieres), con sus archivos a mano.</p>
             <button type="button" class="pill-btn" id="ws-none-open">Elegir o crear carpeta</button>
-          </div>
-
-          <div class="ws-foot" id="ws-foot" hidden>
-            <p class="ws-foot-text">Cambiaste los extras: el orquestador los tendrá al reiniciar.</p>
-            <button type="button" class="cta small ws-restart" id="ws-restart">
-              Reiniciar espacio de Workspace
-              <span class="cta-icon" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M16 10a6 6 0 1 1-1.8-4.3M16 4v3.5h-3.5"/></svg></span>
-            </button>
           </div>
         </div>
 
@@ -674,13 +654,28 @@
           </div>
         </div>
 
-        <!-- Workspace (vista «Agentes»): pestañas de los agentes y archivos y hasta 4 ventanas -->
+        <!-- Workspace (vista «Agentes»): pestañas de las terminales y los archivos, su «+» y hasta 4 ventanas -->
         <div class="ws-center" id="ws-center" hidden>
           <div class="ws-bar" id="ws-bar" hidden>
             <div class="ws-tabs-scroll" id="ws-tabs-scroll">
               <ul class="ws-tabs" id="ws-tabs" aria-label="Pestañas del workspace"></ul>
             </div>
             <div class="ws-bar-tools">
+              <div class="vault-anchor ws-add-win-anchor">
+                <button type="button" class="icon-btn outline ws-wt-add ws-add-win" id="ws-add-win" aria-haspopup="menu" aria-expanded="false" aria-controls="ws-add-win-menu" aria-label="Nueva ventana" title="Nueva ventana">
+                  <span class="ws-wt-add-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg></span>
+                </button>
+                <div class="vault-menu ws-add-win-menu" id="ws-add-win-menu" role="menu" aria-label="Nueva ventana" hidden>
+                  <button type="button" class="vault-option ws-add-win-item" role="menuitem" data-kind="shell">
+                    <span class="ws-add-win-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="3.5" width="15" height="13" rx="2.5"/><path d="m6 8 2.5 2L6 12M10 12.5h4"/></svg></span>
+                    <span class="ws-add-win-text"><span class="ws-add-win-name">Terminal</span><small>Un shell en la carpeta del workspace</small></span>
+                  </button>
+                  <button type="button" class="vault-option ws-add-win-item" role="menuitem" data-kind="claude">
+                    <span class="ws-add-win-icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 22 22" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="11" cy="11" r="3" fill="currentColor" stroke="none"/><ellipse cx="11" cy="11" rx="9.5" ry="4" transform="rotate(-24 11 11)"/></svg></span>
+                    <span class="ws-add-win-text"><span class="ws-add-win-name">Claude Code</span><small>Una terminal que ya ejecuta claude</small></span>
+                  </button>
+                </div>
+              </div>
               <div class="vault-anchor ws-all-anchor">
                 <button type="button" class="ws-all" id="ws-all" aria-haspopup="dialog" aria-expanded="false" aria-controls="ws-overview" title="Ver todas las pestañas">
                   <svg width="15" height="15" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M3 8h14M8 4.5V8"/></svg>
@@ -697,7 +692,7 @@
           <div class="ws-empty" id="ws-empty" hidden>
             <svg width="40" height="40" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="14" height="11" rx="2"/><path d="M3 8h14M8 4.5V8"/></svg>
             <p class="desk-empty-title">Ninguna ventana a la vista</p>
-            <p class="desk-empty-text">Las pestañas de arriba siguen ahí: pulsa una para volver a verla, o abre un archivo del explorador o un agente de la carta.</p>
+            <p class="desk-empty-text">Las pestañas de arriba siguen ahí: pulsa una para volver a verla, abre una terminal con el «+» o un archivo del explorador.</p>
             <button type="button" class="pill-btn" id="ws-empty-files">Ir al explorador</button>
           </div>
           <div class="ws-loading" id="ws-loading" role="status" hidden>
@@ -807,7 +802,7 @@
         </button>
       </div>
       <div class="settings-body">
-        <p class="settings-section-hint ws-dialog-hint">Una carpeta de proyecto con su propio orquestador: despliega agentes, que verás en el centro, y trabaja con sus archivos.</p>
+        <p class="settings-section-hint ws-dialog-hint">Una carpeta de proyecto: trabajas en ella con terminales (y Claude Code), que verás en el centro, con sus archivos a mano.</p>
         <div class="ws-choices">
           <button type="button" class="ws-choice" id="ws-pick">
             <span class="ws-choice-icon" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 15.5V5.5H8l1.5 2h6.5v2"/><path d="M2.5 15.5 5 9.5h12.5l-2.5 6z"/></svg></span>
@@ -847,8 +842,8 @@
     </div>
   </dialog>
 
-  <!-- Nuevo worktree: otra copia de trabajo del repo del workspace, con su propia rama y su
-       orquestador (worktree.rs). Se abre con el «+» que hay junto al nombre. -->
+  <!-- Nuevo worktree: otra copia de trabajo del repo del workspace, con su propia rama y sus
+       terminales (worktree.rs). Se abre con el «+» que hay junto al nombre. -->
   <dialog class="settings ws-dialog wt-dialog" id="wt-dialog" aria-labelledby="wt-dialog-title" aria-describedby="wt-dialog-hint">
     <div class="settings-panel">
       <div class="settings-head">
@@ -858,7 +853,7 @@
         </button>
       </div>
       <form class="settings-body wt-form" id="wt-form" novalidate>
-        <p class="settings-section-hint ws-dialog-hint" id="wt-dialog-hint">Otra copia de <strong id="wt-repo"></strong> con su propia rama y su propio orquestador.</p>
+        <p class="settings-section-hint ws-dialog-hint" id="wt-dialog-hint">Otra copia de <strong id="wt-repo"></strong> con su propia rama y sus propias terminales.</p>
         <div class="ws-field">
           <label class="ws-field-label" for="wt-name">Nombre</label>
           <input type="text" id="wt-name" autocomplete="off" spellcheck="false" aria-describedby="wt-name-note">

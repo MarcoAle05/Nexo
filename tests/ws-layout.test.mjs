@@ -1,7 +1,7 @@
 // Ventanas del workspace: reparto en mosaico y qué se ve al abrir, minimizar y cerrar.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { MAX_OPEN, addTab, closeTab, emptyWindows, fits, focusWindow, minimizeWindow, neighbor, normalizeWindows, openWindow, setMode, tileLayout, wheelDelta } from '../src/ws-layout.js';
+import { MAX_OPEN, addTab, closeTab, emptyWindows, fits, focusWindow, minimizeWindow, neighbor, normalizeWindows, openIfFits, openWindow, setMode, tileLayout, wheelDelta } from '../src/ws-layout.js';
 
 const shape = (l) => `${l.cols}x${l.rows}`;
 
@@ -106,4 +106,25 @@ test('un agente nuevo solo se abre solo si cabe con su medida', () => {
   assert.equal(fits(3, 608, 740), false);
   // 1920 px: caben cuatro en 2×2.
   assert.equal(fits(4, 950, 900), true);
+});
+
+test('una terminal nueva se ve si cabe y si no queda en su pestaña', () => {
+  let s = openWindow(emptyWindows(), 't:a').state;
+  s = openIfFits(s, 't:b', true);
+  assert.deepEqual(s.open, ['t:a', 't:b']);
+  assert.equal(s.active, 't:b', 'la nueva se usa');
+  // Sin sitio: pestaña nueva, nada se minimiza.
+  s = openIfFits(s, 't:c', false);
+  assert.deepEqual(s.open, ['t:a', 't:b']);
+  assert.deepEqual(s.tabs, ['t:a', 't:b', 't:c']);
+  // Con cuatro a la vista tampoco se abre aunque quepa.
+  s = openIfFits(openIfFits(s, 'f:x', true), 'f:y', true);
+  assert.equal(s.open.length, MAX_OPEN);
+  s = openIfFits(s, 't:d', true);
+  assert.ok(!s.open.includes('t:d') && s.tabs.includes('t:d'));
+  // Cerrar una terminal la quita del todo; en «sola», la nueva ocupa el centro.
+  s = closeTab(s, 't:b');
+  assert.ok(!s.tabs.includes('t:b') && !s.open.includes('t:b'));
+  s = openIfFits(setMode(s, 'sola'), 't:e', false);
+  assert.deepEqual(s.open, ['t:e']);
 });
