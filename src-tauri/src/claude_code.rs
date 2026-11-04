@@ -217,6 +217,10 @@ Workspaces: las carpetas de proyecto del usuario (Agentes → Workspaces) se tra
 Orca. Para trabajar con los workspaces (abrir una terminal, delegar un trabajo a un Claude Code o a un agente del \
 vault, ver cómo va o cuánto gasta), sigue la skill nexo-orquestacion: tiene la orden de control de nexo y sus \
 reglas.\n\n\
+Lienzo: el lienzo de Notas también admite elementos que no son notas (cuadros de texto, figuras, flechas, tablas, \
+tableros, tablas relacionales, secuencias…). Si el usuario quiere planear algo en visual, diagramar o dibujar en el \
+lienzo, o que lo ordenes, sigue la skill nexo-lienzo: dibujas en tu propia capa, sin moverle la vista ni estorbarle. \
+Nunca edites .nexo/lienzos/ a mano.\n\n\
 Navegador: tienes el servidor MCP `playwright` (herramientas mcp__playwright__browser_*), que abre un Chrome con \
 ventana sobre una copia del perfil del navegador del usuario (sus sesiones iniciadas), cargada con el botón \
 «Cargar navegador» de Conexiones. Úsalo cuando el usuario te pida consultar o hacer algo en una web, sobre todo \
@@ -306,6 +310,7 @@ fn launch_args(
     saved: bool,
     prompt: &str,
     mcp_config: Option<&Path>,
+    allowed: Option<&str>,
     options: &ChatOptions,
 ) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = [
@@ -336,6 +341,10 @@ fn launch_args(
     args.extend(["--append-system-prompt".into(), prompt.to_string()]);
     if let Some(config) = mcp_config {
         args.extend(["--mcp-config".into(), config.to_string_lossy().into_owned()]);
+    }
+    // Lo único que el chat puede hacer sin preguntar: dibujar en el lienzo (`lienzos.rs`).
+    if let Some(rule) = allowed {
+        args.extend(["--allowedTools".into(), rule.to_string()]);
     }
     args.extend(option_args(options)?);
     Ok(args)
@@ -470,10 +479,27 @@ pub fn claude_code_start(
                 crate::orquestacion::NAME
             );
         }
+        let exe = std::env::current_exe().ok();
+        if let Some(exe) = &exe
+            && let Err(e) = crate::lienzos::install_skill(&root, exe)
+        {
+            log::warn!(
+                "No se pudo instalar la skill {}: {e}",
+                crate::lienzos::SKILL_NAME
+            );
+        }
+        let allowed = exe.as_deref().and_then(crate::lienzos::permission_rule);
         let prompt = orchestrator_prompt(&root, &run.name);
         let config = playwright_mcp_config(&app);
         (
-            launch_args(run, saved, &prompt, config.as_deref(), &options)?,
+            launch_args(
+                run,
+                saved,
+                &prompt,
+                config.as_deref(),
+                allowed.as_deref(),
+                &options,
+            )?,
             run.name.clone(),
             saved,
         )
@@ -646,7 +672,8 @@ mod tests {
 
     #[test]
     fn los_argumentos_piden_el_protocolo_sin_terminal() {
-        let args = launch_args(&run(), false, "papel", None, &ChatOptions::default()).unwrap();
+        let args =
+            launch_args(&run(), false, "papel", None, None, &ChatOptions::default()).unwrap();
         assert_eq!(args[0], "-p");
         for (flag, value) in [
             ("--input-format", "stream-json"),
@@ -680,8 +707,27 @@ mod tests {
     }
 
     #[test]
+    fn el_chat_solo_puede_dibujar_sin_preguntar() {
+        let args = launch_args(
+            &run(),
+            false,
+            "papel",
+            None,
+            Some("Bash(/x/nexo ctl lienzo:*)"),
+            &ChatOptions::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            args[pos(&args, "--allowedTools").unwrap() + 1],
+            "Bash(/x/nexo ctl lienzo:*)"
+        );
+        let prompt = orchestrator_prompt(Path::new("/v"), "s");
+        assert!(prompt.contains("sigue la skill nexo-lienzo"));
+    }
+
+    #[test]
     fn una_sesion_guardada_se_retoma() {
-        let args = launch_args(&run(), true, "papel", None, &ChatOptions::default()).unwrap();
+        let args = launch_args(&run(), true, "papel", None, None, &ChatOptions::default()).unwrap();
         assert_eq!(args[pos(&args, "--resume").unwrap() + 1], "0b1c");
         assert!(pos(&args, "--session-id").is_none());
         assert!(pos(&args, "--name").is_none());
@@ -695,7 +741,7 @@ mod tests {
             permission_mode: Some("acceptEdits".into()),
         };
         let config = Path::new("/cache/claude-mcp.json");
-        let args = launch_args(&run(), false, "papel", Some(config), &options).unwrap();
+        let args = launch_args(&run(), false, "papel", Some(config), None, &options).unwrap();
         assert_eq!(
             args[pos(&args, "--model").unwrap() + 1],
             "claude-sonnet-5-5"
@@ -716,7 +762,7 @@ mod tests {
             effort: None,
             permission_mode: Some("default".into()),
         };
-        let args = launch_args(&run(), false, "papel", None, &options).unwrap();
+        let args = launch_args(&run(), false, "papel", None, None, &options).unwrap();
         assert!(pos(&args, "--model").is_none());
         assert!(pos(&args, "--permission-mode").is_none());
     }
@@ -729,7 +775,7 @@ mod tests {
                 effort: effort.map(String::from),
                 permission_mode: mode.map(String::from),
             };
-            launch_args(&run(), false, "papel", None, &options)
+            launch_args(&run(), false, "papel", None, None, &options)
         };
         assert!(with(None, None, Some("bypassPermissions")).is_err());
         assert!(with(None, None, Some("dontAsk")).is_err());

@@ -115,3 +115,12 @@ test('zoomAround deja quieto el punto que se está mirando', async () => {
   const back = zoomAround(next, point, 0.5, 1);
   assert.ok(Math.abs(back.x - cam.x) < 1e-9 && Math.abs(back.y - cam.y) < 1e-9);
 });
+
+test('una nota nueva no se abre encima de un elemento del lienzo', () => {
+  const figura = { x: 396, y: 0, w: 300, h: 300 };
+  const cards = [card('a', 0, 0)];
+  assert.deepEqual(nextSpot(cards, { anchor: 'a', home, size, obstacles: [figura] }), { x: 396 + 300 + 16, y: 0, w: 380, h: 440 });
+  // Tampoco la primera.
+  const sitio = nextSpot([], { home, size, obstacles: [{ x: 280, y: 100, w: 100, h: 100 }] });
+  assert.deepEqual(sitio, { x: 280 + 100 + 16, y: 120, w: 380, h: 440 });
+});

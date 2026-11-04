@@ -1,14 +1,16 @@
 // Apartado Notas: la carta de la izquierda muestra temas, subtemas y notas de
 // wiki/notas/, y detrás de toda la app hay un lienzo donde cada nota abierta es una carta
 // que se mueve, se redimensiona y se apila. El lienzo es tan grande que hace de infinito: se
-// recorre arrastrando el fondo, con la rueda o desde el minimapa de la barra superior. Las
+// recorre con el botón derecho desde cualquier sitio, arrastrando el fondo, con la rueda o desde
+// el minimapa de la barra superior. Las
 // notas se escriben directamente en la carta, línea a línea (note-editor.js), y se guardan en
 // Markdown (notas.rs). La disposición del escritorio abierto va en .nexo/escritorio.json
 // (Claude Code también la edita) y la lista de escritorios y los archivados, en
 // .nexo/escritorios.json (desks.js).
 
 import { ZOOM, boundsOf, clampZoom, fromMap, mapFrame, nextSpot, revealShift, scaleOf, toMap, zoomAround, zoomLabel } from './desk-layout.js';
-import { MAX_DESKS, activeDesk, archiveDesk, createDesk, normalize, removeArchived, renameDesk, restoreDesk, storeActive, switchDesk } from './desks.js';
+import { FIRST_DESK, MAX_DESKS, activeDesk, archiveDesk, createDesk, normalize, removeArchived, renameDesk, restoreDesk, storeActive, switchDesk } from './desks.js';
+import { createCanvas } from './canvas.js';
 import { reconcile } from './dom.js';
 import { createNoteEditor, isoToday, parseDate, relativeDay, taskCount } from './note-editor.js';
 
@@ -59,7 +61,7 @@ const shortDate = (date) => date.toLocaleDateString('es', { weekday: 'short', da
 // El backend guarda el cuerpo con un salto final y sin líneas vacías al principio.
 const same = (a, b) => (a ?? '').replace(/^\n+|\s+$/g, '') === (b ?? '').replace(/^\n+|\s+$/g, '');
 
-export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
+export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef = () => {} }) {
   let tree = null;
   let current = '';
   let loaded = false;
@@ -511,7 +513,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
   }
 
   function renderDeskChrome() {
-    $('desk-empty').hidden = cards.size > 0;
+    $('desk-empty').hidden = cards.size > 0 || canvas.count() > 0;
     queueMap();
     renderManager();
   }
@@ -824,7 +826,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     const free = freeArea();
     return nextSpot(
       [...cards.values()].map(({ path, x, y, w, h }) => ({ path, x, y, w, h })),
-      { anchor: lastOpened, home: { x: Math.round(at.x + (free.x + HOME_PAD) / scale), y: Math.round(at.y + (free.y + HOME_PAD) / scale) }, size: { w: CARD_W, h: CARD_H }, gap: GAP },
+      { anchor: lastOpened, home: { x: Math.round(at.x + (free.x + HOME_PAD) / scale), y: Math.round(at.y + (free.y + HOME_PAD) / scale) }, size: { w: CARD_W, h: CARD_H }, gap: GAP, obstacles: canvas.rects() },
     );
   }
 
@@ -892,26 +894,59 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
 
   // La rueda y el trackpad lo desplazan solos (es un desplazamiento nativo). Aquí, lo que
   // falta: arrastrar el fondo, seguir la cámara y traer una carta al tabular hasta ella.
-  viewport.addEventListener('pointerdown', (event) => {
-    if (event.button !== 0 || (event.target !== surface && event.target !== viewport)) return;
+  function startPan(event) {
     const start = { px: event.clientX, py: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
     viewport.setPointerCapture(event.pointerId);
     viewport.classList.add('panning');
+    // Un velo sobre lo que haya debajo: el cursor no cambia al pasar por una tabla o una nota.
+    const shield = document.createElement('div');
+    shield.className = 'desk-pan-shield';
+    viewport.append(shield);
     const move = (e) => viewport.scrollTo({ left: start.left - (e.clientX - start.px), top: start.top - (e.clientY - start.py), behavior: 'instant' });
     const up = () => {
       viewport.removeEventListener('pointermove', move);
+      viewport.removeEventListener('pointerup', up);
+      viewport.removeEventListener('pointercancel', up);
       viewport.classList.remove('panning');
+      shield.remove();
     };
     viewport.addEventListener('pointermove', move);
-    viewport.addEventListener('pointerup', up, { once: true });
-    viewport.addEventListener('pointercancel', up, { once: true });
+    viewport.addEventListener('pointerup', up);
+    viewport.addEventListener('pointercancel', up);
+  }
+
+  viewport.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || (event.target !== surface && event.target !== viewport)) return;
+    // Mayús y arrastrar selecciona por área; si no, un clic en el fondo deja de seleccionar.
+    if (canvas.backgroundDown(event)) return;
+    startPan(event);
+  });
+
+  // El botón derecho mueve el lienzo desde cualquier sitio: un texto, una tabla, una nota. Se atiende
+  // al bajar, antes que nadie, así que lo de debajo no se entera: no se selecciona ni se trae al
+  // frente, y lo que se esté escribiendo sigue con el foco (`mousedown`). En Linux el menú contextual
+  // sale al pulsar, no al soltar, y cortaría el arrastre: por eso no sale; con Mayús sí, para pegar o
+  // el corrector, y entonces no se mueve nada.
+  const panButton = (event) => event.button === 2 && !event.shiftKey;
+  viewport.addEventListener('pointerdown', (event) => {
+    if (!panButton(event)) return;
+    event.stopPropagation();
+    startPan(event);
+  }, true);
+  viewport.addEventListener('mousedown', (event) => {
+    if (!panButton(event)) return;
+    event.preventDefault();
+    event.stopPropagation();
+  }, true);
+  viewport.addEventListener('contextmenu', (event) => {
+    if (panButton(event)) event.preventDefault();
   });
 
   // Sobre una carta, la rueda desplaza la nota si es larga y el lienzo si no (ver
   // `can-scroll` en styles.css). Se mira al entrar el ratón en la carta y en cada giro.
   const syncScrollable = (event) => {
-    const card = event.target.closest?.('.desk-card');
-    for (const box of card?.querySelectorAll('.desk-card-body, .desk-editor') ?? []) box.classList.toggle('can-scroll', box.scrollHeight > box.clientHeight + 1);
+    const card = event.target.closest?.('.desk-card, .cv-el');
+    for (const box of card?.querySelectorAll('.desk-card-body, .desk-editor, .cv-scroll') ?? []) box.classList.toggle('can-scroll', box.scrollHeight > box.clientHeight + 1 || box.scrollWidth > box.clientWidth + 1);
   };
   surface.addEventListener('pointerover', syncScrollable, { passive: true });
   surface.addEventListener('wheel', syncScrollable, { capture: true, passive: true });
@@ -942,6 +977,8 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
   const map = $('desk-map');
   const mapWorld = $('desk-map-world');
   const mapView = $('desk-map-view');
+  const mapEls = $('desk-map-els');
+  const mapLive = $('desk-map-live');
   const mapDots = new Map(); // ruta → su recuadro en el mapa
   let mapNow = null; // el encuadre con el que está pintado
   let mapHeld = null; // encuadre fijo mientras se arrastra en el mapa
@@ -955,7 +992,9 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     if (viewport.hidden || !size.w) return;
     const rects = [...cards.values()].map(({ path, x, y, w, h }) => ({ path, x, y, w, h }));
     const view = viewRect();
-    mapNow = mapHeld ?? mapFrame(rects, view, size);
+    const items = canvas.mapItems();
+    mapNow = mapHeld ?? mapFrame([...rects, ...items], view, size);
+    canvas.queueVisible();
     const put = (node, rect) => {
       const box = toMap(mapNow, rect);
       Object.assign(node.style, { left: `${box.left}px`, top: `${box.top}px`, width: `${box.width}px`, height: `${box.height}px` });
@@ -975,7 +1014,43 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       }
       put(node, rect);
     }
+    paintMapItems(items, size);
     put(mapView, view);
+    // Dónde está dibujando el agente: un punto de atención, sin animar (no gasta en reposo).
+    const live = canvas.live();
+    mapLive.hidden = !live;
+    if (live) put(mapLive, live);
+  }
+
+  // Los elementos pueden ser cientos: van en un lienzo, no un nodo por cada uno.
+  function paintMapItems(items, size) {
+    const ratio = window.devicePixelRatio || 1;
+    const width = Math.round(size.w * ratio);
+    const height = Math.round(size.h * ratio);
+    if (mapEls.width !== width || mapEls.height !== height) {
+      mapEls.width = width;
+      mapEls.height = height;
+    }
+    const ctx = mapEls.getContext('2d');
+    ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+    ctx.clearRect(0, 0, size.w, size.h);
+    if (!items.length) return;
+    const style = getComputedStyle(map);
+    const ink = style.getPropertyValue('--fg').trim();
+    const accent = style.getPropertyValue('--accent-soft').trim();
+    for (const item of items) {
+      const box = toMap(mapNow, item);
+      ctx.strokeStyle = ctx.fillStyle = item.agent ? accent : ink;
+      if (item.frame) {
+        ctx.globalAlpha = 0.5;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(box.left, box.top, Math.max(2, box.width), Math.max(2, box.height));
+      } else {
+        ctx.globalAlpha = 0.4;
+        ctx.fillRect(box.left, box.top, Math.max(1.5, box.width), Math.max(1.5, box.height));
+      }
+    }
+    ctx.globalAlpha = 1;
   }
   function queueMap() {
     if (!mapQueued) mapQueued = requestAnimationFrame(renderMap);
@@ -1008,7 +1083,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
 
   // Vuelve a las cartas: deja la esquina de todas ellas en la esquina del hueco libre.
   function goToCards({ smooth = true } = {}) {
-    const all = boundsOf([...cards.values()]);
+    const all = boundsOf([...cards.values(), ...canvas.rects()]);
     const home = homeCamera();
     moveCamera(all ? { x: all.x + home.x, y: all.y + home.y } : home, { smooth });
   }
@@ -1090,6 +1165,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     useView(desk.view);
     applyCamera();
     await writeDesk();
+    await canvas.load(desk.id);
     renderDeskChrome();
     renderPanel();
   }
@@ -1113,6 +1189,12 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
   }
 
   const cardCount = (n) => `${n} ${n === 1 ? 'nota' : 'notas'}`;
+  // Cuántos elementos tiene cada escritorio: se pide al abrir el gestor.
+  let elementCounts = {};
+  const deskCount = (id, notes) => {
+    const n = id === deskState?.active ? canvas.count() : (elementCounts[id] ?? 0);
+    return n ? `${cardCount(notes)} · ${n} ${n === 1 ? 'elemento' : 'elementos'}` : cardCount(notes);
+  };
   const deskButton = (className, paths, label, handler) => {
     const b = document.createElement('button');
     b.type = 'button';
@@ -1175,7 +1257,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
         if (on) pick.setAttribute('aria-current', 'true');
         pick.innerHTML = `<span class="desks-check" aria-hidden="true">${icon(ICON.check, 13)}</span><span class="desks-name"></span><span class="desks-meta"></span>`;
         pick.children[1].textContent = desk.name;
-        pick.children[2].textContent = `${cardCount(on ? cards.size : desk.cards.length)}${on ? ' · abierto' : ''}`;
+        pick.children[2].textContent = `${deskCount(desk.id, on ? cards.size : desk.cards.length)}${on ? ' · abierto' : ''}`;
         pick.addEventListener('click', () => {
           if (on) return closeManager(true);
           deskAction((state) => switchDesk(state, desk.id)).then(() => focusRow(desk.id));
@@ -1205,7 +1287,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
         info.children[1].textContent = desk.name;
         const when = desk.archivedAt ? new Date(desk.archivedAt) : null;
         const day = when && !Number.isNaN(when.getTime()) ? ` · ${when.toLocaleDateString('es', { day: 'numeric', month: 'short' })}` : '';
-        info.children[2].textContent = `${cardCount(desk.cards.length)}${day}`;
+        info.children[2].textContent = `${deskCount(desk.id, desk.cards.length)}${day}`;
         const load = deskButton('desks-act desks-load', null, full ? `Cargar ${desk.name}: antes archiva uno de la lista` : `Cargar ${desk.name}`, () =>
           deskAction((state) => restoreDesk(state, desk.id)).then(() => focusRow(desk.id)),
         );
@@ -1215,8 +1297,13 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
           info,
           load,
           deskButton('desks-act', ICON.trash, `Borrar ${desk.name}`, async () => {
-            const sure = await ask(`¿Borrar el escritorio archivado «${desk.name}»? Sus notas no se borran: solo se pierde cómo estaban colocadas.`, { title: 'Borrar escritorio', kind: 'warning' });
-            if (sure) deskAction((state) => removeArchived(state, desk.id)).then(() => $('desks-new').focus());
+            const n = elementCounts[desk.id] ?? 0;
+            const extra = n ? ` Sus ${n === 1 ? 'un elemento del lienzo se va' : `${n} elementos del lienzo se van`} a la papelera, porque no están en ningún otro sitio.` : '';
+            const sure = await ask(`¿Borrar el escritorio archivado «${desk.name}»? Sus notas no se borran: solo se pierde cómo estaban colocadas.${extra}`, { title: 'Borrar escritorio', kind: 'warning' });
+            if (sure) {
+              await invoke('canvas_forget', { desk: desk.id }).catch(fail);
+              deskAction((state) => removeArchived(state, desk.id)).then(() => $('desks-new').focus());
+            }
           }),
         );
         return row;
@@ -1229,6 +1316,16 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     desksButton.setAttribute('aria-expanded', 'true');
     renderManager();
     focusRow(deskState?.active);
+    invoke('canvas_counts')
+      .then((counts) => {
+        elementCounts = counts ?? {};
+        if (!desksMenu.hidden) {
+          const focused = document.activeElement?.closest?.('[data-desk]')?.dataset.desk;
+          renderManager();
+          if (focused) focusRow(focused);
+        }
+      })
+      .catch(() => {});
   }
   function closeManager(refocus = false) {
     if (desksMenu.hidden) return;
@@ -1250,6 +1347,124 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     if (!event.target.closest?.('#desk-manager')) closeManager();
   });
 
+  // ------------------------------------------------------------ elementos del lienzo
+  // Lo que no son notas (canvas.js): van por encima de las cartas y comparten su cámara y su zoom.
+
+  const notePaths = () => {
+    const out = [];
+    const walk = (node) => {
+      if (!node) return;
+      out.push(...node.notes.map((n) => n.path));
+      node.topics.forEach(walk);
+    };
+    walk(tree);
+    return out;
+  };
+
+  // Mover cartas por orden del agente: la interfaz sigue siendo quien las escribe. La que tenga el
+  // usuario en las manos no se mueve. Da dónde estaban, para deshacerlo.
+  function moveCards(moves) {
+    const back = [];
+    for (const m of moves) {
+      const card = cards.get(m.path);
+      if (!card || card.el.classList.contains('dragging')) continue;
+      back.push({ path: m.path, x: card.x, y: card.y });
+      card.x = m.x;
+      card.y = m.y;
+      place(card);
+    }
+    if (back.length) saveDesk();
+    return back;
+  }
+
+  // La vista Notas aún no se ha abierto: no hay cartas en memoria que respetar.
+  async function patchDeskFile(moves) {
+    try {
+      const state = await invoke('desk_load');
+      for (const m of moves) {
+        const c = state?.cards?.find((x) => x.path === m.path);
+        if (c) Object.assign(c, { x: m.x, y: m.y });
+      }
+      await invoke('desk_save', { state });
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  // Las cartas que van dentro de un marco que se arrastra.
+  let cardDrag = null;
+  function dragCards(from, dx, dy) {
+    cardDrag = from;
+    for (const c of from) {
+      const card = cards.get(c.id);
+      if (!card) continue;
+      card.x = c.x + dx;
+      card.y = c.y + dy;
+      card.el.style.translate = `${dx}px ${dy}px`;
+    }
+  }
+  function commitCards() {
+    for (const c of cardDrag ?? []) {
+      const card = cards.get(c.id);
+      if (!card) continue;
+      card.el.style.translate = '';
+      place(card);
+    }
+    cardDrag = null;
+    saveDesk();
+  }
+
+  // Un cuadro de texto que acabó valiendo la pena: pasa a ser una nota de verdad, en su sitio.
+  async function convertToNote(el) {
+    const text = el.datos.texto ?? '';
+    const title = text.split('\n')[0].replace(/^[#>\-\s*]+/, '').trim().slice(0, 60) || 'Sin título';
+    try {
+      const path = await invoke('note_create', { parent: current, title });
+      await invoke('note_save', { path, changes: { body: text } });
+      await loadTree();
+      await openNote(path, { geometry: { x: el.x, y: el.y, w: Math.max(MIN_W, el.w), h: Math.max(MIN_H, el.h), z: Math.max(0, ...zValues()) + 1 } });
+      saveDesk();
+      await canvasApi.apply([{ op: 'borrar', id: el.id }]);
+    } catch (error) {
+      fail(error);
+    }
+  }
+
+  const canvas = createCanvas({
+    invoke,
+    ask,
+    fail,
+    renderMarkdown,
+    surface,
+    viewport,
+    origin: ORIGIN,
+    scale: () => scale,
+    camera: () => (camReady ? readCamera() : (cam ?? homeCamera())),
+    free: freeArea,
+    revealRect(rect, { smooth = true } = {}) {
+      if (viewport.hidden || !camReady) return;
+      const at = readCamera();
+      const { dx, dy } = revealShift({ x: (rect.x - at.x) * scale, y: (rect.y - at.y) * scale, w: rect.w * scale, h: rect.h * scale }, freeArea());
+      if (dx || dy) moveCamera({ x: at.x + dx / scale, y: at.y + dy / scale }, { smooth });
+    },
+    cards: () => [...cards.values()].map(({ path, x, y, w, h }) => ({ id: path, x, y, w, h })),
+    moveCards,
+    dragCards,
+    commitCards,
+    onChange: renderDeskChrome,
+    onLink: (link) => onLink(link, ''),
+    highlight: async (text, language) => {
+      if (!language) return null;
+      const { hasLanguage, highlightCode } = await import('./ws-highlight.js');
+      return hasLanguage(language) ? highlightCode(text, language) : null;
+    },
+    refMissing: (datos) => datos.tipo === 'nota' && loaded && Boolean(tree) && !notePaths().includes(datos.ruta),
+    openRef: (datos) => (datos.tipo === 'nota' ? openNote(datos.ruta, { focus: true }) : onRef(datos)),
+    convertToNote,
+    notePaths,
+  });
+  const canvasApi = canvas;
+
   let treeTimer = 0;
   function scheduleTreeReload() {
     clearTimeout(treeTimer);
@@ -1270,6 +1485,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
         useView(null);
         lastOpened = null;
         closeManager();
+        await canvas.load(null);
       }
       await loadTree();
       renderZoom();
@@ -1278,9 +1494,11 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
         try {
           raw = await invoke('desks_load');
         } catch {}
-        deskState = normalize(raw, newId());
+        deskState = normalize(raw, FIRST_DESK);
         await applyDesk({ initial: true });
+        await canvas.load(activeDesk(deskState).id);
       }
+      canvas.setVisible(true);
       for (const card of cards.values()) place(card);
       applyCamera();
       renderDeskChrome();
@@ -1289,6 +1507,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
     pause() {
       camReady = false;
       closeManager();
+      canvas.setVisible(false);
     },
     // Cambios en wiki/ (rutas relativas a wiki/).
     onWikiChanged(changed) {
@@ -1308,6 +1527,25 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink }) {
       if (loaded && deskState) deskWork = deskWork.then(() => applyDesk()).catch(fail);
     },
     openNote,
+    // Lo que el agente hizo en el lienzo. Si la vista Notas aún no se abrió, ya está guardado,
+    // salvo las cartas: las escribe siempre la interfaz.
+    onCanvasChanged(payload) {
+      if (deskState) canvas.onChanged(payload);
+      else if (payload.cartas?.length) patchDeskFile(payload.cartas);
+    },
+    // Llevar la vista a algo del lienzo, porque el usuario lo pidió.
+    async canvasGoTo({ escritorio, id }) {
+      if (deskState && escritorio !== deskState.active && deskState.desks.some((d) => d.id === escritorio)) {
+        await deskAction((state) => switchDesk(state, escritorio));
+      }
+      // Se viene de otra vista: el lienzo acaba de volver a verse y aún no tiene su cámara.
+      if (!camReady) applyCamera();
+      if (canvas.desk === escritorio) canvas.goTo(id);
+    },
+    themeChanged() {
+      canvas.themeChanged();
+      queueMap();
+    },
     // Abre un tema (ruta relativa a wiki/notas/) en la carta de la izquierda.
     async openTopic(path) {
       if (!loaded) await loadTree();

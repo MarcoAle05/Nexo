@@ -17,8 +17,9 @@
     </div>
     <!-- Lienzo de notas (vista «Notas»): tan grande que hace de infinito y ocupa toda la app,
          por detrás de la barra y de las cartas. La ventana enseña un trozo; se recorre
-         arrastrando el fondo, con la rueda o desde el minimapa de la barra. -->
-    <div class="desk" id="desk" role="region" aria-label="Lienzo de notas" hidden>
+         con el botón derecho desde cualquier sitio, arrastrando el fondo, con la rueda o desde el
+         minimapa de la barra. -->
+    <div class="desk" id="desk" role="region" aria-label="Lienzo de notas" tabindex="0" hidden>
       <div class="desk-surface" id="desk-surface"></div>
     </div>
 
@@ -70,8 +71,29 @@
               <button type="button" class="vault-option" id="conn-refresh">Comprobar de nuevo</button>
             </div>
           </div>
+          <!-- Lo que se puede poner en el lienzo sin ser una nota (canvas-chrome.js). -->
+          <div class="desk-tools" id="desk-tools" role="group" aria-label="Elementos del lienzo" hidden>
+            <div class="vault-anchor">
+              <button type="button" class="desk-tools-add" id="canvas-add" aria-haspopup="menu" aria-expanded="false" aria-controls="canvas-add-menu" title="Añadir al lienzo">
+                <svg width="16" height="16" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M10 4v12M4 10h12"/></svg>
+                <span class="desk-tools-label">Añadir</span>
+              </button>
+              <div class="vault-menu cv-add-menu" id="canvas-add-menu" role="menu" aria-label="Añadir al lienzo" hidden></div>
+            </div>
+            <button type="button" class="desk-tool desk-tool-quick" data-quick="texto" aria-pressed="false" aria-label="Cuadro de texto" title="Cuadro de texto (T)"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5V4h12v1M10 4v12M8 16h4"/></svg></button>
+            <button type="button" class="desk-tool desk-tool-quick" data-quick="figura" aria-pressed="false" aria-label="Figura" title="Figura (R)"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="13" height="10" rx="2"/></svg></button>
+            <button type="button" class="desk-tool desk-tool-quick" data-quick="flecha" aria-pressed="false" aria-label="Flecha" title="Flecha (F)"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 14.5 15 5M9 4.5h6.5V11"/></svg></button>
+            <button type="button" class="desk-tool desk-tool-quick" data-quick="tabla" aria-pressed="false" aria-label="Tabla" title="Tabla"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="4" width="13" height="12" rx="1.5"/><path d="M3.5 8.5h13M3.5 12.5h13M8 4v12M12.5 4v12"/></svg></button>
+            <div class="vault-anchor desk-tools-layers">
+              <button type="button" class="desk-tool" id="canvas-layers" aria-haspopup="dialog" aria-expanded="false" aria-controls="canvas-layers-menu" aria-label="Capas" title="Capas"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 3.5 3.5 7 10 10.5 16.5 7z"/><path d="m3.5 10.5 6.5 3.5 6.5-3.5"/><path d="m3.5 14 6.5 3.5 6.5-3.5"/></svg></button>
+              <div class="vault-menu cv-layers-menu" id="canvas-layers-menu" role="dialog" aria-label="Capas del lienzo" hidden>
+                <div class="vault-menu-title">Capas</div>
+                <ul class="cv-layers-list" id="canvas-layers-list"></ul>
+              </div>
+            </div>
+          </div>
           <div class="desk-map" id="desk-map" role="group" tabindex="0" aria-label="Mapa del lienzo de notas" aria-describedby="desk-map-hint" hidden>
-            <div class="desk-map-world" id="desk-map-world" aria-hidden="true"><span class="desk-map-view" id="desk-map-view"></span></div>
+            <div class="desk-map-world" id="desk-map-world" aria-hidden="true"><canvas class="desk-map-els" id="desk-map-els"></canvas><span class="desk-map-view" id="desk-map-view"></span><span class="desk-map-live" id="desk-map-live" hidden></span></div>
             <span class="visually-hidden" id="desk-map-hint">Las flechas mueven la vista por el lienzo; Inicio vuelve a las cartas.</span>
           </div>
         </div>
@@ -613,7 +635,7 @@
         <div class="desk-empty" id="desk-empty" hidden>
           <svg width="44" height="44" viewBox="0 0 22 22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="0.7"><rect x="3" y="4" width="10" height="12" rx="2"/><rect x="9" y="7" width="10" height="12" rx="2"/></svg>
           <p class="desk-empty-title">Lienzo vacío</p>
-          <p class="desk-empty-text">Abre o crea una nota desde la carta de la izquierda: aparecerá aquí como una carta donde escribir. Las siguientes se abren a su derecha y puedes moverlas por todo el lienzo.</p>
+          <p class="desk-empty-text">Abre o crea una nota desde la carta de la izquierda: aparecerá aquí como una carta donde escribir. Para hacer diagramas, tablas o un tablero sin crear notas, usa «Añadir», arriba.</p>
         </div>
 
         <!-- Registro de agentes (vista «Agentes»): tokens y parte de la sesión de 5 h -->
@@ -947,6 +969,21 @@
     </form>
   </template>
 
-  <script type="module" src="/src/main.js"></script>
+      <div class="cv-bar" id="canvas-bar" role="toolbar" aria-label="Lo seleccionado en el lienzo" hidden></div>
+    <div class="cv-toast" id="cv-status" role="status" aria-live="polite" hidden></div>
+    <input type="file" id="canvas-file" accept="image/png,image/jpeg,image/gif,image/webp" hidden>
+    <dialog class="settings cv-editor" id="canvas-editor" aria-labelledby="canvas-editor-title">
+      <form class="settings-panel" id="canvas-editor-form">
+        <div class="settings-head">
+          <h2 id="canvas-editor-title">Editar</h2>
+          <button type="button" class="icon-btn outline settings-close" id="canvas-editor-close" aria-label="Cerrar sin guardar" title="Cerrar sin guardar">
+            <svg width="14" height="14" viewBox="0 0 20 20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m5 5 10 10M15 5 5 15"/></svg>
+          </button>
+        </div>
+        <div class="settings-body cv-editor-body" id="canvas-editor-body"></div>
+        <div class="cv-editor-foot"><button type="submit" class="cv-editor-save">Guardar</button></div>
+      </form>
+    </dialog>
+<script type="module" src="/src/main.js"></script>
 </body>
 </html>

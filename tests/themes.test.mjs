@@ -189,3 +189,40 @@ test('la terminal de un workspace se lee en todos los temas', () => {
     assert.equal(luminance(color(t.foreground)) > luminance(bg), theme.scheme === 'dark' || theme.id === 'blanco', `${theme.id}: texto claro sobre fondo oscuro según sus tarjetas`);
   }
 });
+
+// Elementos del lienzo: sus colores son roles que traduce cada tema. El texto va sobre su relleno
+// (la línea muy diluida sobre lo que hay debajo) y la línea, sobre lo que hay debajo.
+const ROLES = ['neutro', 'acento', 'azul', 'verde', 'ambar', 'rojo'];
+const mixed = (rgb, pct, base) => [0, 1, 2].map((i) => (rgb[i] * pct) / 100 + base[i] * (1 - pct / 100)).concat(1);
+
+test('los elementos del lienzo se leen en todos los temas, sobre el fondo y como tarjetas', () => {
+  for (const theme of THEMES) {
+    const g = tokensOf(theme);
+    const t = cardTokensOf(theme);
+    const bg = color(g['--bg']);
+    const raised = color(t['--raised']);
+    for (const [label, tokens, base] of [['el lienzo', g, bg], ['una ficha', t, raised]]) {
+      const fg = over(color(tokens['--fg']), base);
+      const dim = over(color(tokens['--dim']), base);
+      assert.ok(ratio(dim, base) >= 4.5, `${theme.id}: --dim sobre ${label}`);
+      for (const role of ROLES) {
+        const rgb = tokens[`--el-${role}-rgb`].split(',').map(Number);
+        assert.equal(rgb.length, 3, `${theme.id}: --el-${role}-rgb`);
+        const line = ratio([...rgb, 1], base);
+        assert.ok(line >= 3, `${theme.id}: la línea de ${role} sobre ${label} da ${line.toFixed(2)}:1 (hace falta 3)`);
+        for (const tint of ['--el-tint', '--el-tint-strong']) {
+          const fill = mixed(rgb, parseFloat(tokens[tint]), base);
+          const text = ratio(fg, fill);
+          assert.ok(text >= 4.5, `${theme.id}: el texto sobre el relleno de ${role} (${tint}) en ${label} da ${text.toFixed(2)}:1 (hace falta 4,5)`);
+        }
+      }
+    }
+  }
+});
+
+test('las piezas nuevas del lienzo entran en la lista de tarjetas', () => {
+  for (const sel of ['.desk-tools', '.cv-bar', '.cv-card', '.cv-toast']) {
+    assert.ok(FORMULAS.selector.includes(sel), `${sel} en las fórmulas`);
+    assert.ok(CARDS.selector.includes(sel), `${sel} en TARJETAS`);
+  }
+});

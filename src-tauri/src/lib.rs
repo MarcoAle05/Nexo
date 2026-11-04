@@ -8,6 +8,7 @@ mod connections;
 pub mod control;
 mod fichas;
 mod graph;
+mod lienzos;
 mod markitdown;
 mod mcp;
 mod nexo;
@@ -78,6 +79,7 @@ pub fn run() {
         .manage(terminales::Terminales::default())
         .manage(terminales::TermSetup::default())
         .manage(sesiones::Sesiones::default())
+        .manage(nexo_core::lienzo::almacen::Almacen::default())
         .invoke_handler(tauri::generate_handler![
             vault::get_vault,
             vault::detect_vaults,
@@ -122,6 +124,14 @@ pub fn run() {
             notas::desk_save,
             notas::desks_load,
             notas::desks_save,
+            lienzos::canvas_load,
+            lienzos::canvas_apply,
+            lienzos::canvas_use,
+            lienzos::canvas_forget,
+            lienzos::canvas_counts,
+            lienzos::canvas_turn_end,
+            lienzos::canvas_image_save,
+            lienzos::canvas_image_read,
             render::render_info,
             skills::skills_list,
             skills::skills_prepare,
@@ -158,6 +168,7 @@ pub fn run() {
         .setup(|app| {
             render::attach(app);
             graph::watch(app.handle().clone());
+            lienzos::keep_saving(app.handle().clone());
             if let Err(e) = prepare_terminals(app.handle()) {
                 log::warn!("No se pudieron preparar las terminales: {e}");
             }
@@ -179,6 +190,7 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                app.state::<nexo_core::lienzo::almacen::Almacen>().guardar();
                 close_terminals(app);
                 render::shutdown();
             }

@@ -8,6 +8,9 @@
 // se guarda en `.nexo/escritorios.json`.
 
 export const MAX_DESKS = 5;
+// El primer escritorio, mientras no se haya guardado la lista. Tiene que ser fijo, y el mismo que
+// usa el backend (`ESCRITORIO_PRINCIPAL`): sus elementos se guardan por este id.
+export const FIRST_DESK = 'principal';
 
 const clean = (name) => String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
 const cardsOf = (value) => (Array.isArray(value) ? value.filter((c) => c && typeof c.path === 'string') : []);

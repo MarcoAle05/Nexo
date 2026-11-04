@@ -264,6 +264,7 @@ async function pickFiles() {
 }
 
 mountChat($('chat-view'), 'chat');
+let chatBusy = false;
 const chat = createChat({
   transport: {
     start({ options, replay, onEvent }) {
@@ -282,6 +283,9 @@ const chat = createChat({
   localCommands: () => LOCAL_COMMANDS,
   onState: ({ busy }) => {
     $('rail-working').hidden = !busy;
+    // Si acabó el turno con una capa del lienzo abierta, ya no se está dibujando.
+    if (chatBusy && !busy && desktop) invoke('canvas_turn_end').catch(() => {});
+    chatBusy = busy;
   },
 });
 
@@ -1493,6 +1497,13 @@ if (desktop) {
     }, 400);
   });
   listen('desk-changed', () => notes.onDeskChanged());
+  listen('canvas-changed', ({ payload }) => notes.onCanvasChanged(payload));
+  // El agente lleva la vista a algo del lienzo: solo lo hace si el usuario se lo pidió.
+  listen('canvas-goto', ({ payload }) => {
+    setView('notas');
+    // Después de que la vista recoloque su cámara, que cortaría el movimiento (ver `setView`).
+    notesActivation.then(() => new Promise(requestAnimationFrame)).then(() => notes.canvasGoTo(payload)).catch(fail);
+  });
   // El agente creador-de-skills (u otro) escribió en .claude/skills/.
   listen('skills-changed', ({ payload }) => skills.announce(payload.added ?? []));
   listen('agents-changed', () => agents.load());
@@ -1581,6 +1592,7 @@ paintTheme(currentTheme());
 onTheme((theme) => {
   paintTheme(theme);
   workspace?.themeChanged();
+  notes.themeChanged();
   nodeShown = '';
   renderNode();
   if (!$('search-menu').hidden) renderSearch();
@@ -1923,6 +1935,12 @@ const notes = createNotes({
   renderMarkdown,
   fail,
   onLink: (link, from) => followLink(link, `notas/${from}`),
+  // Un elemento de referencia a un nodo del grafo o a una fuente.
+  onRef: ({ ruta }) => {
+    const node = resolveLink(graphData.nodes, '', ruta);
+    if (!node) return printLine(`«${ruta}» aún no está en el grafo`, 'info');
+    return isNotesNode(node) ? openInNotes(node.id) : showInGraph(node.id);
+  },
 });
 let view = 'grafo';
 let notesStale = true;
@@ -1951,6 +1969,7 @@ function setView(next) {
   $('ws-core').hidden = !inAgents || agentsMode !== 'workspace';
   // El lienzo de notas, su minimapa, el gestor de escritorios y el zoom solo existen en Notas.
   $('desk').hidden = !inNotes;
+  $('desk-tools').hidden = !inNotes;
   $('desk-map').hidden = !inNotes;
   $('desk-manager').hidden = !inNotes;
   $('desk-zoom').hidden = !inNotes;
