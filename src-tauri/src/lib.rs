@@ -5,22 +5,64 @@ mod browser;
 mod claude;
 mod claude_code;
 mod connections;
+pub mod control;
 mod fichas;
 mod graph;
 mod markitdown;
 mod mcp;
 mod nexo;
 mod notas;
+mod orquestacion;
 mod playwright;
 mod registro;
 pub mod render;
+mod sesiones;
 mod skills;
 mod sources;
+mod terminales;
 mod usage;
 mod vault;
 mod workspace;
-mod workspace_run;
 mod worktree;
+
+use std::sync::Arc;
+
+use tauri::Manager;
+
+/// Prepara las terminales de los workspaces: el servidor de control, los archivos de arranque
+/// del shell con el `claude` de nexo y el guardado periódico. Si algo falla, nexo abre igual y
+/// las terminales dicen por qué no abren.
+fn prepare_terminals(app: &tauri::AppHandle) -> Result<(), String> {
+    let run = terminales::run_dir();
+    let ctl = control::listen(app.clone(), &run).unwrap_or_else(|e| {
+        log::warn!("No se pudo abrir el socket de control: {e}");
+        control::socket_paths(&run).0
+    });
+    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let files = terminales::install_shell(&data, &exe, &run, &ctl)?;
+    let terms = terminales::AppTerms {
+        store: data.join("terminales"),
+        files,
+        shell: terminales::user_shell(),
+        oyente: Arc::new(terminales::AppOyente(app.clone())),
+    };
+    *app.state::<terminales::TermSetup>()
+        .0
+        .lock()
+        .map_err(|e| e.to_string())? = Some(Arc::new(terms));
+    terminales::keep_saving(app.clone());
+    Ok(())
+}
+
+/// Al cerrar nexo: guarda las terminales (para recuperarlas), las cuelga y quita el socket.
+fn close_terminals(app: &tauri::AppHandle) {
+    let Ok(terms) = terminales::app_terms(app) else {
+        return;
+    };
+    app.state::<terminales::Terminales>().shutdown(&terms.store);
+    control::unlisten(&terms.files.run);
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -33,8 +75,9 @@ pub fn run() {
         .manage(agy::AgyState::default())
         .manage(usage::UsageState::default())
         .manage(registro::RegistroState::default())
-        .manage(workspace::WorkspaceCatalogs::default())
-        .manage(workspace_run::WorkspaceRuns::default())
+        .manage(terminales::Terminales::default())
+        .manage(terminales::TermSetup::default())
+        .manage(sesiones::Sesiones::default())
         .invoke_handler(tauri::generate_handler![
             vault::get_vault,
             vault::detect_vaults,
@@ -94,21 +137,18 @@ pub fn run() {
             workspace::workspace_close,
             workspace::workspace_state,
             workspace::workspace_save_ui,
-            workspace::workspace_set_extras,
             workspace::workspace_tree,
             workspace::workspace_read,
-            workspace::workspace_agents,
-            workspace::workspace_extras,
-            workspace::workspace_repertoire_open,
-            workspace::workspace_repertoire_move,
-            workspace_run::workspace_start,
-            workspace_run::workspace_send,
-            workspace_run::workspace_stop,
-            workspace_run::workspace_reset,
-            workspace_run::workspace_detach,
-            workspace_run::workspace_running,
-            workspace_run::workspace_attention,
-            workspace_run::workspace_watch,
+            sesiones::workspace_attention,
+            sesiones::workspace_watch,
+            terminales::terminal_list,
+            terminales::terminal_open,
+            terminales::terminal_attach,
+            terminales::terminal_input,
+            terminales::terminal_resize,
+            terminales::terminal_busy,
+            terminales::terminal_busy_in,
+            terminales::terminal_close,
             worktree::worktree_list,
             worktree::worktree_form,
             worktree::worktree_plan,
@@ -118,7 +158,9 @@ pub fn run() {
         .setup(|app| {
             render::attach(app);
             graph::watch(app.handle().clone());
-            workspace::watch(app.handle().clone());
+            if let Err(e) = prepare_terminals(app.handle()) {
+                log::warn!("No se pudieron preparar las terminales: {e}");
+            }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -135,8 +177,9 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_, event| {
+        .run(|app, event| {
             if let tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit = event {
+                close_terminals(app);
                 render::shutdown();
             }
         });

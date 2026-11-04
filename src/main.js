@@ -28,10 +28,9 @@ import { renderMarkdown, resolveLink } from './note-view.js';
 import { commandFor, createSkills } from './skills.js';
 import { createSettings } from './settings.js';
 import { currentTheme, onTheme } from './themes.js';
-import { activity, createWorkspace } from './workspace.js';
+import { STATE_LABEL as AGENT_STATE, activity, createWorkspace } from './workspace.js';
 import { agentsButtonLabel, createAttention, createWatch, watchedPath } from './ws-attention.js';
 import { formatTokens } from './registro.js';
-import { STATE_LABEL as AGENT_STATE } from './ws-stream.js';
 
 const $ = (id) => document.getElementById(id);
 const desktop = isTauri();
@@ -256,7 +255,7 @@ const LOCAL_COMMANDS = [
   { name: 'nueva', description: 'Empieza una conversación nueva con Claude', run: () => chat.reset() },
 ];
 
-// El workspace de la vista Agentes (se crea más abajo; el chat de Nexo le avisa de su estado).
+// El workspace de la vista Agentes (se crea más abajo).
 let workspace = null;
 
 async function pickFiles() {
@@ -283,7 +282,6 @@ const chat = createChat({
   localCommands: () => LOCAL_COMMANDS,
   onState: ({ busy }) => {
     $('rail-working').hidden = !busy;
-    workspace?.nexoChanged();
   },
 });
 
@@ -1582,6 +1580,7 @@ function paintTheme(theme) {
 paintTheme(currentTheme());
 onTheme((theme) => {
   paintTheme(theme);
+  workspace?.themeChanged();
   nodeShown = '';
   renderNode();
   if (!$('search-menu').hidden) renderSearch();
@@ -1693,8 +1692,8 @@ const agentLog = createAgentLog({
 });
 
 // ---------------------------------------------------------------- atención de los workspaces
-// Un workspace cuyo orquestador o uno de sus agentes espera una respuesta (un permiso, una
-// pregunta o un plan) lleva un punto aunque no se esté mirando: en el botón Agentes, en
+// Un workspace en el que un Claude Code o uno de sus subagentes espera una respuesta (un
+// permiso, una pregunta o un plan) lleva un punto aunque no se esté mirando: en el botón Agentes, en
 // Recientes y en la lista de worktrees (ws-attention.js). El backend emite el evento global
 // `workspace-attention` y, para no avisar al escritorio de lo que ya se ve, se le dice qué
 // workspace hay en pantalla y si la ventana tiene el foco, solo cuando cambia.
@@ -1729,10 +1728,9 @@ if (desktop) {
     .then(() => invoke('workspace_attention'))
     .then((list) => attention.load(list) && renderAttention())
     .catch(() => {});
-  // El perfil, el repertorio o los extras de un workspace cambiaron fuera de Extras (el agente
-  // de nexo con la skill nexo:repertorio): lo vigila workspace.rs.
-  listen('repertoire-changed', () => workspace?.repertoireChanged()).catch(() => {});
-  listen('workspace-extras-changed', ({ payload }) => workspace?.extrasChanged(payload)).catch(() => {});
+  // Cambió algo de las terminales de un workspace (terminales.rs, sesiones.rs): se abrió o cerró
+  // una (también desde la orden de control), terminó su programa o su Claude cambió de estado.
+  listen('workspace-terminals', ({ payload }) => workspace?.terminalsChanged(payload.path)).catch(() => {});
   window.addEventListener('focus', () => {
     windowFocused = true;
     syncWatch();
@@ -1744,26 +1742,20 @@ if (desktop) {
 }
 
 // ---------------------------------------------------------------- workspace
-// La vista Agentes en modo workspace: una carpeta de proyecto con su orquestador y sus agentes
-// (workspace.js). Nexo sigue en la carta derecha y también sale en la lista de agentes.
+// La vista Agentes en modo workspace: una carpeta de proyecto con sus terminales (workspace.js).
+// El chat de Nexo sigue en la carta derecha y trabaja con los workspaces con la skill
+// nexo-orquestacion.
 workspace = createWorkspace({
   invoke: (cmd, args) => (desktop ? invoke(cmd, args) : Promise.reject('Los workspaces solo funcionan en la app de escritorio.')),
   Channel,
   desktop,
   pickFolder: async (title) => (desktop ? open({ directory: true, multiple: false, title }) : null),
-  pickFiles,
   ask: (message, options) => (desktop ? ask(message, options) : Promise.resolve(window.confirm(message))),
   fail,
   renderMarkdown,
   onLink: (link) => followLink(link, ''),
-  nexo: {
-    info: () => ({ state: chat.waiting ? 'waiting' : chat.busy ? 'active' : 'idle' }),
-    focus() {
-      if (minimized) setMinimized(false);
-      if (activityOpen) showActivity(false);
-      chat.focus();
-    },
-  },
+  // Un enlace que se pulsa en una terminal: al navegador.
+  openExternal: (uri) => (desktop ? openUrl(uri).catch(fail) : window.open(uri, '_blank', 'noopener')),
   onMode: setAgentsMode,
   onChange: renderWorkspaceSummary,
   waiting: (path) => attention.waiting(path),
@@ -1793,7 +1785,7 @@ for (const id of ['ws-entry', 'ws-add', 'ws-add-row']) $(id).addEventListener('c
 // Al volver al panel de nexo, el foco va al workspace actual (o a la entrada, sin ninguno).
 const entryToFocus = () => $('ws-list').querySelector('.ws-entry[aria-current="true"]') ?? $('ws-list').querySelector('.ws-entry') ?? $('ws-entry');
 
-const agentCount = (n) => `${n + 1} ${n ? 'agentes' : 'agente'}`;
+const termCount = (n) => (n ? `${n} ${n === 1 ? 'terminal' : 'terminales'}` : 'Sin terminales abiertas');
 
 // Los workspaces del panel (`open` de workspace.js, en su orden): cada uno con su × para quitarlo
 // del panel, y el actual con su actividad. Sin el punto de «espera tu respuesta» (la entrada del
@@ -1827,13 +1819,13 @@ function renderWorkspaceEntries(ws, summary) {
     },
   });
   const agentsNow = summary?.agents ?? [];
-  const now = summary?.main ? activity([summary.main, ...agentsNow]) : '';
+  const now = activity(agentsNow);
   for (const li of box.children) {
     const w = panel.find((o) => o.path === li.dataset.key);
     if (!w) continue;
     const current = ws?.path === w.path;
     const main = li.querySelector('.ws-entry');
-    const meta = !w.exists ? 'La carpeta ya no está' : current ? `${agentCount(agentsNow.length)}${now ? ` · ${now}` : ''}` : agentCount(w.agents ?? 0);
+    const meta = !w.exists ? 'La carpeta ya no está' : current ? `${termCount(summary?.terminals ?? 0)}${now ? ` · ${now}` : ''}` : termCount(w.terminals ?? 0);
     li.querySelector('.ws-entry-meta').textContent = meta;
     const name = li.querySelector('.ws-entry-name');
     let badge = name.querySelector('.ws-badge');
@@ -1847,7 +1839,8 @@ function renderWorkspaceEntries(ws, summary) {
 }
 
 // El panel de Agentes de nexo enseña también los workspaces: su lista y, con el nombre del
-// actual, los subapartados de sus agentes (los que desplegó el orquestador) y de sus skills.
+// actual, los subapartados de sus agentes (el Claude Code de sus terminales y sus subagentes) y
+// de sus skills.
 function renderWorkspaceSummary(ws, summary = workspace?.summary()) {
   // Abrir, cambiar o dejar un workspace cambia lo que hay en pantalla.
   syncWatch();
@@ -1868,29 +1861,33 @@ function renderWorkspaceSummary(ws, summary = workspace?.summary()) {
     $('agents-ws-label').hidden = $('skills-ws-label').hidden = true;
     return;
   }
-  const rows = [{ ...summary.main, key: 'main', badge: 'Principal' }, ...agentsNow];
-  label('agents-ws-label', ws.name, rows.length);
-  reconcile(agentsList, rows, {
-    key: (a) => a.key,
-    sig: (a) => [a.name, a.role, a.state, a.type, a.tokens ? formatTokens(a.tokens) : ''].join('|'),
+  label('agents-ws-label', ws.name, agentsNow.length);
+  const rows = agentsNow.map((a, i) => ({ ...a, id: `${a.key}|${i}` }));
+  reconcile(agentsList, rows.length ? rows : [{ id: 'vacío' }], {
+    key: (a) => a.id,
+    sig: (a) => [a.name, a.role, a.state, a.tokens ? formatTokens(a.tokens) : ''].join('|'),
     build: (a) => {
       const li = document.createElement('li');
+      if (!a.key) {
+        li.className = 'ws-sub-empty';
+        li.textContent = 'Ningún Claude Code en marcha: ábrelo en una terminal del workspace.';
+        return li;
+      }
       li.className = 'agent-row ws-sub-agent';
       li.innerHTML = '<button type="button" class="agent-main"><span class="row-icon"><span class="ws-state"></span></span><span class="agent-text"><span class="agent-name"><span class="agent-name-text"></span></span><span class="agent-specs"></span><span class="agent-desc"></span></span></button>';
       li.querySelector('.ws-state').dataset.state = a.state;
       li.querySelector('.agent-name-text').textContent = a.name;
       if (a.badge) li.querySelector('.agent-name').append(Object.assign(document.createElement('span'), { className: 'agent-badge', textContent: a.badge }));
       const specs = li.querySelector('.agent-specs');
-      for (const text of [AGENT_STATE[a.state], a.type && a.key !== 'main' ? a.type : '', a.tokens ? `${formatTokens(a.tokens)} tokens` : ''].filter(Boolean)) {
+      for (const text of [AGENT_STATE[a.state], a.tokens ? `${formatTokens(a.tokens)} tokens` : ''].filter(Boolean)) {
         specs.append(Object.assign(document.createElement('span'), { className: 'agent-spec', textContent: text }));
       }
       li.querySelector('.agent-desc').textContent = a.role || '';
       const button = li.querySelector('.agent-main');
-      button.title = `Abrir su ventana en el workspace ${ws.name}`;
+      button.title = `Abrir su terminal en el workspace ${ws.name}`;
       button.addEventListener('click', () => {
         setAgentsMode('workspace');
-        if (a.key === 'main') workspace.openAgent(null);
-        else workspace.openAgent(a.task);
+        workspace.openAgent(a.key);
       });
       return li;
     },

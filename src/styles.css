@@ -108,6 +108,8 @@
   --code-type: var(--s-code-type);
   --code-attr: var(--s-code-attr);
   --code-meta: var(--s-code-meta);
+  --term-red: var(--s-term-red);
+  --term-cyan: var(--s-term-cyan);
   --state-on: var(--s-state-on);
 }
 
@@ -185,6 +187,9 @@
   --code-type: #f5d38a;
   --code-attr: #f4a8d6;
   --code-meta: #a9b6c6;
+  /* Rojo y cian de las terminales del workspace (los demás colores de ANSI son los del código). */
+  --term-red: #ff9a92;
+  --term-cyan: #7fdde6;
   /* El punto de un agente activo en el workspace (en tarjetas: sigue su polaridad). */
   --state-on: var(--log-on);
   /* Las tarjetas: por defecto, los mismos canales que el fondo. */
@@ -213,6 +218,8 @@
   --s-code-type: var(--code-type);
   --s-code-attr: var(--code-attr);
   --s-code-meta: var(--code-meta);
+  --s-term-red: var(--term-red);
+  --s-term-cyan: var(--term-cyan);
   --s-state-on: var(--state-on);
 }
 /* Lo común a los fondos claros. */
@@ -244,6 +251,8 @@
   --code-type: #845300;
   --code-attr: #a12e6c;
   --code-meta: #4d5c70;
+  --term-red: #b4232a;
+  --term-cyan: #0b6b78;
   --state-on: #0b7a55;
 }
 /* Negro con gris: fondo negro y tarjetas grises neutras, sin color (las mismas luminosidades
@@ -429,6 +438,8 @@
   --code-type: #633d00;
   --code-attr: #7c2152;
   --code-meta: #3a4656;
+  --term-red: #861a14;
+  --term-cyan: #07505a;
   --state-on: #086848;
 }
 /* Gris claro con azul claro: fondo gris frío y tarjetas azul claro, con un azul más hondo de
@@ -491,6 +502,8 @@
   --s-code-type: #f5d38a;
   --s-code-attr: #f4a8d6;
   --s-code-meta: #a9b6c6;
+  --s-term-red: #ff9a92;
+  --s-term-cyan: #7fdde6;
   --s-state-on: #5ffcc0;
 }
 /* Claro, a lo Apple: gris muy claro de fondo, cartas blancas, texto casi negro y el azul de
@@ -3693,7 +3706,7 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 @media (hover: hover) and (prefers-reduced-motion: no-preference) {
   .ws-back:hover .ws-back-icon { transform: translateX(-3px) scale(1.08); }
 }
-.ws-sections[hidden], .ws-sec-tabs[hidden], .ws-none[hidden], .ws-foot[hidden] { display: none; }
+.ws-sections[hidden], .ws-sec-tabs[hidden], .ws-none[hidden] { display: none; }
 /* Archivos, agentes y extras: una pestaña cada uno en la línea de debajo del título; la que se
    ve ocupa todo el alto de la carta. */
 .ws-sections {
@@ -3707,7 +3720,6 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .ws-sec { flex: 1 1 auto; display: flex; flex-direction: column; min-height: 0; }
 .ws-sec[hidden] { display: none; }
 .ws-sec-tools { flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 2px; min-height: 40px; padding: 4px 12px 0 18px; }
-.ws-sec-tools-note { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 12px; color: var(--faint); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .icon-btn.ws-sec-btn { width: 32px; height: 32px; border-radius: var(--r-sm); color: var(--faint); transition-property: transform, background-color, color; }
 @media (hover: hover) {
   .icon-btn.ws-sec-btn:hover { color: var(--fg); background: rgba(var(--ink-rgb), 0.06); }
@@ -3756,11 +3768,16 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .ws-tree-link { font-size: 11px; color: var(--faint); }
 .ws-tree-note { display: flex; align-items: center; min-height: 28px; padding-inline: calc(30px + (var(--level, 1) - 1) * 14px) 8px; font-size: 12px; color: var(--faint); }
 
-/* Punto de estado de un agente. La forma dice el estado sin el color: hueco (inactivo),
-   anillo con su centro (esperando respuesta) y lleno (activo). */
+/* Punto de estado de un agente. La forma dice el estado sin el color: hueco (inactivo o
+   terminado), anillo con su centro (esperando respuesta), lleno (activo), anillo discontinuo
+   (falló: la forma de los errores de la app), cuadradito (detenido: el símbolo de parar) y
+   medio lleno (sin terminar: a medias). */
 .ws-state { flex-shrink: 0; width: 10px; height: 10px; border-radius: var(--r-full); border: 1.5px solid rgba(var(--ink-rgb), 0.4); }
 .ws-state[data-state="active"] { border: 0; background: var(--state-on); }
 .ws-state[data-state="waiting"] { border: 2px solid var(--accent-soft); background: radial-gradient(circle, var(--accent-soft) 0 1.6px, transparent 2.2px); }
+.ws-state[data-state="failed"] { border: 1.5px dashed var(--fg); }
+.ws-state[data-state="stopped"] { border: 0; border-radius: 1.5px; background: var(--dim); scale: 0.8; }
+.ws-state[data-state="unknown"] { background: linear-gradient(90deg, rgba(var(--ink-rgb), 0.4) 50%, transparent 50%); }
 @media (prefers-reduced-motion: no-preference) {
   .ws-state[data-state="active"] { animation: breathe 1.8s var(--ease) infinite; }
 }
@@ -3801,6 +3818,8 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .ws-agent-role { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; color: var(--dim); }
 .ws-agent-role:empty { display: none; }
 .ws-agent-num { font-size: 12px; color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+/* Los subagentes de un Claude, debajo de él y un poco hacia dentro. */
+.ws-agent-subs { display: flex; flex-direction: column; gap: 2px; margin: 2px 0 4px; padding: 0 0 0 18px; list-style: none; }
 .ws-badge {
   flex-shrink: 0;
   padding: 1px 6px;
@@ -3813,51 +3832,6 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
   white-space: nowrap;
 }
 
-/* Extras: interruptores, apagados de serie. */
-.ws-extras-group { margin-top: 10px; }
-.ws-extras-h > :first-child { flex: 1; }
-.ws-extras-h { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 4px; padding: 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); }
-.ws-extras-n { font-weight: 500; letter-spacing: 0; color: var(--faint); font-variant-numeric: tabular-nums; }
-.ws-extras-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.ws-extra {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 12px;
-  width: 100%;
-  min-height: 44px;
-  padding: 6px 10px;
-  border-radius: var(--r-md);
-  text-align: start;
-  transition: background-color 150ms ease-out;
-}
-@media (hover: hover) {
-  .ws-extra:hover { background: rgba(var(--ink-rgb), 0.05); }
-}
-/* Lo del perfil que puede pasar al repertorio lleva «Mover al repertorio» dentro de la fila,
-   antes del interruptor (32 px a 10 px del borde): así los interruptores siguen alineados y el
-   texto le deja sitio con un hueco más ancho. */
-.ws-extra-row { position: relative; }
-.ws-extra-row > .ws-extra { column-gap: 46px; }
-.ws-extra-row > .ws-extra-move { position: absolute; top: 50%; right: 48px; translate: 0 -50%; }
-.ws-extra-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.ws-extra-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; font-weight: 500; }
-.ws-extra-detail { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: 12px; line-height: 1.45; color: var(--dim); }
-.ws-extra-detail:empty { display: none; }
-.ws-extra[aria-checked="true"] .switch { background: var(--accent-soft); }
-.ws-extra[aria-checked="true"] .switch span { transform: translateX(14px); background: var(--bg); }
-/* Hooks que corren porque hay otro encendido (Claude Code no los separa): se ven, no se tocan. */
-.ws-extra[aria-disabled="true"] { cursor: default; }
-.ws-extra[aria-disabled="true"] .switch { opacity: 0.45; }
-@media (hover: hover) {
-  .ws-extra[aria-disabled="true"]:hover { background: none; }
-}
-
-/* Pie: reiniciar para aplicar los extras. */
-.ws-foot { display: flex; flex-direction: column; gap: 10px; margin: 0 -22px; padding: 14px 22px 18px; border-top: 1px solid var(--seam); }
-.ws-foot-text { margin: 0 4px; font-size: 12px; line-height: 1.5; color: var(--dim); text-wrap: pretty; }
-.ws-restart.working .cta-icon svg { animation: breathe 1.2s var(--ease) infinite; }
-.ws-restart:disabled { opacity: 0.6; }
 .ws-none { padding-bottom: 24px; }
 
 /* El centro: la barra de pestañas arriba y las ventanas debajo. */
@@ -3917,6 +3891,17 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
 .switch-btn.ws-mode { height: 40px; font-size: 12.5px; color: var(--dim); }
 .ws-mode[aria-checked="true"] { color: var(--fg); }
 .ws-all-anchor { position: relative; }
+/* El «+» de la barra: abre una terminal o Claude Code. A la medida de los demás controles de la
+   barra (40 px), con el giro del «+» de «Añadir fuente». */
+.ws-add-win-anchor { position: relative; }
+.icon-btn.ws-wt-add.ws-add-win { width: 40px; height: 40px; }
+.ws-add-win[aria-expanded="true"] { background: rgba(var(--ink-rgb), 0.08); }
+.vault-menu.ws-add-win-menu { left: auto; right: 0; min-width: 0; width: min(280px, calc(100vw - 32px)); }
+.vault-option.ws-add-win-item { display: grid; grid-template-columns: 16px minmax(0, 1fr); align-items: center; gap: 12px; }
+.ws-add-win-icon { display: flex; color: var(--dim); }
+.ws-add-win-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ws-add-win-name { font-weight: 500; }
+.ws-add-win-text small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .vault-menu.ws-overview { left: auto; right: 0; width: min(360px, calc(100vw - 32px)); max-height: min(520px, 60dvh); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .ws-overview-title { display: flex; justify-content: space-between; gap: 12px; }
 .ws-overview-count { font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--faint); font-variant-numeric: tabular-nums; }
@@ -3966,27 +3951,12 @@ body:not([data-scene="galaxia"]) .skill-orbit { opacity: 0; visibility: hidden; 
   .ws-win-chip:hover { color: var(--fg); }
 }
 .ws-win-body { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.ws-win .chat-log { padding: 14px 16px 8px; }
-.ws-win .chat-composer { margin: 8px 10px 10px; }
-.ws-win .chat-banner { margin: 0 10px; }
-/* El chat de un subagente va a través del orquestador: sin selectores ni comandos propios, y
-   con el campo y sus dos botones en una sola fila (las ventanas en mosaico van justas de alto). */
-.chat-view[data-feed] :is(.chat-pick, .chat-slash, .chat-bar-space) { display: none; }
-.chat-view[data-feed] .chat-composer { display: flex; flex-wrap: wrap; align-items: flex-end; }
-.chat-view[data-feed] .chat-files { flex: 1 0 100%; }
-.chat-view[data-feed] .chat-input { flex: 1 1 0; width: auto; min-width: 0; min-height: 44px; padding: 12px 6px 10px 14px; }
-.chat-view[data-feed] .chat-bar { flex-shrink: 0; border-top: 0; padding: 6px; }
-
-/* En la conversación: a quién iba un mensaje (o quién lo dijo, en la ventana de un agente). */
-.chat-user-tag { font-size: 11px; font-weight: 600; letter-spacing: 0.02em; color: var(--dim); }
-/* Bajo el proceso de Agent, el botón que abre la ventana del agente. */
-.chat-proc-open { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; height: 30px; margin-top: 6px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); font-size: 12px; color: var(--dim); transition: color 150ms ease-out, border-color 150ms ease-out; }
-@media (hover: hover) {
-  .chat-proc-open:hover { color: var(--fg); border-color: var(--accent-line); }
-}
-
-.chat-proc-open svg { flex-shrink: 0; }
-.chat-proc-open span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* Una terminal: xterm.js ocupa el cuerpo de su ventana, con el fondo que le da su tema
+   (ws-terminal.js lo pone también en el margen, para que no se vea la costura). */
+.ws-term { flex: 1 1 auto; min-height: 0; padding: 8px 4px 4px 12px; }
+.ws-term .xterm { height: 100%; }
+/* xterm pinta de negro lo que sobra por debajo de la última fila: aquí, el fondo del tema. */
+.ws-term .xterm-viewport { background-color: transparent !important; scrollbar-width: thin; scrollbar-color: rgba(var(--ink-rgb), 0.2) transparent; }
 
 /* Lector de archivos: números de línea fijos a la izquierda y el código coloreado. */
 .ws-code {

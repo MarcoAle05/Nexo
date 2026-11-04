@@ -1,16 +1,14 @@
-// Chat con Claude Code: la carta derecha (Nexo) y cada ventana de agente de un workspace. Claude
-// Code corre sin terminal (claude_code.rs, workspace_run.rs) y aquí se pinta su conversación
+// Chat con Claude Code: la carta derecha (Nexo). Claude Code corre sin terminal
+// (claude_code.rs) y aquí se pinta su conversación
 // con el diseño de la app: lo que escribe el usuario, lo que contesta Claude, sus procesos
 // (herramientas y subagentes) y los permisos que pide. Debajo, el compositor con el modelo, el
 // esfuerzo, el modo de permisos, los comandos «/» y Enviar. El protocolo lo interpreta
 // chat-model.js (sin DOM); esto es la vista y el cableado.
 //
 // Todas las piezas de un chat salen de la misma plantilla (`#chat-template`, `mountChat`) con
-// sus ids bajo un prefijo («chat» en la carta de Nexo): así cada ventana tiene las suyas y las
+// sus ids bajo un prefijo («chat» en la carta de Nexo): así cada copia tiene las suyas y las
 // relaciones de ARIA (aria-controls, for…) siguen apuntando dentro de ella. Lo que habla con el
-// proceso es un transporte: el chat de Nexo usa claude_code_*, el orquestador de un workspace
-// workspace_*. Un subagente no tiene proceso propio: su chat va «alimentado» (`feed`) con las
-// líneas que le reparte el workspace, y lo que escribe el usuario se lo pasa el orquestador.
+// proceso es un transporte (el chat de Nexo usa claude_code_*).
 import {
   EFFORT_HINTS,
   EFFORT_LABELS,
@@ -36,7 +34,6 @@ const ICON = {
   check: svg('<path d="m4.5 10.5 3.5 3.5 7.5-8"/>'),
   chevron: svg('<path d="m5 8 5 5 5-5"/>', 12),
   close: svg('<path d="m5.5 5.5 9 9M14.5 5.5l-9 9"/>', 12),
-  open: svg('<path d="M8 4H4v12h12v-4M11 4h5v5M16 4l-7 7"/>', 12),
   // Estados de un proceso: hecho, error, denegado o detenido, y a la espera de permiso.
   states:
     svg('<path d="m4.5 10.5 3.5 3.5 7.5-8"/>').replace('<svg', '<svg class="is-done"') +
@@ -56,7 +53,6 @@ const STATUS_TEXT = {
 };
 const MODES = ['default', 'acceptEdits', 'plan', 'auto'];
 const CONTROL_TIMEOUT = 20_000;
-const AGENT_TOOLS = new Set(['Agent', 'Task']);
 
 const el = (tag, className, text) => {
   const node = document.createElement(tag);
@@ -138,10 +134,6 @@ export function createChat({
   desktop,
   // Por qué no se puede abrir todavía (`'no-vault'`, `'browser'`…) o null si se puede.
   blocked = () => null,
-  feed = false,
-  // Un chat alimentado: qué hacer con lo que escribe el usuario (se lo pasa el orquestador).
-  submitUser = null,
-  onInterrupt = null,
   prefs: prefsStore = localPrefs('nexo.chat'),
   getCwd = () => '',
   pickFiles,
@@ -149,9 +141,6 @@ export function createChat({
   localCommands = () => [],
   onState = () => {},
   onStarted = () => {},
-  // Procesos de la herramienta Agent: el agente que desplegó (para abrir su ventana).
-  agentFor = null,
-  onOpenAgent = () => {},
   speaker = 'Claude',
   texts = {},
   model = createChatModel(),
@@ -164,7 +153,6 @@ export function createChat({
   const commandsBox = $('commands');
   const form = $('form');
   const empty = { ...EMPTY, ...texts };
-  if (feed) root.querySelector?.('.chat-view')?.setAttribute('data-feed', '');
 
   const nodes = new Map(); // pieza → su <li>
   // Las piezas lejos del final llevan `chat-far`: solo se maquetan y se pintan cuando se ven
@@ -178,9 +166,9 @@ export function createChat({
   let seen = 0;
   let farFrame = 0;
   const waiting = new Map(); // id de petición de control → { resolve, reject, timer }
-  let phase = feed ? 'ready' : desktop ? 'idle' : 'browser';
+  let phase = desktop ? 'idle' : 'browser';
   let phaseDetail = '';
-  let running = feed;
+  let running = false;
   let starting = null;
   let fresh = true; // esta página aún no ha pedido la conversación guardada
   let stick = true; // la conversación sigue al final mientras no se suba a mano
@@ -207,11 +195,7 @@ export function createChat({
 
   // ---------------------------------------------------------------- pintar piezas
   function paintUser(node, item) {
-    const who = item.from ? `${item.from}: ` : 'Tú: ';
-    const parts = [el('span', 'visually-hidden', who)];
-    if (item.from || item.toName) node.classList.add('chat-user-tagged');
-    if (item.from) parts.push(el('span', 'chat-user-tag', item.from));
-    else if (item.toName) parts.push(el('span', 'chat-user-tag', `Para ${item.toName}`));
+    const parts = [el('span', 'visually-hidden', 'Tú: ')];
     parts.push(el('div', 'chat-bubble', item.text || 'Archivos adjuntos'));
     node.replaceChildren(...parts);
     if (item.files?.length) {
@@ -301,21 +285,6 @@ export function createChat({
     return parts;
   }
 
-  // Un proceso de la herramienta Agent lleva, debajo, el botón que abre la ventana del agente.
-  function agentButton(node, item) {
-    const agent = AGENT_TOOLS.has(item.name) && agentFor ? agentFor(item.id) : null;
-    let button = node.querySelector(':scope > .chat-proc-open');
-    if (!agent) return button?.remove();
-    if (!button) {
-      button = el('button', 'chat-proc-open');
-      button.type = 'button';
-      button.addEventListener('click', () => onOpenAgent(agentFor(item.id)));
-      node.querySelector(':scope > details').after(button);
-    }
-    button.innerHTML = `${ICON.open}<span></span>`;
-    button.lastChild.textContent = `Abrir la ventana de ${agent.name}`;
-  }
-
   function paintTool(node, item) {
     const cwd = model.state.session?.cwd ?? getCwd() ?? '';
     const { label, detail } = toolSummary(item.name, item.input, cwd);
@@ -352,7 +321,6 @@ export function createChat({
       details.open = true;
       details.dataset.opened = '1';
     }
-    agentButton(node, item);
     const pending = item.permission && !item.permission.answer ? item.permission : null;
     const card = node.querySelector(':scope > .chat-perm');
     if (!pending) card?.remove();
@@ -494,8 +462,8 @@ export function createChat({
     const [title, text] = empty[phase] ?? empty.ready;
     $('empty-title').textContent = title;
     $('empty-text').textContent = phase === 'error' ? phaseDetail : text;
-    $('retry').hidden = feed || !(phase === 'error' || phase === 'exited');
-    $('banner').hidden = feed || none || !(phase === 'exited' || phase === 'error');
+    $('retry').hidden = !(phase === 'error' || phase === 'exited');
+    $('banner').hidden = none || !(phase === 'exited' || phase === 'error');
     $('banner-text').textContent = phase === 'error' ? `No se pudo abrir Claude: ${phaseDetail}` : `Claude Code se cerró.${phaseDetail ? ` ${phaseDetail}` : ''}`;
 
     const asking = model.pending().length > 0;
@@ -506,24 +474,22 @@ export function createChat({
       state.status === 'compacting' ? 'Compactando el contexto…' : state.status === 'retry' ? 'Reintentando la conexión…' : `${speaker} está trabajando…`;
     list.setAttribute('aria-busy', String(state.busy));
 
-    const stop = state.busy && !input.value.trim() && !files.length && (!feed || onInterrupt);
+    const stop = state.busy && !input.value.trim() && !files.length;
     $('send').dataset.state = stop ? 'stop' : 'send';
     $('send-label').textContent = stop ? 'Detener' : 'Enviar';
 
     const plan = $('plan');
     if (plan) {
-      plan.hidden = feed || !state.account?.subscription;
+      plan.hidden = !state.account?.subscription;
       plan.textContent = state.account?.subscription ?? '';
     }
 
-    if (!feed) {
-      const applied = state.applied ?? {};
-      $('model-label').textContent = modelLabel(state.models, applied.model ?? state.session?.model, prefs.model);
-      const effort = applied.effort ?? prefs.effort;
-      $('effort-label').textContent = EFFORT_LABELS[effort] ?? 'Esfuerzo';
-      $('effort').disabled = effortLevels(state.models, applied.model, prefs.model).length === 0;
-      $('access-label').textContent = MODE_LABELS[state.permissionMode] ?? state.permissionMode;
-    }
+    const applied = state.applied ?? {};
+    $('model-label').textContent = modelLabel(state.models, applied.model ?? state.session?.model, prefs.model);
+    const effort = applied.effort ?? prefs.effort;
+    $('effort-label').textContent = EFFORT_LABELS[effort] ?? 'Esfuerzo';
+    $('effort').disabled = effortLevels(state.models, applied.model, prefs.model).length === 0;
+    $('access-label').textContent = MODE_LABELS[state.permissionMode] ?? state.permissionMode;
     fitBar();
     onState({ busy: state.busy, running, phase, waiting: asking });
   }
@@ -531,9 +497,6 @@ export function createChat({
   // «Enviar» pierde su texto (no su nombre) cuando la barra no cabe a lo ancho de la carta.
   function fitBar() {
     if (!bar.clientWidth) return;
-    // Alimentado, la barra va en la fila del campo: Enviar pierde el texto si el compositor
-    // es estrecho (el campo se queda con lo que sobra).
-    if (feed) return bar.classList.toggle('compact', form.clientWidth < 340);
     bar.classList.remove('compact');
     // Con `measure` nada encoge: cada pieza da el ancho que querría.
     bar.classList.add('measure');
@@ -624,10 +587,6 @@ export function createChat({
       for (const [, pending] of waiting) pending.reject('Claude Code se cerró.');
       waiting.clear();
       const detail = (event.detail ?? '').split('\n').filter((l) => l.trim()).pop() ?? '';
-      if (feed) {
-        queueRender();
-        return;
-      }
       setPhase('exited', detail.slice(0, 300));
       announce(`Claude Code se cerró.${detail ? ` ${detail}` : ''}`, true);
       return;
@@ -641,7 +600,7 @@ export function createChat({
       }
     }
     const effect = model.apply(msg);
-    if (effect?.unsupported && !feed) send$(unsupportedLine(effect.unsupported, effect.subtype), null).catch(() => {});
+    if (effect?.unsupported) send$(unsupportedLine(effect.unsupported, effect.subtype), null).catch(() => {});
     if (msg.type === 'control_response') {
       const id = msg.response?.request_id;
       const pending = waiting.get(id);
@@ -682,7 +641,6 @@ export function createChat({
   }
 
   function start() {
-    if (feed) return Promise.resolve(true);
     if (starting) return starting;
     if (running) return Promise.resolve(true);
     const why = !desktop ? 'browser' : blocked();
@@ -721,14 +679,6 @@ export function createChat({
     const body = composeMessage(text ?? '', attached);
     if (!body) return false;
     const shown = String(text ?? '').trim();
-    if (feed) {
-      // Al agente se lo pasa el orquestador; aquí se ve como lo escribió el usuario.
-      if (!(await submitUser(text ?? '', attached))) return false;
-      model.addUser(shown, attached, { local: true });
-      stick = true;
-      queueRender();
-      return true;
-    }
     if (!running && !(await start())) return false;
     // El mensaje sale en la conversación antes de mandarlo: lo que conteste Claude va detrás.
     model.addUser(shown, attached);
@@ -744,24 +694,7 @@ export function createChat({
     return true;
   }
 
-  // Un mensaje que no escribió el usuario en este chat (lo que escribe en la ventana de un
-  // agente): va a Claude Code tal cual y se pinta con `shown` (y a quién iba).
-  async function relay(body, record) {
-    if (!running && !(await start())) return false;
-    model.addUser(record.text, record.files ?? [], { to: record.to, toName: record.toName });
-    stick = true;
-    queueRender();
-    try {
-      await send$(userLine(body), JSON.stringify({ type: 'nexo_user', ...record }));
-    } catch (error) {
-      model.state.busy = false;
-      notice(`No se pudo enviar: ${error}`, 'error');
-      return false;
-    }
-    return true;
-  }
-
-  const interrupt = () => (feed ? onInterrupt?.() : control({ subtype: 'interrupt' }).catch((error) => notice(error, 'error')));
+  const interrupt = () => control({ subtype: 'interrupt' }).catch((error) => notice(error, 'error'));
 
   function clearView() {
     model.clear();
@@ -773,7 +706,6 @@ export function createChat({
 
   // Conversación nueva: sesión nueva de Claude Code y la lista vacía.
   async function reset() {
-    if (feed) return;
     try {
       await transport.reset();
     } catch (error) {
@@ -881,7 +813,7 @@ export function createChat({
     queueRender();
   }
 
-  if (!feed) {
+  {
     createMenu(
       $('model'),
       $('model-menu'),
@@ -969,7 +901,6 @@ export function createChat({
   }
 
   function openCommands(query) {
-    if (feed) return;
     closeMenus();
     commandList = filterCommands(allCommands(), query).slice(0, 60);
     const options = commandList.map((command, index) => {
@@ -1013,7 +944,7 @@ export function createChat({
   // El menú acompaña mientras se escribe el nombre del comando: «/» y nada de espacios.
   function syncCommands() {
     const match = /^\/([^\s]*)$/.exec(input.value);
-    if (match && !feed) openCommands(match[1]);
+    if (match) openCommands(match[1]);
     else closeCommands();
   }
 
@@ -1084,7 +1015,7 @@ export function createChat({
       return input.focus();
     }
     // Estos dos empiezan la conversación de cero: lo hace nexo, que lleva la cuenta de la sesión.
-    if (!feed && /^\/(clear|new)\s*$/.test(text.trim())) {
+    if (/^\/(clear|new)\s*$/.test(text.trim())) {
       input.value = '';
       grow();
       return reset();
@@ -1092,7 +1023,7 @@ export function createChat({
     // Las órdenes de nexo (compilar, preguntar, clave…) no van a Claude Code ni se pintan
     // como mensaje: una clave escrita aquí no sale del campo.
     const typed = /^\/(\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
-    const local = !feed && typed && localCommands().find((c) => c.name === typed[1]);
+    const local = typed && localCommands().find((c) => c.name === typed[1]);
     if (local) {
       input.value = '';
       grow();
@@ -1146,7 +1077,7 @@ export function createChat({
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       submit();
-    } else if (event.key === 'Escape' && model.state.busy && (!feed || onInterrupt)) {
+    } else if (event.key === 'Escape' && model.state.busy) {
       event.preventDefault();
       event.stopPropagation();
       interrupt();
@@ -1191,12 +1122,9 @@ export function createChat({
   return {
     start,
     send,
-    relay,
     notice,
     reset,
     interrupt,
-    // Las líneas que reparte el workspace (o el transporte del chat de Nexo).
-    receive: onEvent,
     // Otro vault: la conversación era del anterior.
     async stop() {
       try {
@@ -1205,21 +1133,6 @@ export function createChat({
       running = false;
       clearView();
       setPhase(blocked() ? blocked() : 'idle');
-    },
-    // Vuelve a abrir el proceso (Reiniciar espacio de Workspace): se retoma la sesión.
-    async restart() {
-      running = false;
-      setPhase('starting');
-      return start();
-    },
-    // Cuando cambia algo de fuera que se ve en la conversación (los agentes de los procesos).
-    refresh(ids) {
-      for (const id of ids ?? []) model.touchTool?.(id);
-      queueRender();
-    },
-    setBusy(busy) {
-      model.state.busy = Boolean(busy);
-      queueRender();
     },
     focus: () => input.focus(),
     // Para la API de nexo: la pregunta del usuario y una respuesta que se va llenando, en la

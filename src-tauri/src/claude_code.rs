@@ -76,10 +76,10 @@ pub struct Started {
 
 /// Líneas que se guardan como mucho para volver a pintar la conversación.
 pub(crate) const BACKLOG_MAX: usize = 6000;
-const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+pub(crate) const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 /// Modos de permiso que ofrece nexo. `bypassPermissions` y `dontAsk` quedan fuera a
 /// propósito: Claude Code tiene aquí el navegador con las sesiones del usuario.
-const PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "plan", "auto"];
+pub(crate) const PERMISSION_MODES: &[&str] = &["default", "acceptEdits", "plan", "auto"];
 
 static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -213,11 +213,10 @@ creador-de-skills; trabaja con Sonnet 5.5 y esfuerzo medio y puede leer el grafo
 del usuario (con el modelo y el esfuerzo que pida) y el contexto que tengas, y no lo escribas tú. Si el agente devuelve preguntas, házselas al usuario y vuelve a llamarlo con \
 las respuestas. Cuando el agente termine, di qué skill quedó y cómo se usa. Cuando el usuario invoque una \
 skill con /<nombre>, síguela.\n\n\
-Repertorio de nexo: los plugins, servidores MCP y skills que el usuario tiene instalados pero no quiere en su \
-perfil global de Claude Code viven en el repertorio de nexo y se encienden por workspace (Agentes → un workspace \
-→ Extras). Cuando te pida pasar algo al repertorio o devolverlo a su perfil, instalar algo solo para nexo, quitarlo \
-o encenderlo o apagarlo en un workspace, sigue la skill nexo:repertorio: tiene las rutas, las órdenes y lo que no \
-se toca.\n\n\
+Workspaces: las carpetas de proyecto del usuario (Agentes → Workspaces) se trabajan con terminales, como en \
+Orca. Para trabajar con los workspaces (abrir una terminal, delegar un trabajo a un Claude Code o a un agente del \
+vault, ver cómo va o cuánto gasta), sigue la skill nexo-orquestacion: tiene la orden de control de nexo y sus \
+reglas.\n\n\
 Navegador: tienes el servidor MCP `playwright` (herramientas mcp__playwright__browser_*), que abre un Chrome con \
 ventana sobre una copia del perfil del navegador del usuario (sus sesiones iniciadas), cargada con el botón \
 «Cargar navegador» de Conexiones. Úsalo cuando el usuario te pida consultar o hacer algo en una web, sobre todo \
@@ -282,174 +281,6 @@ fn playwright_mcp_config(app: &AppHandle) -> Option<PathBuf> {
     Some(path)
 }
 
-/// Lo que el chat de Nexo sabe del repertorio de los workspaces (ver `workspace.rs`): dónde
-/// está cada cosa y cómo se agrega, se quita, se enciende y se apaga. `{repertorio}` y
-/// `{config}` se cambian por las rutas de verdad al instalarla.
-const REPERTORIO_SKILL: &str = r#"---
-name: repertorio
-description: Agregar, quitar, encender y apagar plugins, servidores MCP y skills del repertorio de nexo (lo que el usuario tiene instalado pero no quiere en su perfil global de Claude Code y enciende por workspace). Úsala cuando pida pasar algo al repertorio, devolverlo al perfil, instalar algo solo para nexo, quitar algo del repertorio o encender o apagar un plugin, MCP o skill en un workspace.
----
-
-# Repertorio de nexo
-
-El repertorio es lo que el usuario tiene instalado pero no quiere en su perfil global de Claude Code: fuera de nexo no se carga, y en nexo se enciende por workspace (Agentes → un workspace → Extras → Repertorio). Todo va apagado de serie. Lo del perfil (en Extras, los grupos Plugins, MCP y Skills sin plugin) se carga en todas las sesiones de Claude Code del usuario.
-
-## Dónde está cada cosa
-
-| Qué | Dónde |
-| --- | --- |
-| Skills del repertorio | `{repertorio}/<carpeta>/SKILL.md`. La carpeta solo lleva letras y números sin tildes, `-` y `_`; puede ser un enlace a otra carpeta |
-| MCP del repertorio | `{repertorio}/.mcp.json`: `{"mcpServers": {"<nombre>": <config>}}`, con permisos 0600 |
-| Plugins del repertorio | Instalados para el usuario y apagados en el perfil: `claude plugin list --json` (los de `"scope": "user"` con `"enabled": false`) |
-| Skills de claude.ai en el repertorio | `"skillOverrides": {"<nombre>": "off"}` en `~/.claude/settings.json`; la skill sigue en `~/.claude/skills/synced/` |
-| Lo encendido en cada workspace | `<carpeta del workspace>/.nexo/workspace.json`, objeto `extras` |
-| Los workspaces | `{config}/workspaces.json`: `open` son los del panel de Agentes y `recent`, todos; cada uno con `path` y `name` |
-
-## Reglas
-
-- Mover algo entre el perfil y el repertorio no borra nada: dilo así. Antes de desinstalar o borrar algo, pide confirmación.
-- No toques las skills de Orca (las de `~/.claude/skills/` cuya fuente es `stablyai/orca` en `~/.agents/.skill-lock.json`: `computer-use`, `orca-cli` y `orchestration`) ni la `computer-use` de claude.ai: se llama igual que la de Orca y apagarla por nombre apagaría las dos.
-- La configuración de un MCP puede llevar claves en `env` o `headers`: cópiala sin enseñarla. No imprimas nunca `~/.claude.json` ni `.mcp.json` enteros; de ahí lee solo los nombres.
-- `~/.claude/settings.json` y `~/.claude.json` son del usuario y de Claude Code. Cambia solo lo que toca: plugins y MCP del perfil con el CLI (`claude plugin …`, `claude mcp …`), que es quien escribe esos archivos, y `skillOverrides` con Edit, sin reescribir el archivo en otro orden.
-- nexo vigila estos archivos y la pestaña Extras se pone al día sola en uno o dos segundos.
-- Lo que enciendas o apagues en un workspace se aplica cuando su orquestador vuelve a arrancar. Dile al usuario que pulse «Reiniciar espacio de Workspace» al pie de Extras (solo sale si ese workspace está en marcha); si no está en marcha, se aplica al abrirlo.
-- Al terminar, di en una línea qué quedó dónde («interfaces está en el repertorio, apagado fuera de nexo»).
-
-## Ver qué hay
-
-```bash
-ls {repertorio}
-python3 -c "import json; print(sorted(json.load(open('{repertorio}/.mcp.json'))['mcpServers']))"
-claude plugin list --json
-python3 -c "import json,os; print(sorted(json.load(open(os.path.expanduser('~/.claude.json'))).get('mcpServers', {})))"
-python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.claude/settings.json'))).get('skillOverrides', {}))"
-ls ~/.claude/skills ~/.claude/skills/synced/*/
-```
-
-## Agregar al repertorio
-
-### Lo que ya está en el perfil
-
-- **Plugin**: `claude plugin disable --scope user -- <nombre@marketplace>`. Sigue instalado y se actualiza con `claude plugin update`.
-- **MCP de usuario**: copia su configuración al repertorio y después quítalo del perfil (sustituye NOMBRE):
-
-  ```bash
-  python3 - <<'PY'
-  import json, os
-  name = 'NOMBRE'
-  src = json.load(open(os.path.expanduser('~/.claude.json')))['mcpServers'][name]
-  path = '{repertorio}/.mcp.json'
-  data = json.load(open(path)) if os.path.exists(path) else {'mcpServers': {}}
-  assert name not in data['mcpServers'], 'ya está en el repertorio'
-  data['mcpServers'][name] = src
-  os.makedirs(os.path.dirname(path), exist_ok=True)
-  tmp = path + '.tmp'
-  fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-  with os.fdopen(fd, 'w') as f:
-      json.dump(data, f, indent=2)
-  os.chmod(tmp, 0o600)
-  os.replace(tmp, path)
-  print('copiado:', name)
-  PY
-  claude mcp remove --scope user -- NOMBRE
-  ```
-
-  Si `claude mcp remove` falla, quita la entrada que acabas de copiar para que no quede en los dos sitios.
-- **Skill de `~/.claude/skills/<carpeta>`** (no de Orca): muévela a `{repertorio}/<carpeta>`. Si es un enlace (las de `npx skills`), no muevas lo que hay detrás: crea en el repertorio un enlace a la misma ruta absoluta (`ln -s "$(readlink -f ~/.claude/skills/<carpeta>)" {repertorio}/<carpeta>`) y quita solo el enlace viejo (`rm ~/.claude/skills/<carpeta>`, sin `-r`). Así `npx skills update` la sigue poniendo al día.
-- **Skill de claude.ai**: añade `"<nombre>": "off"` a `skillOverrides` de `~/.claude/settings.json` (créalo si no está). No la muevas de su carpeta: la sincronización la devolvería.
-
-### Algo nuevo, directamente al repertorio
-
-- **Plugin**: `claude plugin install --scope user <nombre@marketplace>` y en seguida `claude plugin disable --scope user -- <nombre@marketplace>`.
-- **MCP**: añade su entrada a `{repertorio}/.mcp.json`, con el mismo formato que un `.mcp.json` de Claude Code (`{"command": "...", "args": [...], "env": {...}}` o `{"type": "http", "url": "..."}`) y el archivo en 0600. No pases por `claude mcp add`, que lo dejaría en el perfil.
-- **Skill**: copia su carpeta (con su `SKILL.md`) a `{repertorio}/<carpeta>`. Una skill nueva la escribe, como siempre, el agente `creador-de-skills` en `.claude/skills/<nombre>/` del vault; después muévela al repertorio.
-
-## Quitar del repertorio
-
-Pregunta si quiere **devolverlo al perfil global** (vuelve a cargarse en todas sus sesiones) o **eliminarlo**.
-
-| Qué | Devolver al perfil | Eliminar |
-| --- | --- | --- |
-| Plugin | `claude plugin enable --scope user -- <id>` | `claude plugin uninstall --scope user -- <id>` |
-| MCP | `claude mcp add-json --scope user -- <nombre> '<config>'` con la configuración de `.mcp.json` (pásala desde Python con `subprocess.run([...])`, sin enseñarla) y quita su entrada de `.mcp.json` | Quita su entrada de `.mcp.json` |
-| Skill del repertorio | `mv {repertorio}/<carpeta> ~/.claude/skills/` (si es un enlace, créalo allí con la misma ruta absoluta) | `gio trash {repertorio}/<carpeta>` (a la papelera, nunca `rm -r`) |
-| Skill de claude.ai | Quita su entrada de `skillOverrides` | No se puede desde aquí: se quita en claude.ai |
-
-Si lo eliminas, quita también su id de `extras` en los `workspace.json` donde estuviera encendido.
-
-## Encender y apagar en un workspace
-
-En `<carpeta del workspace>/.nexo/workspace.json`, el objeto `extras` tiene una lista por tipo:
-
-| Lista | Ids |
-| --- | --- |
-| `plugins` | `nombre@marketplace`, del repertorio o del perfil |
-| `mcp` | Nombre del MCP, del repertorio o del perfil |
-| `skills` | Nombre de las skills del perfil y de las de claude.ai del repertorio |
-| `repertoire` | Carpetas de `{repertorio}/` |
-| `connectors`, `hooks` | Conexiones de claude.ai y hooks (ver Extras) |
-
-Busca la carpeta del workspace por su nombre en `{config}/workspaces.json`. Para encender, añade el id a su lista; para apagar, quítalo. Conserva todo lo demás del archivo (`session`, `ui`…):
-
-```bash
-python3 - <<'PY'
-import json, os
-path = '<carpeta del workspace>/.nexo/workspace.json'
-config = json.load(open(path))
-lista = config.setdefault('extras', {}).setdefault('plugins', [])
-if 'interfaces@interfaces' not in lista:
-    lista.append('interfaces@interfaces')
-tmp = path + '.tmp'
-with open(tmp, 'w') as f:
-    json.dump(config, f, indent=2, ensure_ascii=False)
-os.replace(tmp, path)
-PY
-```
-
-Después, «Reiniciar espacio de Workspace» (ver Reglas).
-"#;
-
-/// Deja el plugin del chat de Nexo (la skill `nexo:repertorio`) en la carpeta de datos de
-/// nexo, fuera del vault (así no sale entre las skills del usuario), y devuelve su ruta para
-/// `--plugin-dir`.
-pub(crate) fn install_chat_plugin(
-    data: &Path,
-    repertorio: &Path,
-    config: &Path,
-) -> Result<PathBuf, String> {
-    let dir = data.join("chat-plugin").join("nexo");
-    let skill = dir.join("skills/repertorio");
-    std::fs::create_dir_all(dir.join(".claude-plugin")).map_err(|e| e.to_string())?;
-    std::fs::create_dir_all(&skill).map_err(|e| e.to_string())?;
-    let manifest = serde_json::json!({
-        "name": "nexo",
-        "version": env!("CARGO_PKG_VERSION"),
-        "description": "Lo que nexo le enseña a su chat: cómo se gestiona el repertorio de los workspaces."
-    });
-    let text = REPERTORIO_SKILL
-        .replace("{repertorio}", &repertorio.to_string_lossy())
-        .replace("{config}", &config.to_string_lossy());
-    for (path, body) in [
-        (
-            dir.join(".claude-plugin/plugin.json"),
-            serde_json::to_string_pretty(&manifest).map_err(|e| e.to_string())?,
-        ),
-        (skill.join("SKILL.md"), text),
-    ] {
-        if std::fs::read_to_string(&path).ok().as_deref() != Some(body.as_str()) {
-            std::fs::write(&path, body).map_err(|e| e.to_string())?;
-        }
-    }
-    Ok(dir)
-}
-
-fn chat_plugin(app: &AppHandle) -> Result<PathBuf, String> {
-    let data = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let config = app.path().app_config_dir().map_err(|e| e.to_string())?;
-    let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    install_chat_plugin(&data, &crate::workspace::repertoire_dir(&home), &config)
-}
-
 fn stop(session: Option<Session>) {
     if let Some(mut s) = session {
         let _ = s.child.kill();
@@ -475,7 +306,6 @@ fn launch_args(
     saved: bool,
     prompt: &str,
     mcp_config: Option<&Path>,
-    plugin: Option<&Path>,
     options: &ChatOptions,
 ) -> Result<Vec<String>, String> {
     let mut args: Vec<String> = [
@@ -506,9 +336,6 @@ fn launch_args(
     args.extend(["--append-system-prompt".into(), prompt.to_string()]);
     if let Some(config) = mcp_config {
         args.extend(["--mcp-config".into(), config.to_string_lossy().into_owned()]);
-    }
-    if let Some(plugin) = plugin {
-        args.extend(["--plugin-dir".into(), plugin.to_string_lossy().into_owned()]);
     }
     args.extend(option_args(options)?);
     Ok(args)
@@ -632,21 +459,21 @@ pub fn claude_code_start(
         if let Err(e) = crate::skills::install_agent(&root) {
             log::warn!("No se pudo instalar el agente de skills: {e}");
         }
+        // La skill de los workspaces, también antes: Claude Code lee las skills al empezar. Sin
+        // ella el chat funciona igual, así que solo se avisa.
+        if let Err(e) = std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|exe| crate::orquestacion::install(&root, &exe).map_err(|e| e.to_string()))
+        {
+            log::warn!(
+                "No se pudo instalar la skill {}: {e}",
+                crate::orquestacion::NAME
+            );
+        }
         let prompt = orchestrator_prompt(&root, &run.name);
         let config = playwright_mcp_config(&app);
-        // La skill del repertorio: sin ella el chat funciona igual, así que solo se avisa.
-        let plugin = chat_plugin(&app)
-            .map_err(|e| log::warn!("No se pudo preparar el plugin del chat: {e}"))
-            .ok();
         (
-            launch_args(
-                run,
-                saved,
-                &prompt,
-                config.as_deref(),
-                plugin.as_deref(),
-                &options,
-            )?,
+            launch_args(run, saved, &prompt, config.as_deref(), &options)?,
             run.name.clone(),
             saved,
         )
@@ -819,8 +646,7 @@ mod tests {
 
     #[test]
     fn los_argumentos_piden_el_protocolo_sin_terminal() {
-        let args =
-            launch_args(&run(), false, "papel", None, None, &ChatOptions::default()).unwrap();
+        let args = launch_args(&run(), false, "papel", None, &ChatOptions::default()).unwrap();
         assert_eq!(args[0], "-p");
         for (flag, value) in [
             ("--input-format", "stream-json"),
@@ -847,45 +673,15 @@ mod tests {
     }
 
     #[test]
-    fn el_chat_lleva_la_skill_del_repertorio_con_las_rutas_de_verdad() {
-        let root = std::env::temp_dir().join(format!("nexo-chat-plugin-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let dir = install_chat_plugin(
-            &root.join("datos"),
-            Path::new("/h/nexo/repertorio"),
-            Path::new("/h/.config/com.nexo.app"),
-        )
-        .unwrap();
-        let skill = std::fs::read_to_string(dir.join("skills/repertorio/SKILL.md")).unwrap();
-        assert!(skill.starts_with("---\nname: repertorio\ndescription: "));
-        assert!(skill.contains("`/h/nexo/repertorio/.mcp.json`"));
-        assert!(skill.contains("`/h/.config/com.nexo.app/workspaces.json`"));
-        assert!(!skill.contains("{repertorio}") && !skill.contains("{config}"));
-        let manifest: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(dir.join(".claude-plugin/plugin.json")).unwrap(),
-        )
-        .unwrap();
-        assert_eq!(manifest["name"], "nexo");
-        let args = launch_args(
-            &run(),
-            false,
-            "papel",
-            None,
-            Some(&dir),
-            &ChatOptions::default(),
-        )
-        .unwrap();
-        assert_eq!(
-            args[pos(&args, "--plugin-dir").unwrap() + 1],
-            dir.to_string_lossy()
-        );
-        assert!(orchestrator_prompt(Path::new("/v"), "s").contains("nexo:repertorio"));
-        std::fs::remove_dir_all(root).unwrap();
+    fn el_papel_manda_a_la_skill_de_los_workspaces() {
+        let prompt = orchestrator_prompt(Path::new("/v"), "s");
+        assert!(prompt.contains("sigue la skill nexo-orquestacion"));
+        assert!(!prompt.contains("repertorio"));
     }
 
     #[test]
     fn una_sesion_guardada_se_retoma() {
-        let args = launch_args(&run(), true, "papel", None, None, &ChatOptions::default()).unwrap();
+        let args = launch_args(&run(), true, "papel", None, &ChatOptions::default()).unwrap();
         assert_eq!(args[pos(&args, "--resume").unwrap() + 1], "0b1c");
         assert!(pos(&args, "--session-id").is_none());
         assert!(pos(&args, "--name").is_none());
@@ -899,7 +695,7 @@ mod tests {
             permission_mode: Some("acceptEdits".into()),
         };
         let config = Path::new("/cache/claude-mcp.json");
-        let args = launch_args(&run(), false, "papel", Some(config), None, &options).unwrap();
+        let args = launch_args(&run(), false, "papel", Some(config), &options).unwrap();
         assert_eq!(
             args[pos(&args, "--model").unwrap() + 1],
             "claude-sonnet-5-5"
@@ -920,7 +716,7 @@ mod tests {
             effort: None,
             permission_mode: Some("default".into()),
         };
-        let args = launch_args(&run(), false, "papel", None, None, &options).unwrap();
+        let args = launch_args(&run(), false, "papel", None, &options).unwrap();
         assert!(pos(&args, "--model").is_none());
         assert!(pos(&args, "--permission-mode").is_none());
     }
@@ -933,7 +729,7 @@ mod tests {
                 effort: effort.map(String::from),
                 permission_mode: mode.map(String::from),
             };
-            launch_args(&run(), false, "papel", None, None, &options)
+            launch_args(&run(), false, "papel", None, &options)
         };
         assert!(with(None, None, Some("bypassPermissions")).is_err());
         assert!(with(None, None, Some("dontAsk")).is_err());

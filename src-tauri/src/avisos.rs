@@ -1,10 +1,10 @@
-//! Avisos de escritorio de los workspaces (`docs/spec-avisos-workspaces.md`): cuando el
-//! orquestador o uno de sus agentes pide permiso o pregunta algo, cuando el workspace queda
-//! libre y cuando Claude Code se cierra solo con trabajo a medias.
+//! Avisos de escritorio de los workspaces (`docs/spec-avisos-workspaces.md`): cuando el Claude
+//! Code de una terminal o uno de sus subagentes pide permiso o pregunta algo, cuando termina su
+//! trabajo y cuando su terminal se cierra con trabajo a medias.
 //!
-//! Aquí no se sabe nada de procesos: el lector (`workspace_run.rs`) cuenta qué pasó y este
-//! módulo arma el texto, decide si se avisa (no si el usuario ya está mirando ese workspace) y
-//! lo envía detrás del rasgo `Aviso`, que las pruebas sustituyen.
+//! Aquí no se sabe nada de procesos: `sesiones.rs` cuenta qué pasó (por los hooks de las
+//! terminales) y este módulo arma el texto, decide si se avisa (no si el usuario ya está
+//! mirando ese workspace) y lo envía detrás del rasgo `Aviso`, que las pruebas sustituyen.
 //!
 //! Un aviso solo lleva el nombre del workspace, quién y el nombre de la herramienta: nunca la
 //! entrada de la herramienta (órdenes, rutas, URL…), el texto de una pregunta o un plan ni nada
@@ -16,16 +16,15 @@ use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
-use crate::workspace;
-
 /// Lo que pasó en un workspace y merece un aviso.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Suceso {
-    /// Una petición `can_use_tool` nueva: `agent` es el `agent_id` (sin él, el orquestador).
-    Pide { agent: Option<String>, tool: String },
-    /// Pasó a libre: sin turno, sin tareas en segundo plano y sin peticiones pendientes.
+    /// Un permiso, una pregunta o un plan nuevos: quién (el nombre de la sesión o el tipo del
+    /// subagente) y con qué herramienta.
+    Pide { who: String, tool: String },
+    /// Pasó a libre: sin turno, sin subagentes trabajando y sin peticiones pendientes.
     Termino { error: bool },
-    /// Claude Code se cerró solo mientras trabajaba o esperaba una respuesta.
+    /// La terminal se cerró (o Claude Code se cayó) mientras trabajaba o esperaba una respuesta.
     Cayo,
 }
 
@@ -70,29 +69,14 @@ fn workspace_name(root: &Path) -> String {
     )
 }
 
-/// Quién pide: el orquestador, el agente registrado en `.nexo/agentes/` cuya `task` es el
-/// `agent_id` o, si no está, «Un agente».
-pub(crate) fn quien(root: &Path, agent: Option<&str>) -> String {
-    let Some(id) = agent else {
-        return "El orquestador".into();
-    };
-    workspace::agents(root)
-        .into_iter()
-        .find(|a| a.task == id)
-        .map_or_else(|| "Un agente".into(), |a| a.name)
-}
-
 /// Título y texto de un aviso. Solo con el nombre del workspace, quién y la herramienta.
 pub(crate) fn texto(root: &Path, suceso: &Suceso) -> Texto {
     let body = match suceso {
-        Suceso::Pide { agent, tool } => {
-            let who = quien(root, agent.as_deref());
-            match tool.as_str() {
-                "AskUserQuestion" => format!("{who} te hace una pregunta"),
-                "ExitPlanMode" => format!("{who} te propone un plan"),
-                _ => format!("{who} pide permiso para usar {tool}"),
-            }
-        }
+        Suceso::Pide { who, tool } => match tool.as_str() {
+            "AskUserQuestion" => format!("{who} te hace una pregunta"),
+            "ExitPlanMode" => format!("{who} te propone un plan"),
+            _ => format!("{who} pide permiso para usar {tool}"),
+        },
         Suceso::Termino { error: false } => "Terminó el trabajo".into(),
         Suceso::Termino { error: true } => "Terminó con un error".into(),
         Suceso::Cayo => "Se cerró con trabajo a medias".into(),
@@ -109,8 +93,8 @@ pub(crate) fn se_avisa(mirando: &Mirando, root: &Path) -> bool {
     !(mirando.focused && mirando.path.as_deref() == Some(root))
 }
 
-/// Decide, arma y envía. Si el escritorio no acepta el aviso, queda un `warn` y nada más: el
-/// lector, el orquestador y la interfaz no dependen de él.
+/// Decide, arma y envía. Si el escritorio no acepta el aviso, queda un `warn` y nada más: las
+/// terminales y la interfaz no dependen de él.
 pub(crate) fn avisar(aviso: &dyn Aviso, mirando: &Mirando, root: &Path, suceso: &Suceso) {
     if !se_avisa(mirando, root) {
         return;
@@ -123,7 +107,6 @@ pub(crate) fn avisar(aviso: &dyn Aviso, mirando: &Mirando, root: &Path, suceso: 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use serde_json::json;
     use std::cell::RefCell;
 
     /// Guarda los avisos en vez de enviarlos.
@@ -146,9 +129,9 @@ pub(crate) mod tests {
         root
     }
 
-    fn pide(agent: Option<&str>, tool: &str) -> Suceso {
+    fn pide(who: &str, tool: &str) -> Suceso {
         Suceso::Pide {
-            agent: agent.map(String::from),
+            who: who.into(),
             tool: tool.into(),
         }
     }
@@ -156,22 +139,12 @@ pub(crate) mod tests {
     #[test]
     fn el_aviso_de_un_permiso_dice_quien_y_que_herramienta() {
         let root = temp("quien");
-        workspace::register_task(
-            &root,
-            "s1",
-            &json!({ "task_id": "a1", "task_type": "local_agent", "description": "Revisor de la API" }),
-        )
-        .unwrap();
-        let t = texto(&root, &pide(None, "Bash"));
+        let t = texto(&root, &pide("Claude Code", "Bash"));
         assert_eq!(t.title, "proyecto");
-        assert_eq!(t.body, "El orquestador pide permiso para usar Bash");
+        assert_eq!(t.body, "Claude Code pide permiso para usar Bash");
         assert_eq!(
-            texto(&root, &pide(Some("a1"), "Edit")).body,
-            "Revisor de la API pide permiso para usar Edit"
-        );
-        assert_eq!(
-            texto(&root, &pide(Some("otro"), "Write")).body,
-            "Un agente pide permiso para usar Write"
+            texto(&root, &pide("revisor", "Edit")).body,
+            "revisor pide permiso para usar Edit"
         );
         assert_eq!(
             texto(&root, &Suceso::Termino { error: false }).body,
@@ -190,22 +163,22 @@ pub(crate) mod tests {
     #[test]
     fn el_aviso_de_una_pregunta_no_lleva_lo_que_pregunta() {
         let root = temp("pregunta");
-        let pregunta = texto(&root, &pide(None, "AskUserQuestion"));
-        assert_eq!(pregunta.body, "El orquestador te hace una pregunta");
-        let plan = texto(&root, &pide(None, "ExitPlanMode"));
-        assert_eq!(plan.body, "El orquestador te propone un plan");
+        let pregunta = texto(&root, &pide("Claude Code", "AskUserQuestion"));
+        assert_eq!(pregunta.body, "Claude Code te hace una pregunta");
+        let plan = texto(&root, &pide("Claude Code", "ExitPlanMode"));
+        assert_eq!(plan.body, "Claude Code te propone un plan");
     }
 
     #[test]
     fn los_avisos_no_llevan_la_entrada_de_la_herramienta() {
-        // `Suceso` no tiene dónde llevar la entrada: el lector solo saca quién y la herramienta.
-        // Aun así, con una línea real, nada de su entrada llega al texto.
+        // `Suceso` no tiene dónde llevar la entrada: el hook solo trae quién y la herramienta.
+        // Aun así, con un evento real, nada de su entrada llega al texto.
         let root = temp("entrada");
-        let line = json!({ "type": "control_request", "request_id": "r1", "request": {
-            "subtype": "can_use_tool", "tool_name": "Bash",
-            "input": { "command": "curl -H 'Authorization: Bearer sk-secreta' https://ejemplo.org/x" },
-            "tool_use_id": "toolu_1" } });
-        let suceso = pide(None, line["request"]["tool_name"].as_str().unwrap());
+        let raw = serde_json::json!({ "hook_event_name": "PermissionRequest", "session_id": "s1",
+            "tool_name": "Bash",
+            "tool_input": { "command": "curl -H 'Authorization: Bearer sk-secreta' https://ejemplo.org/x" } });
+        let hook = crate::control::hook_from(&raw, 1);
+        let suceso = pide("Claude Code", hook.tool.as_deref().unwrap());
         let avisos = Guardados::default();
         avisar(&avisos, &Mirando::default(), &root, &suceso);
         let t = &avisos.0.borrow()[0];
