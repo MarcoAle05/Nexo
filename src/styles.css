@@ -57,7 +57,7 @@
    están en `themes.js`. */
 
 /* Fórmulas: en la raíz, en cada [data-theme] y en cada tarjeta, que las recalcula con sus canales. */
-:root, [data-theme], .segmented.views, .settings, .tp-bar, .tp-card, .panel, .toolbar, .focus-pill, .vault-menu, .desk-card, .desk-map, .desk-zoom, .desks-button, .ne-menu, .plane-open, .skill-pill, .skill-pop, .ws-bar, .ws-win, .ws-loading {
+:root, [data-theme], .segmented.views, .settings, .tp-bar, .tp-card, .panel, .toolbar, .focus-pill, .vault-menu, .desk-card, .desk-map, .desk-zoom, .desks-button, .desk-tools, .cv-bar, .cv-card, .cv-toast, .ne-menu, .plane-open, .skill-pill, .skill-pop, .ws-bar, .ws-win, .ws-loading {
   --bg: rgb(var(--deep-rgb));
   --fg: rgb(var(--fg-rgb));
   --dim: rgba(var(--fg-rgb), var(--dim-a));
@@ -80,7 +80,7 @@
 }
 
 /* TARJETAS: toman los canales de tarjeta del tema. */
-.segmented.views, .settings, .tp-bar, .tp-card, .panel, .toolbar, .focus-pill, .vault-menu, .desk-card, .desk-map, .desk-zoom, .desks-button, .ne-menu, .plane-open, .skill-pill, .skill-pop, .ws-bar, .ws-win, .ws-loading {
+.segmented.views, .settings, .tp-bar, .tp-card, .panel, .toolbar, .focus-pill, .vault-menu, .desk-card, .desk-map, .desk-zoom, .desks-button, .desk-tools, .cv-bar, .cv-card, .cv-toast, .ne-menu, .plane-open, .skill-pill, .skill-pop, .ws-bar, .ws-win, .ws-loading {
   /* El texto que no pone color propio lo hereda: si no se fija aquí, sería el del fondo. */
   color: var(--fg);
   color-scheme: var(--s-scheme);
@@ -111,6 +111,12 @@
   --term-red: var(--s-term-red);
   --term-cyan: var(--s-term-cyan);
   --state-on: var(--s-state-on);
+  --el-neutro-rgb: var(--s-el-neutro-rgb);
+  --el-acento-rgb: var(--s-el-acento-rgb);
+  --el-azul-rgb: var(--s-el-azul-rgb);
+  --el-verde-rgb: var(--s-el-verde-rgb);
+  --el-ambar-rgb: var(--s-el-ambar-rgb);
+  --el-rojo-rgb: var(--s-el-rojo-rgb);
 }
 
 /* La carta del chat lleva el tono más hondo de las tarjetas: así la app no es de un solo tono. */
@@ -192,6 +198,17 @@
   --term-cyan: #7fdde6;
   /* El punto de un agente activo en el workspace (en tarjetas: sigue su polaridad). */
   --state-on: var(--log-on);
+  /* Los colores de los elementos del lienzo son roles, y cada tema los traduce: un diagrama se ve
+     bien en todos. Cada uno da su línea; su relleno es esa línea muy diluida sobre lo que tenga
+     debajo (`--el-tint`, más fuerte en las notas adhesivas), con el texto de siempre encima. */
+  --el-neutro-rgb: 150, 150, 160;
+  --el-acento-rgb: var(--accent-line-rgb);
+  --el-azul-rgb: 140, 200, 255;
+  --el-verde-rgb: 142, 230, 180;
+  --el-ambar-rgb: 245, 211, 138;
+  --el-rojo-rgb: 255, 154, 146;
+  --el-tint: 14%;
+  --el-tint-strong: 24%;
   /* Las tarjetas: por defecto, los mismos canales que el fondo. */
   --s-scheme: var(--scheme);
   --s-fg-rgb: var(--fg-rgb);
@@ -219,6 +236,12 @@
   --s-code-attr: var(--code-attr);
   --s-code-meta: var(--code-meta);
   --s-term-red: var(--term-red);
+  --s-el-neutro-rgb: var(--el-neutro-rgb);
+  --s-el-acento-rgb: var(--s-accent-line-rgb);
+  --s-el-azul-rgb: var(--el-azul-rgb);
+  --s-el-verde-rgb: var(--el-verde-rgb);
+  --s-el-ambar-rgb: var(--el-ambar-rgb);
+  --s-el-rojo-rgb: var(--el-rojo-rgb);
   --s-term-cyan: var(--term-cyan);
   --s-state-on: var(--state-on);
 }
@@ -252,6 +275,11 @@
   --code-attr: #a12e6c;
   --code-meta: #4d5c70;
   --term-red: #b4232a;
+  --el-neutro-rgb: 104, 104, 112;
+  --el-azul-rgb: 21, 88, 176;
+  --el-verde-rgb: 15, 116, 72;
+  --el-ambar-rgb: 140, 90, 8;
+  --el-rojo-rgb: 180, 35, 42;
   --term-cyan: #0b6b78;
   --state-on: #0b7a55;
 }
@@ -439,6 +467,11 @@
   --code-attr: #7c2152;
   --code-meta: #3a4656;
   --term-red: #861a14;
+  --el-neutro-rgb: 72, 66, 60;
+  --el-azul-rgb: 12, 62, 124;
+  --el-verde-rgb: 7, 79, 48;
+  --el-ambar-rgb: 96, 58, 4;
+  --el-rojo-rgb: 134, 26, 20;
   --term-cyan: #07505a;
   --state-on: #086848;
 }
@@ -503,6 +536,11 @@
   --s-code-attr: #f4a8d6;
   --s-code-meta: #a9b6c6;
   --s-term-red: #ff9a92;
+  --s-el-neutro-rgb: 150, 150, 160;
+  --s-el-azul-rgb: 140, 200, 255;
+  --s-el-verde-rgb: 142, 230, 180;
+  --s-el-ambar-rgb: 245, 211, 138;
+  --s-el-rojo-rgb: 255, 154, 146;
   --s-term-cyan: #7fdde6;
   --s-state-on: #5ffcc0;
 }
@@ -2516,7 +2554,8 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
 /* El lienzo de notas ocupa toda la app, por detrás de la barra y de las cartas, y es tan
    grande (--desk-w × --desk-h, los pone notes.js) que hace de infinito. Es un desplazamiento
    nativo sin barras: la rueda y el trackpad lo mueven solos y, al tabular a una carta que
-   no se ve, el navegador la trae. Arrastrar el fondo también lo mueve. */
+   no se ve, el navegador la trae. También lo mueven el botón derecho, desde cualquier sitio, y
+   arrastrar el fondo. */
 .desk {
   position: absolute;
   inset: 0;
@@ -2530,7 +2569,9 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
 }
 .desk::-webkit-scrollbar { display: none; }
 .desk[hidden] { display: none; }
+.desk:focus-visible { outline: 2px solid var(--accent-line); outline-offset: -4px; }
 .desk.panning { cursor: grabbing; user-select: none; }
+.desk-pan-shield { position: fixed; inset: 0; z-index: 300000; cursor: grabbing; }
 .desk-surface {
   position: relative;
   width: var(--desk-w, 100%);
@@ -2727,7 +2768,48 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
   cursor: pointer;
   touch-action: none;
 }
-.desk-map[hidden], .desk-manager[hidden], .desk-zoom[hidden] { display: none; }
+.desk-map[hidden], .desk-manager[hidden], .desk-zoom[hidden], .desk-tools[hidden] { display: none; }
+/* Lo que se añade al lienzo va pegado a la izquierda del minimapa. */
+.desk-tools {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  height: 54px;
+  margin-left: auto;
+  margin-right: 8px;
+  padding: 0 6px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--line-strong);
+  background: var(--glass-bar);
+}
+.desk-tools + .desk-map { margin-left: 0; }
+.desk-tools .vault-anchor { position: relative; }
+.desk-tools-add, .desk-tool {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  height: 40px;
+  border-radius: calc(var(--r-lg) - 6px);
+  transition-property: scale, background-color;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+.desk-tools-add { gap: 6px; padding: 0 10px; font-size: 13px; }
+.desk-tool { width: 36px; color: var(--dim); }
+.desk-tool[aria-pressed="true"], .desk-tool[aria-expanded="true"], .desk-tools-add[aria-expanded="true"] { background: rgba(var(--ink-rgb), 0.1); color: var(--fg); }
+.desk-tools-add:active, .desk-tool:active { scale: 0.96; }
+/* Hay un agente dibujando: un punto, sin animar. */
+/* Con un vault de nombre largo, cede él: lo de añadir y el minimapa no pueden pisar las vistas. */
+body[data-view="notas"] .top-start > .vault-anchor:first-of-type { flex: 0 1 auto; min-width: 44px; }
+body[data-view="notas"] #vault-button { max-width: 100%; }
+body[data-view="notas"] #vault-name { min-width: 0; }
+#canvas-layers { position: relative; }
+#canvas-layers.is-live::after { content: ""; position: absolute; top: 7px; right: 7px; width: 7px; height: 7px; border-radius: var(--r-full); background: var(--accent-soft); }
+.desk-map-els { position: absolute; inset: 0; width: 100%; height: 100%; }
+.desk-map-live { position: absolute; min-width: 8px; min-height: 8px; border-radius: 2px; border: 1.5px dashed var(--accent-soft); }
+.desk-map-live[hidden] { display: none; }
 .desk-map-world { position: absolute; inset: 0; pointer-events: none; }
 .desk-map-card { position: absolute; min-width: 2px; min-height: 2px; border-radius: 1.5px; background: rgba(var(--fg-rgb), 0.55); }
 .desk-map-card.is-front { background: var(--fg); }
@@ -2884,6 +2966,7 @@ body[data-scene="grafo"] #graph-toolbar { animation: source-in 600ms var(--ease)
   .desks-row:hover, .desks-row:focus-within { background: rgba(var(--ink-rgb), 0.07); }
   .desks-act:not(:disabled):hover { background: rgba(var(--ink-rgb), 0.1); color: var(--fg); }
   .desk-map:hover { border-color: rgba(var(--ink-rgb), 0.24); }
+  .desk-tools-add:hover, .desk-tool:hover { background: rgba(var(--ink-rgb), 0.1); color: var(--fg); }
   .desk-zoom-btn:not(:disabled):hover, .desk-zoom-value:hover { background: rgba(var(--ink-rgb), 0.1); }
 }
 /* Con menos movimiento, el menú solo aparece (sin el desplazamiento de entrada) y las cartas
@@ -2904,6 +2987,20 @@ body[data-view="notas"] .clock-date { display: none; }
 @media (max-width: 1760px) {
   body[data-view="notas"] #search-button .top-label, body[data-view="notas"] #search-button kbd { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 }
+/* Lo de añadir cede sitio antes que nada: primero los atajos, luego la palabra y, en las más
+   estrechas, «Capas» pasa a ser una entrada del menú. */
+@media (max-width: 1820px) {
+  .desk-tool-quick { display: none; }
+}
+@media (max-width: 1350px) {
+  .desk-tools-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .desk-tools-add { padding: 0 8px; }
+}
+@media (max-width: 1250px) {
+  .desk-tools-layers { display: none; }
+  .desk-tools { padding: 0 4px; margin-right: 6px; }
+  .cv-menu-layers { display: grid; }
+}
 @media (max-width: 1560px) {
   body[data-view="notas"] #conn-button .top-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 }
@@ -2923,6 +3020,268 @@ body[data-view="notas"] .clock-date { display: none; }
   /* Un nombre recortado a dos letras no dice nada: el gestor se queda en su icono. */
   body[data-view="notas"] .desks-current { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   body[data-view="notas"] .desks-button { padding: 0 10px; }
+}
+
+/* ---------- Elementos del lienzo (canvas.js) ----------
+   Lo que no son notas. Cada capa es un contexto de apilamiento de tamaño cero: no pinta nada por sí
+   misma y deja pasar el ratón al lienzo. Va por encima de las cartas para que una flecha o un cuadro
+   puedan señalar una nota. Lo que no tiene interior propio se pinta sobre el fondo con sus canales;
+   lo que es una ficha (`.cv-card`: tablas, tableros, código…) es una tarjeta. */
+.cv-layer { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+.cv-layer[hidden] { display: none; }
+.cv-el {
+  --el-rgb: var(--el-neutro-rgb);
+  --el-base: var(--bg);
+  --el-line: rgb(var(--el-rgb));
+  --el-fill: color-mix(in srgb, rgb(var(--el-rgb)) var(--el-tint), var(--el-base));
+  position: absolute;
+  pointer-events: auto;
+  color: var(--fg);
+  outline: none;
+  cursor: default;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.cv-c-neutro { --el-rgb: var(--el-neutro-rgb); }
+.cv-c-acento { --el-rgb: var(--el-acento-rgb); }
+.cv-c-azul { --el-rgb: var(--el-azul-rgb); }
+.cv-c-verde { --el-rgb: var(--el-verde-rgb); }
+.cv-c-ambar { --el-rgb: var(--el-ambar-rgb); }
+.cv-c-rojo { --el-rgb: var(--el-rojo-rgb); }
+.cv-enter { animation: cv-enter 150ms ease-out; }
+@keyframes cv-enter { from { opacity: 0; } }
+.cv-body { position: absolute; inset: 0; overflow: hidden; border-radius: inherit; }
+.cv-el:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 3px; }
+.cv-el.is-selected:not(.cv-t-flecha) { box-shadow: 0 0 0 1.5px var(--accent-soft); }
+.cv-placeholder { color: var(--faint); }
+
+/* Los tiradores y los puntos de donde salen las flechas. */
+.cv-handle { position: absolute; width: 11px; height: 11px; border-radius: 3px; border: 1.5px solid var(--accent-soft); background: var(--bg); z-index: 2; }
+.cv-h-nw { left: -6px; top: -6px; cursor: nwse-resize; }
+.cv-h-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
+.cv-h-ne { right: -6px; top: -6px; cursor: nesw-resize; }
+.cv-h-sw { left: -6px; bottom: -6px; cursor: nesw-resize; }
+.cv-port { position: absolute; width: 11px; height: 11px; border-radius: var(--r-full); border: 1.5px solid var(--accent-soft); background: var(--bg); opacity: 0; cursor: crosshair; z-index: 2; transition: opacity 120ms ease-out; }
+.cv-p-n { left: calc(50% - 5.5px); top: -18px; }
+.cv-p-s { left: calc(50% - 5.5px); bottom: -18px; }
+.cv-p-e { top: calc(50% - 5.5px); right: -18px; }
+.cv-p-o { top: calc(50% - 5.5px); left: -18px; }
+.cv-el.is-selected > .cv-port { opacity: 1; }
+.desk.is-armed, .desk.is-armed * { cursor: crosshair !important; }
+@media (hover: hover) {
+  .cv-el:hover > .cv-port { opacity: 1; }
+}
+.cv-t-marco > .cv-port, .cv-t-marco > .cv-handle { pointer-events: auto; }
+
+/* Texto y notas adhesivas. */
+.cv-t-texto > .cv-body { padding: 4px 6px; overflow: hidden; }
+/* Si un texto no cabe en su caja se puede desplazar, y nunca se corta sin más. */
+.cv-md.cv-scroll { height: 100%; }
+.cv-size-s { font-size: 12px; }
+.cv-size-m { font-size: 14px; }
+.cv-size-l { font-size: 18px; line-height: 1.35; }
+.cv-size-xl { font-size: 26px; font-family: var(--display); font-weight: 600; line-height: 1.25; letter-spacing: -0.01em; }
+.cv-align-centro { text-align: center; }
+.cv-align-der { text-align: right; }
+.cv-t-texto .cv-md { color: rgb(from var(--fg) r g b); }
+.cv-c-azul.cv-t-texto .cv-md, .cv-c-verde.cv-t-texto .cv-md, .cv-c-ambar.cv-t-texto .cv-md, .cv-c-rojo.cv-t-texto .cv-md, .cv-c-acento.cv-t-texto .cv-md { color: var(--el-line); }
+.cv-t-adhesiva { --el-fill: color-mix(in srgb, rgb(var(--el-rgb)) var(--el-tint-strong), var(--el-base)); border-radius: var(--r-xs); }
+.cv-t-adhesiva > .cv-body { padding: 12px; background: var(--el-fill); }
+.cv-md > :first-child { margin-top: 0; }
+.cv-md > :last-child { margin-bottom: 0; }
+.cv-md p { margin: 0 0 6px; }
+.cv-md ul, .cv-md ol { margin: 0 0 6px; padding-left: 18px; }
+.cv-md code { font-family: var(--mono); font-size: 0.92em; }
+.cv-md a { color: inherit; text-decoration: underline; }
+.cv-edit { min-height: 1.45em; outline: none; white-space: pre-wrap; word-break: break-word; cursor: text; }
+.cv-t-texto .cv-edit, .cv-t-adhesiva .cv-edit { height: 100%; }
+
+/* Figuras. */
+.cv-box { position: absolute; inset: 0; border: 1.5px solid var(--el-line); background: var(--el-fill); border-radius: 2px; }
+.cv-box-redondeado, .cv-box-servicio, .cv-box-cache, .cv-box-api { border-radius: var(--r-md); }
+.cv-box-externo { border-style: dashed; border-radius: var(--r-md); }
+.cv-shape { position: absolute; inset: 0; overflow: visible; }
+.cv-shape path { fill: var(--el-fill); stroke: var(--el-line); stroke-width: 1.5; }
+.cv-shape path.is-solid { fill: var(--el-line); }
+.cv-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 4px 8px; text-align: center; overflow: hidden; }
+.cv-label .cv-md, .cv-label .cv-edit { max-width: 100%; max-height: 100%; }
+.cv-mark { position: absolute; top: 5px; left: 6px; display: flex; color: var(--el-line); opacity: 0.85; }
+.cv-mark svg { width: 14px; height: 14px; }
+
+/* Marcos: el interior deja pasar el ratón, para llegar a lo que tienen dentro y al lienzo. */
+.cv-t-marco { pointer-events: none; border-radius: var(--r-lg); border: 1.5px solid color-mix(in srgb, var(--el-line) 60%, transparent); }
+.cv-t-marco > .cv-body { overflow: visible; }
+.cv-t-marco.is-selected { box-shadow: 0 0 0 1.5px var(--accent-soft); }
+.cv-frame-title { position: absolute; left: 12px; top: 8px; max-width: calc(100% - 24px); padding: 2px 6px; border-radius: var(--r-xs); font-family: var(--display); font-size: 14px; font-weight: 600; color: var(--fg); pointer-events: auto; cursor: grab; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-frame-title.is-empty { color: var(--faint); font-weight: 400; }
+.cv-layer-tag { position: absolute; padding: 2px 8px; border-radius: var(--r-xs); font-size: 12px; color: var(--accent-soft); white-space: nowrap; pointer-events: none; }
+
+/* Flechas. */
+.cv-t-flecha { pointer-events: none; }
+.cv-t-flecha[hidden] { display: none; }
+.cv-arrow-svg { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.cv-arrow-hit { fill: none; stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: pointer; }
+.cv-arrow-line { fill: none; stroke: var(--el-line); stroke-width: 1.5; }
+.cv-arrow-line.is-dashed { stroke-dasharray: 6 5; }
+.cv-arrow-heads path { fill: none; stroke: var(--el-line); stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.cv-arrow-heads path.is-fill { fill: var(--el-line); }
+.cv-t-flecha.is-selected .cv-arrow-line { stroke: var(--accent-soft); stroke-width: 2; }
+.cv-t-flecha.is-draft .cv-arrow-line { stroke: var(--accent-soft); stroke-dasharray: 4 4; }
+.cv-arrow-label { position: absolute; translate: -50% -50%; max-width: 220px; padding: 1px 6px; border-radius: var(--r-xs); background: var(--bg); font-size: 12px; pointer-events: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-end { position: absolute; translate: -50% -50%; width: 11px; height: 11px; border-radius: var(--r-full); border: 1.5px solid var(--accent-soft); background: var(--bg); pointer-events: auto; cursor: crosshair; }
+.cv-ghost, .cv-area { position: absolute; z-index: 200000; border: 1.5px dashed var(--accent-soft); background: var(--accent-wash); border-radius: var(--r-xs); pointer-events: none; }
+
+/* Fichas: tablas, tableros, código… Son tarjetas. */
+.cv-card { --el-base: var(--raised); border-radius: var(--r-md); border: 1px solid var(--line-strong); background: var(--raised); }
+.cv-card > .cv-body { display: flex; flex-direction: column; }
+.cv-card-head { flex-shrink: 0; display: flex; align-items: center; min-height: 34px; padding: 0 10px; border-bottom: 1px solid var(--line); cursor: grab; }
+.cv-card-title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-family: var(--display); font-size: 13px; font-weight: 600; }
+.cv-scroll { flex: 1; min-height: 0; overflow: hidden; }
+.cv-scroll.can-scroll { overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: rgba(var(--ink-rgb), 0.2) transparent; }
+
+/* Tabla tipo Excel. */
+.cv-table { width: max-content; min-width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 13px; }
+.cv-table th, .cv-table td { position: relative; height: 34px; max-height: 34px; padding: 0 8px; border: 1px solid var(--line); text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cv-table thead th { background: rgba(var(--ink-rgb), 0.05); font-weight: 600; font-size: 12px; cursor: grab; }
+.cv-table td { cursor: cell; }
+.cv-table td.is-num { text-align: right; font-variant-numeric: tabular-nums; }
+.cv-table td.is-error { color: var(--el-rojo, rgb(var(--el-rojo-rgb))); }
+.cv-table td.in-range { background: var(--accent-wash); }
+.cv-table td.is-active { outline: 2px solid var(--accent-soft); outline-offset: -2px; }
+.cv-table td:focus { outline: 2px solid var(--accent-soft); outline-offset: -2px; }
+/* Con la tabla seleccionada se ven los nombres de las celdas, para escribir fórmulas. */
+.is-selected .cv-table th::after { content: attr(data-letter); position: absolute; right: 12px; top: 2px; font-size: 11px; font-weight: 400; color: var(--faint); }
+.is-selected .cv-table td[data-n] { padding-left: 28px; }
+.is-selected .cv-table td[data-n]::before { content: attr(data-n); position: absolute; left: 6px; top: 8px; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+.cv-col-resize { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 1; }
+.cv-cell-input { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0 8px; border: none; outline: 2px solid var(--accent-soft); outline-offset: -2px; background: var(--raised); color: var(--fg); font: inherit; }
+.cv-cell-name { padding: 0 6px; font-family: var(--mono); font-size: 12px; color: var(--dim); }
+
+/* Tablero. */
+.cv-board { display: flex; gap: 8px; padding: 8px; }
+.cv-col { flex: 0 0 226px; display: flex; flex-direction: column; min-height: 0; padding: 6px; border-radius: var(--r-sm); background: rgba(var(--ink-rgb), 0.04); }
+.cv-col-head { flex-shrink: 0; display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 0 2px 6px 4px; font-size: 12px; font-weight: 600; }
+.cv-col-title { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cv-col-meta { margin-left: auto; flex-shrink: 0; font-weight: 400; color: var(--dim); font-variant-numeric: tabular-nums; }
+.cv-col.is-over .cv-col-meta { color: rgb(var(--el-rojo-rgb)); font-weight: 600; }
+.cv-col-add { flex-shrink: 0; width: 24px; height: 24px; border-radius: var(--r-xs); color: var(--dim); font-size: 15px; line-height: 1; }
+.cv-col-cards { display: flex; flex-direction: column; gap: 6px; min-height: 30px; }
+.cv-tcard { padding: 8px 10px; border-radius: var(--r-xs); border: 1px solid var(--line-strong); background: var(--bg); color: var(--fg); cursor: grab; outline: none; touch-action: none; }
+.cv-tcard.is-active { border-color: var(--accent-line); }
+.cv-tcard:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 1px; }
+.cv-tcard.is-dragging { position: relative; z-index: 5; opacity: 0.9; cursor: grabbing; }
+.cv-tcard-title { font-size: 13px; overflow-wrap: anywhere; }
+.cv-tcard-meta { margin-top: 3px; font-size: 11px; color: var(--dim); }
+.cv-tcard-form { display: flex; flex-direction: column; gap: 4px; }
+.cv-tcard-form input { width: 100%; height: 26px; padding: 0 6px; border-radius: var(--r-xs); border: 1px solid var(--line-strong); background: transparent; color: var(--fg); font: inherit; font-size: 12px; outline: none; }
+.cv-tcard-form input:focus { border-color: var(--accent-line); }
+
+/* Tabla relacional. Las medidas casan con ENTITY de canvas-geometry.js: las relaciones van a la
+   altura de su fila. */
+.cv-t-entidad .cv-card-head { height: 44px; background: var(--el-fill); border-bottom-color: var(--el-line); }
+.cv-ent-rows { flex: 1; min-height: 0; overflow: hidden; }
+.cv-ent-row { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; gap: 6px; height: 30px; padding: 0 10px 0 8px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.cv-ent-row:last-child { border-bottom: none; }
+.cv-ent-key { font: 600 11px var(--sans); color: var(--el-line); }
+.cv-ent-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cv-ent-type { font: 400 12px var(--mono); color: var(--dim); }
+
+/* Secuencia y línea de tiempo: se colocan solas (canvas-board.js). */
+.cv-t-secuencia > .cv-body, .cv-t-linea-tiempo > .cv-body { display: block; }
+.cv-seq-svg, .cv-time-svg { position: absolute; left: 0; top: 0; pointer-events: none; }
+.cv-seq-life { fill: none; stroke: var(--line-strong); stroke-dasharray: 3 4; }
+.cv-seq-msg { fill: none; stroke: var(--fg); stroke-width: 1.25; }
+.cv-seq-msg.is-dashed { stroke-dasharray: 5 4; }
+.cv-seq-head { fill: none; stroke: var(--fg); stroke-width: 1.25; }
+.cv-seq-head.is-fill { fill: var(--fg); }
+.cv-seq-actor { position: absolute; translate: -50% 0; min-width: 88px; padding: 7px 10px; border-radius: var(--r-xs); border: 1px solid var(--line-strong); background: var(--raised); font-size: 12px; font-weight: 600; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-sizing: border-box; }
+.cv-seq-text { position: absolute; padding: 0 4px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-seq-text.is-center { translate: -50% 0; background: var(--raised); }
+.cv-seq-text.is-left { translate: 0 -50%; }
+.cv-time-tick { stroke: var(--line); }
+.cv-time-link { fill: none; stroke: var(--dim); stroke-width: 1.25; }
+.cv-time-today { stroke: var(--accent-soft); stroke-width: 1.5; }
+.cv-time-mark { fill: var(--accent-soft); }
+.cv-time-date { position: absolute; translate: -2px 0; font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cv-time-milestone { position: absolute; max-width: 160px; font-size: 11px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-time-name { position: absolute; left: 10px; width: 160px; height: 36px; line-height: 36px; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cv-time-bar { position: absolute; height: 20px; overflow: hidden; border-radius: var(--r-xs); background: color-mix(in srgb, var(--accent-soft) 26%, var(--raised)); border: 1px solid var(--accent-line); box-sizing: border-box; }
+.cv-time-done { height: 100%; background: var(--accent-soft); opacity: 0.55; }
+
+/* Código, referencia e imagen. */
+.cv-code { flex: 1; margin: 0; padding: 10px 12px; font: 400 12.5px/1.5 var(--mono); white-space: pre; }
+.cv-code-edit { flex: 1; width: 100%; padding: 10px 12px; border: none; outline: none; resize: none; background: transparent; color: var(--fg); font: 400 12.5px/1.5 var(--mono); }
+.cv-t-referencia > .cv-body { display: flex; }
+.cv-ref { display: flex; align-items: center; gap: 8px; width: 100%; padding: 0 10px; border-radius: var(--r-md); border: 1px solid var(--line-strong); background: var(--bg); color: var(--fg); cursor: pointer; font-size: 13px; text-align: left; }
+.cv-ref-icon { display: flex; flex-shrink: 0; color: var(--accent-soft); }
+.cv-ref-text { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; text-decoration: underline; text-underline-offset: 2px; }
+.cv-ref-note { margin-left: auto; flex-shrink: 0; font-size: 11px; color: rgb(var(--el-rojo-rgb)); }
+.cv-ref.is-broken .cv-ref-text { text-decoration: line-through; color: var(--dim); }
+.cv-image { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cv-t-imagen > .cv-body { display: flex; align-items: center; justify-content: center; border-radius: var(--r-xs); }
+
+/* El menú «Añadir». */
+.cv-add-menu { width: 320px; max-height: min(620px, calc(100dvh - 90px)); overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+.cv-menu-item { display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 5px 8px; border-radius: var(--r-md); text-align: left; }
+.cv-menu-item:focus-visible, .cv-menu-form:focus-visible { outline-offset: -2px; }
+.cv-menu-icon { display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: var(--r-sm); border: 1px solid var(--line); background: rgba(var(--ink-rgb), 0.04); color: var(--dim); }
+.cv-menu-text { display: flex; flex-direction: column; min-width: 0; }
+.cv-menu-label { font-size: 13px; }
+.cv-menu-item small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 11px; color: var(--dim); }
+.cv-menu-item kbd { font: 400 11px var(--mono); color: var(--dim); }
+.cv-menu-strip { display: flex; flex-wrap: wrap; gap: 2px; padding: 4px 6px 8px; }
+.cv-menu-form { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--r-sm); color: var(--dim); }
+.cv-menu-layers { display: none; margin-top: 4px; border-top: 1px solid var(--line); border-radius: 0 0 var(--r-md) var(--r-md); }
+@media (hover: hover) {
+  .cv-menu-item:hover, .cv-menu-form:hover, .cv-col-add:hover { background: rgba(var(--ink-rgb), 0.08); color: var(--fg); }
+}
+
+/* «Capas». */
+.cv-layers-menu { width: 340px; right: 0; left: auto; }
+.cv-layers-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.cv-layer-row { display: flex; align-items: center; gap: 2px; min-height: 44px; padding: 4px 4px 4px 12px; border-radius: var(--r-md); }
+.cv-layer-info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cv-layer-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 13px; }
+.cv-layer-meta { font-size: 11px; color: var(--dim); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cv-layer-act { flex-shrink: 0; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: var(--r-sm); color: var(--dim); }
+.cv-layer-act:disabled { opacity: 0.35; }
+
+/* La barra de lo seleccionado flota sobre el hueco libre, a tamaño real aunque se aleje el zoom. */
+.cv-bar { position: fixed; z-index: 30; display: flex; align-items: center; gap: 2px; max-width: min(760px, 70vw); flex-wrap: wrap; padding: 4px; border-radius: var(--r-lg); border: 1px solid var(--line-strong); background: var(--menu); box-shadow: 0 8px 22px rgba(0, 0, 0, calc(0.4 * var(--shadow-k))); }
+.cv-bar[hidden] { display: none; }
+.cv-bar-btn { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--r-sm); color: var(--dim); transition-property: scale, background-color; transition-duration: 150ms; transition-timing-function: ease-out; }
+.cv-bar-btn[aria-pressed="true"] { color: var(--fg); background: rgba(var(--ink-rgb), 0.08); }
+.cv-bar-btn:active { scale: 0.96; }
+.cv-bar-select { height: 32px; max-width: 150px; padding: 0 6px; border-radius: var(--r-sm); border: 1px solid var(--line); background: transparent; color: var(--fg); font: inherit; font-size: 12px; }
+.cv-bar-sep { width: 1px; height: 20px; margin: 0 4px; background: var(--line-strong); }
+.cv-swatches { display: flex; gap: 3px; padding: 0 2px; }
+.cv-swatch { width: 22px; height: 22px; border-radius: var(--r-full); border: 1.5px solid rgb(var(--el-rgb)); background: color-mix(in srgb, rgb(var(--el-rgb)) 40%, transparent); }
+.cv-swatch[aria-pressed="true"] { outline: 2px solid var(--fg); outline-offset: 1px; }
+@media (hover: hover) {
+  .cv-bar-btn:hover, .cv-layer-act:not(:disabled):hover { background: rgba(var(--ink-rgb), 0.1); color: var(--fg); }
+}
+/* Lo que hay que decir sin interrumpir: se ve abajo y lo oye el lector de pantalla. */
+.cv-toast { position: fixed; z-index: 30; left: 50%; bottom: 22px; translate: -50% 0; max-width: min(560px, 60vw); padding: 8px 14px; border-radius: var(--r-md); border: 1px solid var(--line-strong); background: var(--menu); font-size: 13px; pointer-events: none; }
+.cv-toast[hidden] { display: none; }
+
+/* La ventana de editar. */
+.cv-editor { width: min(640px, calc(100vw - 48px)); }
+.cv-editor-body { display: flex; flex-direction: column; gap: 6px; }
+.cv-form-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.cv-form-input { flex: 1 1 120px; min-width: 0; height: 36px; padding: 0 10px; border-radius: var(--r-sm); border: 1px solid var(--line-strong); background: transparent; color: var(--fg); font: inherit; font-size: 13px; outline: none; }
+.cv-form-input:focus { border-color: var(--accent-line); }
+.cv-form-row .cv-bar-select { height: 36px; }
+.cv-form-check { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--dim); }
+.cv-form-remove { display: flex; align-items: center; justify-content: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: var(--r-sm); color: var(--dim); }
+.cv-form-add { align-self: flex-start; height: 32px; padding: 0 10px; border-radius: var(--r-sm); border: 1px dashed var(--line-strong); font-size: 12px; color: var(--dim); }
+.cv-form-title { margin: 12px 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--dim); }
+.cv-editor-foot { display: flex; justify-content: flex-end; padding: 12px 22px 18px; border-top: 1px solid var(--line); }
+.cv-editor-save { height: 40px; padding: 0 18px; border-radius: var(--r-md); background: var(--fg); color: var(--bg); font-size: 13px; font-weight: 500; }
+@media (prefers-reduced-motion: reduce) {
+  .cv-enter { animation: none; }
+  .cv-port { transition: none; }
+  .cv-bar-btn, .desk-tools-add, .desk-tool { transition-property: background-color; }
+  .cv-bar-btn:active, .desk-tools-add:active, .desk-tool:active { scale: none; }
 }
 
 /* ---------- Editor de notas por bloques (note-editor.js) ----------

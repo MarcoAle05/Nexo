@@ -1,7 +1,8 @@
 //! La orden de control de nexo (`nexo ctl …`), como `orca-ide` en Orca: con ella el agente de
 //! Nexo (la skill `nexo-orquestacion`) ve los workspaces, abre terminales, lanza Claude Code
 //! con un encargo, lee lo que hizo, espera a que acabe y mira cuánto gasta; y los hooks de las
-//! terminales cuentan lo que hace cada Claude (`nexo ctl hook`, ver `sesiones.rs`).
+//! terminales cuentan lo que hace cada Claude (`nexo ctl hook`, ver `sesiones.rs`). Con
+//! `nexo ctl lienzo …` dibuja en el lienzo de Notas (la skill `nexo-lienzo`, ver `lienzos.rs`).
 //!
 //! - nexo escucha en un socket Unix de su carpeta de ejecución (`terminales::run_dir`, 0700):
 //!   `ctl-<pid>.sock` y, apuntando al de la última apertura, `ctl.sock`. Las terminales llevan
@@ -18,8 +19,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use nexo_core::lienzo::almacen::Almacen;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::claude_code::{EFFORTS, PERMISSION_MODES, valid_model};
 use crate::sesiones::{Hook, SesionView};
@@ -41,6 +43,11 @@ pub(crate) trait Nexo: Send + Sync {
     /// Dónde dejar el archivo de `--agents` de una terminal nueva.
     fn agents_file(&self, root: &Path, slot: &str) -> PathBuf;
     fn hook(&self, hook: Hook);
+    /// La raíz del vault.
+    fn vault(&self) -> Result<PathBuf, String>;
+    fn lienzos(&self) -> &Almacen;
+    /// Lo que la interfaz tiene que saber del lienzo.
+    fn lienzo_aviso(&self, evento: &str, datos: Value);
 }
 
 fn ok(data: Value) -> Value {
@@ -385,6 +392,7 @@ pub(crate) fn handle(nexo: &dyn Nexo, req: &Value) -> Value {
             nexo.close(id)?;
             Ok(json!({ "terminal": id, "cerrada": true }))
         }
+        "lienzo" => crate::lienzos::orden(nexo, req),
         "hook" => {
             let h: Hook = serde_json::from_value(req["hook"].clone()).map_err(|e| e.to_string())?;
             nexo.hook(h);
@@ -495,6 +503,15 @@ impl Nexo for AppNexo {
     fn hook(&self, hook: Hook) {
         crate::sesiones::hook(&self.0, hook);
     }
+    fn vault(&self) -> Result<PathBuf, String> {
+        crate::vault::vault_root(&self.0)
+    }
+    fn lienzos(&self) -> &Almacen {
+        self.0.state::<Almacen>().inner()
+    }
+    fn lienzo_aviso(&self, evento: &str, datos: Value) {
+        let _ = self.0.emit(evento, datos);
+    }
 }
 
 fn serve(nexo: Arc<dyn Nexo>, stream: UnixStream) {
@@ -572,8 +589,18 @@ const HELP: &str = "nexo ctl: habla con el nexo abierto.
   nexo ctl gasto [workspace]
   nexo ctl cerrar <terminal>
 
+  nexo ctl lienzo estado
+  nexo ctl lienzo capa-nueva \"nombre\"
+  nexo ctl lienzo capa-terminar <capa>
+  nexo ctl lienzo zona --ancho N --alto N [--cerca-de <id>] [--capa <capa>]
+  nexo ctl lienzo aplicar <capa> ['<json>' | -] [--del-usuario]
+  nexo ctl lienzo diagrama <capa> ['<json>' | -]
+  nexo ctl lienzo leer [--capa <capa>] [--desde <rev>] [--texto]
+  nexo ctl lienzo ordenar <fila|rejilla|flujo> [--capa <capa>] [--ids a,b] [--notas]
+  nexo ctl lienzo ir-a <id o capa>
+
 El workspace va por su nombre (o su ruta); la terminal, por su número. La respuesta es JSON.
-Con «-» el encargo se lee de la entrada.";
+Con «-» el encargo o el lote se leen de la entrada.";
 
 /// Convierte los argumentos en una petición. `stdin` da el encargo con «-».
 pub(crate) fn request_of(args: &[String], stdin: impl FnOnce() -> String) -> Result<Value, String> {
@@ -584,14 +611,14 @@ pub(crate) fn request_of(args: &[String], stdin: impl FnOnce() -> String) -> Res
     while i < rest.len() {
         let a = rest[i].as_str();
         if let Some(name) = a.strip_prefix("--") {
-            if name == "enter" {
-                flags.insert("enter".into(), true.into());
+            if ["enter", "texto", "notas", "del-usuario"].contains(&name) {
+                flags.insert(name.into(), true.into());
             } else {
                 let value = rest
                     .get(i + 1)
                     .ok_or_else(|| format!("Falta el valor de --{name}."))?;
                 let value = match name {
-                    "lineas" | "max" => json!(
+                    "lineas" | "max" | "desde" | "ancho" | "alto" => json!(
                         value
                             .parse::<u64>()
                             .map_err(|_| format!("--{name} es un número."))?
@@ -646,6 +673,47 @@ pub(crate) fn request_of(args: &[String], stdin: impl FnOnce() -> String) -> Res
         "leer" | "esperar" | "cerrar" => {
             need(1, "la terminal")?;
             req["terminal"] = json!(positional[0]);
+        }
+        "lienzo" => {
+            need(1, "la orden del lienzo")?;
+            let sub = positional[0];
+            req["sub"] = json!(sub);
+            match sub {
+                "capa-nueva" => {
+                    need(2, "el nombre de la capa")?;
+                    req["nombre"] = json!(positional[1]);
+                }
+                "capa-terminar" => {
+                    need(2, "la capa")?;
+                    req["capa"] = json!(positional[1]);
+                }
+                "aplicar" | "diagrama" => {
+                    need(3, "la capa y el JSON")?;
+                    req["capa"] = json!(positional[1]);
+                    let crudo = if positional[2] == "-" {
+                        stdin()
+                    } else {
+                        positional[2].to_string()
+                    };
+                    let v: Value = serde_json::from_str(&crudo).map_err(|e| {
+                        format!(
+                            "El JSON no es válido: {e}. Va como un argumento entre comillas simples; un apóstrofo dentro del texto se escribe \\u0027."
+                        )
+                    })?;
+                    let clave = if sub == "aplicar" { "ops" } else { "diagrama" };
+                    req[clave] = v;
+                }
+                "ordenar" => {
+                    if let Some(modo) = positional.get(1) {
+                        req["modo"] = json!(modo);
+                    }
+                }
+                "ir-a" => {
+                    need(2, "a qué elemento o capa ir")?;
+                    req["id"] = json!(positional[1]);
+                }
+                _ => {}
+            }
         }
         "workspaces" => {}
         "ayuda" | "help" | "-h" | "--help" => return Err(HELP.into()),
@@ -762,6 +830,10 @@ mod tests {
         opened: Mutex<Vec<Launch>>,
         hooks: Mutex<Vec<Hook>>,
         closed: Mutex<Vec<u64>>,
+        // El lienzo va con el motor de verdad, en una carpeta temporal.
+        raiz: Mutex<Option<PathBuf>>,
+        almacen: Almacen,
+        avisos: Mutex<Vec<(String, Value)>>,
     }
 
     fn term(id: u64, path: &str, claude: Option<SesionView>) -> TermInfo {
@@ -839,6 +911,22 @@ mod tests {
         }
         fn hook(&self, hook: Hook) {
             self.hooks.lock().unwrap().push(hook);
+        }
+        fn vault(&self) -> Result<PathBuf, String> {
+            self.raiz
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or_else(|| "Primero elige un vault.".to_string())
+        }
+        fn lienzos(&self) -> &Almacen {
+            &self.almacen
+        }
+        fn lienzo_aviso(&self, evento: &str, datos: Value) {
+            self.avisos
+                .lock()
+                .unwrap()
+                .push((evento.to_string(), datos));
         }
     }
 
@@ -1073,6 +1161,225 @@ mod tests {
         .unwrap();
         assert_eq!(r["ok"], false);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn con_vault(nombre: &str) -> (Falso, PathBuf) {
+        let raiz = std::env::temp_dir().join(format!(
+            "nexo-control-lienzo-{nombre}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&raiz);
+        std::fs::create_dir_all(raiz.join(".nexo")).unwrap();
+        let nexo = Falso::default();
+        *nexo.raiz.lock().unwrap() = Some(raiz.clone());
+        (nexo, raiz)
+    }
+
+    fn lienzo(nexo: &Falso, sub: &str, mut extra: Value) -> Value {
+        extra["cmd"] = json!("lienzo");
+        extra["sub"] = json!(sub);
+        call(nexo, extra)
+    }
+
+    #[test]
+    fn el_agente_dibuja_en_su_capa_y_la_interfaz_se_entera() {
+        let (nexo, raiz) = con_vault("dibuja");
+        let r = lienzo(&nexo, "capa-nueva", json!({ "nombre": "RAG del grafo" }));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["data"]["escritorio"], "principal");
+        let capa = r["data"]["capa"].as_str().unwrap().to_string();
+
+        let r = lienzo(
+            &nexo,
+            "aplicar",
+            json!({ "capa": capa, "ops": [
+                { "op": "crear", "ref": "a", "tipo": "figura", "x": 0, "y": 0, "datos": { "texto": "Chat" } },
+                { "op": "crear", "ref": "b", "tipo": "figura", "x": 300, "y": 0, "datos": { "texto": "Motor" } },
+                { "op": "crear", "tipo": "flecha", "datos": { "desde": { "id": "a" }, "hasta": { "id": "b" } } },
+            ] }),
+        );
+        assert_eq!(r["data"]["aplicadas"], 3, "{r}");
+        assert_eq!(r["data"]["hechas"][0]["ref"], "a");
+        // Al agente no le llega lo que se repinta ni cómo deshacerlo: no le sirve y gasta.
+        assert!(r["data"].get("cambios").is_none() && r["data"].get("inversas").is_none());
+
+        let avisos = nexo.avisos.lock().unwrap().clone();
+        let (evento, datos) = avisos.last().unwrap();
+        assert_eq!(evento, "canvas-changed");
+        assert_eq!(datos["escritorio"], "principal");
+        assert_eq!(datos["cambios"]["poner"].as_array().unwrap().len(), 3);
+        assert!(
+            datos["deshacer"].is_null(),
+            "lo suyo no entra en el Ctrl+Z del usuario"
+        );
+
+        // Lee con pocas palabras, y se guarda como un lienzo normal.
+        let r = lienzo(&nexo, "leer", json!({ "texto": true }));
+        assert!(
+            r["data"]["texto"]
+                .as_str()
+                .unwrap()
+                .contains("figura/rectangulo «Chat»"),
+            "{r}"
+        );
+        let r = lienzo(&nexo, "capa-terminar", json!({ "capa": capa }));
+        assert_eq!(r["data"]["estado"], "terminada");
+        nexo.almacen.guardar();
+        assert!(raiz.join(".nexo/lienzos/principal.json").exists());
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn lo_que_cambia_el_usuario_le_llega_al_agente_en_la_siguiente_respuesta() {
+        let (nexo, raiz) = con_vault("usuario");
+        let capa = lienzo(&nexo, "capa-nueva", json!({ "nombre": "Plan" }))["data"]["capa"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let r = lienzo(
+            &nexo,
+            "aplicar",
+            json!({ "capa": capa, "ops": [{ "op": "crear", "tipo": "figura", "x": 0, "y": 0 }] }),
+        );
+        let id = r["data"]["hechas"][0]["id"].as_str().unwrap().to_string();
+        // El usuario la mueve desde la interfaz (otro camino, el mismo motor).
+        nexo.almacen
+            .con(&raiz, "principal", |l| {
+                l.aplicar(
+                    nexo_core::lienzo::Quien::Usuario,
+                    &[json!({ "op": "cambiar", "id": id, "x": 500 })],
+                    0,
+                )
+            })
+            .unwrap();
+        let r = lienzo(
+            &nexo,
+            "aplicar",
+            json!({ "capa": capa, "ops": [{ "op": "cambiar", "id": id, "x": 900 }] }),
+        );
+        assert_eq!(r["data"]["aplicadas"], 0);
+        assert_eq!(r["data"]["usuario_cambio"][0]["id"], json!(id));
+        assert_eq!(r["data"]["omitidas"][0]["actual"]["x"], 500.0);
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn ordenar_entra_en_el_deshacer_del_usuario_y_pasa_las_cartas_a_la_interfaz() {
+        let (nexo, raiz) = con_vault("ordenar");
+        std::fs::write(
+            raiz.join(".nexo/escritorio.json"),
+            r#"{ "cards": [{ "path": "a.md", "x": 0, "y": 900, "w": 380, "h": 440 }] }"#,
+        )
+        .unwrap();
+        nexo.almacen
+            .con(&raiz, "principal", |l| {
+                l.aplicar(
+                    nexo_core::lienzo::Quien::Usuario,
+                    &[json!({ "op": "crear", "tipo": "figura", "x": 700, "y": 40 })],
+                    0,
+                )
+            })
+            .unwrap();
+        let r = lienzo(&nexo, "ordenar", json!({ "modo": "fila", "notas": true }));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(r["data"]["notas_movidas"], 1);
+        let avisos = nexo.avisos.lock().unwrap().clone();
+        let (_, datos) = avisos.last().unwrap();
+        assert!(!datos["deshacer"].as_array().unwrap().is_empty());
+        assert_eq!(datos["cartas"][0]["path"], "a.md");
+        let r = lienzo(&nexo, "ordenar", json!({ "modo": "en-circulo" }));
+        assert_eq!(r["ok"], false);
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn la_orden_del_lienzo_dice_lo_que_falta() {
+        let (nexo, raiz) = con_vault("errores");
+        for (sub, extra, dice) in [
+            ("capa-nueva", json!({}), "nombre"),
+            ("capa-terminar", json!({}), "capa"),
+            (
+                "aplicar",
+                json!({ "capa": "no-existe", "ops": [] }),
+                "ya no existe",
+            ),
+            ("zona", json!({ "ancho": 100 }), "--alto"),
+            ("ir-a", json!({ "id": "e999" }), "ya no existe"),
+            ("volar", json!({}), "no tiene la orden"),
+        ] {
+            let r = lienzo(&nexo, sub, extra);
+            assert_eq!(r["ok"], false, "{sub}");
+            assert!(r["error"].as_str().unwrap().contains(dice), "{sub}: {r}");
+        }
+        // Sin vault no hay lienzo.
+        *nexo.raiz.lock().unwrap() = None;
+        assert!(
+            lienzo(&nexo, "estado", json!({}))["error"]
+                .as_str()
+                .unwrap()
+                .contains("vault")
+        );
+        let _ = std::fs::remove_dir_all(&raiz);
+    }
+
+    #[test]
+    fn el_lote_va_como_argumento_o_por_la_entrada() {
+        let args = |a: &[&str]| a.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let r = request_of(
+            &args(&[
+                "lienzo",
+                "aplicar",
+                "c1",
+                r#"[{"op":"borrar","id":"e1"}]"#,
+                "--del-usuario",
+            ]),
+            || unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(
+            r,
+            json!({ "cmd": "lienzo", "sub": "aplicar", "capa": "c1", "ops": [{ "op": "borrar", "id": "e1" }], "del-usuario": true })
+        );
+        let r = request_of(&args(&["lienzo", "diagrama", "c1", "-"]), || {
+            r#"{"nodos":[]}"#.into()
+        })
+        .unwrap();
+        assert_eq!(r["diagrama"], json!({ "nodos": [] }));
+        // Un apóstrofo escrito como pide la skill llega bien.
+        let r = request_of(
+            &args(&["lienzo", "aplicar", "c1", r#"[{"texto":"d\u0027e"}]"#]),
+            || unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(r["ops"][0]["texto"], "d'e");
+        let e = request_of(&args(&["lienzo", "aplicar", "c1", "{ roto"]), String::new).unwrap_err();
+        assert!(e.contains("comillas simples"), "{e}");
+        let r = request_of(
+            &args(&[
+                "lienzo",
+                "zona",
+                "--ancho",
+                "800",
+                "--alto",
+                "400",
+                "--cerca-de",
+                "e1",
+            ]),
+            String::new,
+        )
+        .unwrap();
+        assert_eq!(r["ancho"], 800);
+        assert_eq!(r["cerca-de"], "e1");
+        let r = request_of(
+            &args(&["lienzo", "leer", "--texto", "--desde", "12"]),
+            String::new,
+        )
+        .unwrap();
+        assert_eq!(
+            (r["texto"].clone(), r["desde"].clone()),
+            (json!(true), json!(12))
+        );
+        assert!(request_of(&args(&["lienzo"]), String::new).is_err());
     }
 
     #[test]

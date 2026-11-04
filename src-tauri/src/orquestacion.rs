@@ -65,12 +65,12 @@ El workspace va por su nombre (el de `workspaces`); la terminal, por su número 
 - `gasto` da los tokens, el coste y la parte de la sesión de 5 h de cada agente; resúmelo en una tabla corta.
 "#;
 
-fn skill_path(root: &Path) -> PathBuf {
-    root.join(".claude/skills").join(NAME).join("SKILL.md")
+fn skill_path(root: &Path, name: &str) -> PathBuf {
+    root.join(".claude/skills").join(name).join("SKILL.md")
 }
 
 /// El ejecutable de nexo como se escribe en una orden: entre comillas solo si hace falta.
-fn command_of(exe: &Path) -> String {
+pub(crate) fn command_of(exe: &Path) -> String {
     let text = exe.to_string_lossy();
     if text
         .chars()
@@ -89,8 +89,13 @@ pub(crate) fn text(exe: &Path) -> String {
 
 /// Deja la skill en el vault: si falta o si es una versión anterior suya. Devuelve si escribió.
 pub fn install(root: &Path, exe: &Path) -> std::io::Result<bool> {
-    let path = skill_path(root);
-    let want = text(exe);
+    write_managed(root, NAME, &text(exe))
+}
+
+/// Una skill que mantiene nexo (la de los workspaces y la del lienzo): se escribe si falta o si es
+/// una versión anterior suya. Sin la marca es del usuario y no se toca.
+pub(crate) fn write_managed(root: &Path, name: &str, want: &str) -> std::io::Result<bool> {
+    let path = skill_path(root, name);
     match fs::read_to_string(&path) {
         Ok(current) if current == want || !current.contains(MARK) => return Ok(false),
         _ => {}
@@ -119,7 +124,7 @@ mod tests {
         let root = temp("instalar");
         let exe = Path::new("/home/ana/.local/bin/nexo");
         assert!(install(&root, exe).unwrap());
-        let written = fs::read_to_string(skill_path(&root)).unwrap();
+        let written = fs::read_to_string(skill_path(&root, NAME)).unwrap();
         assert!(written.starts_with("---\nname: nexo-orquestacion\n"));
         assert!(written.contains("/home/ana/.local/bin/nexo ctl claude <workspace>"));
         assert!(!written.contains("{nexo}"));
@@ -127,19 +132,19 @@ mod tests {
         // Otra ruta del ejecutable: se pone al día.
         assert!(install(&root, Path::new("/opt/nexo bin/nexo")).unwrap());
         assert!(
-            fs::read_to_string(skill_path(&root))
+            fs::read_to_string(skill_path(&root, NAME))
                 .unwrap()
                 .contains("'/opt/nexo bin/nexo' ctl workspaces")
         );
         // Sin la marca es del usuario.
         fs::write(
-            skill_path(&root),
+            skill_path(&root, NAME),
             "---\nname: nexo-orquestacion\n---\nMía\n",
         )
         .unwrap();
         assert!(!install(&root, exe).unwrap());
         assert!(
-            fs::read_to_string(skill_path(&root))
+            fs::read_to_string(skill_path(&root, NAME))
                 .unwrap()
                 .contains("Mía")
         );

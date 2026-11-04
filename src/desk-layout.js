@@ -8,13 +8,14 @@ const overlaps = (a, b, gap) => a.x < b.x + b.w + gap && a.x + a.w + gap > b.x &
 // a su altura y con su tamaño, para que queden en fila y en orden. Si ese sitio lo ocupa
 // otra carta, sigue hacia la derecha hasta el primer hueco. Sin `anchor` (o si ya no está),
 // la referencia es la carta que más a la derecha llega. Sin cartas, en `home`.
-export function nextSpot(cards, { anchor = null, home, size, gap = 16 } = {}) {
-  if (!cards.length) return { x: home.x, y: home.y, w: size.w, h: size.h };
-  const base = cards.find((c) => c.path === anchor) ?? cards.reduce((best, c) => (c.x + c.w > best.x + best.w ? c : best));
-  const spot = { x: base.x + base.w + gap, y: base.y, w: base.w, h: base.h };
-  // Cada vuelta salta por encima de todo lo que pisa: como mucho, una por carta.
-  for (let guard = 0; guard <= cards.length; guard++) {
-    const hits = cards.filter((c) => overlaps(spot, c, gap));
+// `obstacles`: lo demás que hay en el lienzo (los elementos): tampoco se abre encima de eso.
+export function nextSpot(cards, { anchor = null, home, size, gap = 16, obstacles = [] } = {}) {
+  const base = cards.find((c) => c.path === anchor) ?? (cards.length ? cards.reduce((best, c) => (c.x + c.w > best.x + best.w ? c : best)) : null);
+  const spot = base ? { x: base.x + base.w + gap, y: base.y, w: base.w, h: base.h } : { x: home.x, y: home.y, w: size.w, h: size.h };
+  const all = [...cards, ...obstacles];
+  // Cada vuelta salta por encima de todo lo que pisa: como mucho, una por pieza.
+  for (let guard = 0; guard <= all.length; guard++) {
+    const hits = all.filter((c) => overlaps(spot, c, gap));
     if (!hits.length) break;
     spot.x = Math.max(...hits.map((c) => c.x + c.w)) + gap;
   }
