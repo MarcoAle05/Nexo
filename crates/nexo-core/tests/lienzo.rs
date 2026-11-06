@@ -483,6 +483,79 @@ fn rect_de(e: &nexo_core::lienzo::Elemento) -> Rect {
     }
 }
 
+#[test]
+fn lo_enviado_al_fondo_y_los_marcos_van_detras_de_las_notas_y_lo_nuevo_delante() {
+    let mut l = Lienzo::default();
+    let r = l.aplicar(
+        Quien::Usuario,
+        &[
+            json!({ "op": "crear", "tipo": "marco", "x": 0, "y": 0, "w": 600, "h": 400 }),
+            caja("A"),
+            caja("B"),
+        ],
+        AHORA,
+    );
+    let id = |i: usize| r.hechas[i]["id"].as_str().unwrap().to_string();
+    let z = |l: &Lienzo, i: usize| l.elemento(&id(i)).unwrap().z;
+    assert!(z(&l, 0) <= 0, "el marco, detrás de las notas");
+    assert!(
+        z(&l, 1) >= 1 && z(&l, 2) > z(&l, 1),
+        "lo nuevo, delante y encima de lo anterior"
+    );
+    l.aplicar(
+        Quien::Usuario,
+        &[json!({ "op": "apilar", "id": id(2), "a": "fondo" })],
+        AHORA,
+    );
+    assert!(
+        z(&l, 2) < z(&l, 0) && z(&l, 2) <= 0,
+        "al fondo: detrás de todo, también de las notas"
+    );
+    l.aplicar(
+        Quien::Usuario,
+        &[json!({ "op": "apilar", "id": id(2), "a": "frente" })],
+        AHORA,
+    );
+    assert!(z(&l, 2) > z(&l, 1));
+    // Con solo un marco en la capa, lo siguiente sigue naciendo delante de las notas.
+    let mut solo = Lienzo::default();
+    solo.aplicar(
+        Quien::Usuario,
+        &[json!({ "op": "crear", "tipo": "marco", "x": 0, "y": 0 })],
+        AHORA,
+    );
+    let r = solo.aplicar(Quien::Usuario, &[caja("C")], AHORA);
+    assert_eq!(
+        solo.elemento(r.hechas[0]["id"].as_str().unwrap())
+            .unwrap()
+            .z,
+        1
+    );
+}
+
+#[test]
+fn integrar_una_capa_conserva_lo_que_iba_detras_de_las_notas() {
+    let mut l = Lienzo::default();
+    l.aplicar(Quien::Usuario, &[caja("Mía")], AHORA);
+    let capa = l.nueva_capa("Plan", AHORA).id;
+    let r = l.aplicar(
+        agente(&capa),
+        &[
+            json!({ "op": "crear", "tipo": "marco", "x": 900, "y": 0 }),
+            json!({ "op": "crear", "tipo": "figura", "x": 950, "y": 50 }),
+        ],
+        AHORA,
+    );
+    l.aplicar(
+        Quien::Usuario,
+        &[json!({ "op": "capa-integrar", "capa": capa })],
+        AHORA,
+    );
+    let z = |i: usize| l.elemento(r.hechas[i]["id"].as_str().unwrap()).unwrap().z;
+    assert!(z(0) <= 0);
+    assert!(z(1) > 1, "por encima de lo del usuario");
+}
+
 // ------------------------------------------------------------ deshacer
 
 fn sin_rev(l: &Lienzo) -> (Vec<Value>, Vec<Value>) {

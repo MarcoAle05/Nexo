@@ -16,6 +16,13 @@
 // una a otra. Para eso hay una selección de líneas enteras: Ctrl+A (toda la nota) o arrastrar
 // el ratón de una línea a otra. Lo seleccionado se copia y se corta como Markdown, se borra
 // con Supr y se sustituye al escribir o pegar.
+//
+// Una tabla se edita como una tabla, no como su Markdown: cada celda es un campo, con su
+// Markdown a la vista mientras tiene el foco y con formato si no, y debajo hay botones para
+// añadir y quitar filas y columnas (el modelo, sin DOM, está en `note-table.js`).
+
+import { parseTSV } from './canvas-table.js';
+import { addCol, addRow, alignOf, cellOf, colCount, parseTable, pasteGrid, removeCol, removeRow, serializeTable, setCell } from './note-table.js';
 
 // ------------------------------------------------------------------ Markdown ↔ bloques
 
@@ -405,6 +412,17 @@ const PLACEHOLDER = {
   table: 'Tabla',
 };
 const PLUS = svg('<path d="M10 5v10M5 10h10" stroke-width="1.7"/>');
+const TRASH = svg('<path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10"/>');
+
+// Los botones de debajo de una tabla. Actúan sobre la celda con el cursor (sin ella, sobre el
+// final de la tabla).
+const GRID_ACTIONS = [
+  { act: 'row', label: 'Añadir fila', title: 'Añade una fila debajo de la del cursor (también Intro o Tab al final de la tabla)' },
+  { act: 'col', label: 'Añadir columna', title: 'Añade una columna a la derecha de la del cursor, empezando por su nombre' },
+  { act: 'row-', label: 'Quitar fila', title: 'Quita la fila del cursor' },
+  { act: 'col-', label: 'Quitar columna', title: 'Quita la columna del cursor' },
+  { act: 'del', icon: TRASH, title: 'Borrar la tabla' },
+];
 
 const depthOf = (indent) => {
   let depth = 0;
@@ -621,7 +639,18 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
   // Formato en línea si la línea no tiene el foco; Markdown tal cual si lo tiene.
   function showView(b, el = textOf(b)) {
     if (!el || b.type === 'hr') return;
-    const rich = b.type === 'table' ? Boolean(b.text.trim()) : RICH.test(b.text);
+    if (b.type === 'table') {
+      b.grid = parseTable(b.text);
+      if (b.grid) {
+        el.dataset.mode = 'grid';
+        el.removeAttribute('data-rich');
+        el.removeAttribute('contenteditable');
+        el.removeAttribute('tabindex');
+        el.classList.remove('ne-empty');
+        return buildGrid(b, el);
+      }
+    }
+    const rich =b.type === 'table' ? Boolean(b.text.trim()) : RICH.test(b.text);
     el.dataset.mode = 'view';
     el.classList.toggle('ne-empty', !b.text);
     if (!rich) {
@@ -652,6 +681,327 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
       el.removeAttribute('tabindex');
     }
     if (MULTILINE.has(b.type) && b.text.endsWith('\n') && el.lastChild?.nodeName !== 'BR') el.append(document.createElement('br'));
+  }
+
+  // ---------- tablas
+  //
+  // Cada celda es su propio campo: Intro baja a la de abajo (en la última fila abre otra; si
+  // esa última fila está vacía, sale de la tabla, como al acabar una lista), Tab pasa a la
+  // siguiente (al final abre una fila), las flechas cruzan de celda en celda y salen por los
+  // bordes, y Mayús+Intro sale. Lo que no es una tabla bien formada (sin la línea de guiones)
+  // se sigue editando como texto. `b.grid` es el modelo; cada cambio vuelve a escribir `b.text`.
+
+  const isGrid = (b) => Boolean(b?.grid) && textOf(b)?.dataset.mode === 'grid';
+  const cellAt = (b, r, c) => textOf(b)?.querySelector(`.ne-cell[data-r="${r}"][data-c="${c}"]`) ?? null;
+  const posOf = (cell) => ({ r: Number(cell.dataset.r), c: Number(cell.dataset.c) });
+
+  function activeCell(b) {
+    const cell = document.activeElement?.closest?.('.ne-cell');
+    return cell && textOf(b)?.contains(cell) ? posOf(cell) : null;
+  }
+
+  // Igual que una línea: con formato si no tiene el foco, y su Markdown si lo tiene.
+  function cellView(cell, text) {
+    cell.dataset.mode = 'view';
+    cell.classList.toggle('ne-empty', !text);
+    if (RICH.test(text)) {
+      cell.dataset.rich = '1';
+      cell.contentEditable = 'false';
+      cell.tabIndex = 0;
+      cell.replaceChildren();
+      inline(text, 0, cell, false);
+    } else {
+      cell.removeAttribute('data-rich');
+      cell.contentEditable = 'plaintext-only';
+      cell.removeAttribute('tabindex');
+      if (cell.childElementCount || cell.textContent !== text) cell.textContent = text;
+    }
+  }
+
+  function cellRaw(cell, text) {
+    if (cell.dataset.mode === 'raw') return;
+    cell.dataset.mode = 'raw';
+    if (cell.dataset.rich) {
+      cell.textContent = text;
+      cell.contentEditable = 'plaintext-only';
+      cell.removeAttribute('tabindex');
+    }
+  }
+
+  function buildGrid(b, el) {
+    const t = b.grid;
+    const cols = colCount(t);
+    const table = document.createElement('table');
+    table.className = 'ne-grid';
+    const head = document.createElement('thead');
+    const body = document.createElement('tbody');
+    t.rows.forEach((_, r) => {
+      const tr = document.createElement('tr');
+      for (let c = 0; c < cols; c++) {
+        const td = document.createElement(r === 0 ? 'th' : 'td');
+        const align = alignOf(t, c);
+        if (align) td.style.textAlign = align;
+        const cell = document.createElement('div');
+        cell.className = 'ne-cell';
+        cell.dataset.r = String(r);
+        cell.dataset.c = String(c);
+        cell.spellcheck = true;
+        cell.setAttribute('aria-label', r === 0 ? `Cabecera, columna ${c + 1}` : `Fila ${r}, columna ${c + 1}`);
+        cellView(cell, cellOf(t, r, c));
+        td.append(cell);
+        tr.append(td);
+      }
+      (r === 0 ? head : body).append(tr);
+    });
+    table.append(head, body);
+    const scroll = document.createElement('div');
+    scroll.className = 'ne-grid-scroll';
+    scroll.append(table);
+    const bar = document.createElement('div');
+    bar.className = 'ne-grid-bar';
+    for (const a of GRID_ACTIONS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = a.icon ? 'ne-grid-btn ne-grid-del' : 'ne-grid-btn';
+      btn.tabIndex = -1;
+      btn.dataset.act = a.act;
+      btn.title = a.title;
+      if (a.icon) {
+        btn.innerHTML = a.icon;
+        btn.setAttribute('aria-label', a.title);
+      } else btn.textContent = a.label;
+      btn.addEventListener('mousedown', (e) => e.preventDefault()); // el foco sigue en la celda
+      btn.addEventListener('click', () => gridAction(b, a.act));
+      bar.append(btn);
+    }
+    el.replaceChildren(scroll, bar);
+    syncBar(b, null, el);
+  }
+
+  // «Quitar fila» no vale en la cabecera ni sin filas; «Quitar columna», con una sola. Van con
+  // `aria-disabled` y no `disabled`: pulsar un botón desactivado le quitaría el foco a la celda.
+  function syncBar(b, at = activeCell(b), el = textOf(b)) {
+    const bar = el?.querySelector('.ne-grid-bar');
+    if (!bar || !b.grid) return;
+    const off = (act, yes) => bar.querySelector(`[data-act="${act}"]`)?.setAttribute('aria-disabled', String(yes));
+    off('row-', b.grid.rows.length < 2 || at?.r === 0);
+    off('col-', colCount(b.grid) < 2);
+  }
+
+  function focusCell(b, r, c, offset = 'end') {
+    const t = b.grid;
+    if (!t) return;
+    r = Math.max(0, Math.min(r, t.rows.length - 1));
+    c = Math.max(0, Math.min(c, colCount(t) - 1));
+    const cell = cellAt(b, r, c);
+    if (!cell) return;
+    const text = cellOf(t, r, c);
+    cellRaw(cell, text);
+    cell.focus({ preventScroll: true });
+    if (offset === 'all') {
+      const range = document.createRange();
+      range.selectNodeContents(cell);
+      const sel = getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else setCaret(cell, offset === 'end' ? text.length : Math.max(0, Math.min(offset, text.length)));
+    cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  // La columna que queda a la altura horizontal `x` en la fila `r`.
+  function columnAtX(b, r, x) {
+    const cols = colCount(b.grid);
+    for (let c = 0; c < cols; c++) {
+      const rect = cellAt(b, r, c)?.parentElement.getBoundingClientRect();
+      if (rect && x < rect.right) return c;
+    }
+    return cols - 1;
+  }
+
+  function focusCellAtX(b, r, c, x, fromBelow) {
+    const cell = cellAt(b, r, c);
+    if (!cell) return;
+    const text = cellOf(b.grid, r, c);
+    cellRaw(cell, text);
+    cell.focus({ preventScroll: true });
+    caretAtX(cell, x, fromBelow, text.length);
+    cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+
+  // Vuelve a pintar la tabla tras cambiar su forma y deja el cursor en la celda `r`, `c`.
+  function regrid(b, r, c, offset) {
+    b.text = serializeTable(b.grid);
+    b.raw = null;
+    rows.get(b.id)?.replaceWith(row(b, indexOf(b)));
+    focusCell(b, r, c, offset);
+    changed();
+  }
+
+  // Sale de la tabla a la línea de debajo (la que haya si está vacía, o una nueva).
+  function leaveTable(b, undoable = true) {
+    if (undoable) snapshot();
+    let next = nextOf(b);
+    if (!next || next.type !== 'p' || next.text) {
+      next = makeBlock('p');
+      insertAfter(b, next);
+    }
+    syncGhost();
+    focusBlock(next, 0);
+    changed();
+  }
+
+  function gridAction(b, act) {
+    const t = b.grid;
+    if (!t || !blocks.includes(b)) return;
+    const at = activeCell(b);
+    const last = t.rows.length - 1;
+    const cols = colCount(t);
+    if (act === 'row-' && (t.rows.length < 2 || at?.r === 0)) return;
+    if (act === 'col-' && cols < 2) return;
+    snapshot();
+    if (act === 'del') {
+      const target = nextOf(b) ?? prevOf(b);
+      remove(b);
+      syncGhost();
+      refreshNumbers();
+      focusBlock(target && blocks.includes(target) ? target : blocks.at(-1), 0);
+      return changed();
+    }
+    // Una fila nueva se rellena desde su primera celda; una columna, empezando por su nombre.
+    if (act === 'row') return regrid(b, addRow(t, at ? at.r : last), 0, 0);
+    if (act === 'col') return regrid(b, 0, addCol(t, at ? at.c : cols - 1), 0);
+    if (act === 'row-') {
+      const r = at ? at.r : last;
+      removeRow(t, r);
+      return regrid(b, Math.min(r, t.rows.length - 1), at?.c ?? 0, 'end');
+    }
+    const c = at ? at.c : cols - 1;
+    removeCol(t, c);
+    regrid(b, at?.r ?? 0, Math.min(c, colCount(t) - 1), 'end');
+  }
+
+  function onCellInput(cell) {
+    const b = blockOf(cell);
+    if (!b?.grid) return;
+    const { r, c } = posOf(cell);
+    let text = readText(cell);
+    if (text.includes('\n')) {
+      // Una celda es una sola línea: un salto que se cuele rompería la tabla.
+      const at = offsets(cell)?.start ?? text.length;
+      text = text.replace(/\n/g, ' ');
+      cell.textContent = text;
+      setCaret(cell, Math.min(at, text.length));
+    }
+    setCell(b.grid, r, c, text);
+    b.text = serializeTable(b.grid);
+    b.raw = null;
+    cell.classList.toggle('ne-empty', !text);
+    changed();
+  }
+
+  // Lo copiado de una hoja de cálculo (o una tabla de Markdown) se reparte por las celdas desde
+  // la del cursor, añadiendo las filas y columnas que falten; una sola línea va a la celda.
+  function pasteInCell(b, cell, text) {
+    const clean = text.replace(/\r\n?/g, '\n').replace(/\n$/, '');
+    if (!/[\t\n]/.test(clean)) return document.execCommand('insertText', false, clean);
+    const md = parseTable(clean);
+    const grid = md ? md.rows.map((x) => x.cells) : parseTSV(clean);
+    if (!grid.length) return;
+    const { r, c } = posOf(cell);
+    snapshot();
+    pasteGrid(b.grid, r, c, grid);
+    regrid(b, r + grid.length - 1, c + Math.max(...grid.map((x) => x.length)) - 1, 'end');
+  }
+
+  function onCellKey(e, b, cell) {
+    const t = b.grid;
+    if (!t) return;
+    const { r, c } = posOf(cell);
+    const mod = e.ctrlKey || e.metaKey;
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+    const text = readText(cell);
+    const o = offsets(cell) ?? { start: text.length, end: text.length };
+    const collapsed = o.start === o.end;
+    const lastRow = t.rows.length - 1;
+    const lastCol = colCount(t) - 1;
+
+    if (mod && k === 'a') {
+      // Primero el texto de la celda; si ya está entero (o vacía), toda la nota.
+      if (text && !(o.start === 0 && o.end >= text.length)) return;
+      e.preventDefault();
+      return pick(0, blocks.length - 1);
+    }
+    if (mod && (k === 'b' || k === 'i')) {
+      e.preventDefault();
+      const markText = k === 'b' ? '**' : '*';
+      const sel = text.slice(o.start, o.end);
+      document.execCommand('insertText', false, `${markText}${sel}${markText}`);
+      if (!sel) setCaret(cell, o.start + markText.length);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      cell.blur();
+      return onEscape?.();
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey || mod) return leaveTable(b);
+      if (r < lastRow) return focusCell(b, r + 1, c, 'end');
+      if (r > 0 && t.rows[r].cells.every((x) => !x.trim())) {
+        snapshot();
+        if (r > 1) {
+          removeRow(t, r);
+          b.text = serializeTable(t);
+          b.raw = null;
+          rows.get(b.id)?.replaceWith(row(b, indexOf(b)));
+        }
+        return leaveTable(b, false);
+      }
+      snapshot();
+      return regrid(b, addRow(t, r), c, 0);
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      if (e.shiftKey) {
+        if (c > 0) return focusCell(b, r, c - 1, 'end');
+        if (r > 0) return focusCell(b, r - 1, lastCol, 'end');
+        return;
+      }
+      if (c < lastCol) return focusCell(b, r, c + 1, 'end');
+      if (r < lastRow) return focusCell(b, r + 1, 0, 'end');
+      snapshot();
+      return regrid(b, addRow(t, r), 0, 0);
+    }
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !e.shiftKey && !mod && collapsed) {
+      const up = e.key === 'ArrowUp';
+      if (!onEdge(cell, up)) return;
+      const x = caretRect()?.left ?? cell.getBoundingClientRect().left;
+      const nr = r + (up ? -1 : 1);
+      if (nr >= 0 && nr <= lastRow) {
+        e.preventDefault();
+        return focusCellAtX(b, nr, c, x, up);
+      }
+      const target = up ? prevOf(b) : nextOf(b);
+      if (!focusable(target)) return;
+      e.preventDefault();
+      return focusAtX(target, x, up);
+    }
+    if (e.key === 'ArrowLeft' && !e.shiftKey && !mod && collapsed && o.start === 0) {
+      if (c > 0 || r > 0) {
+        e.preventDefault();
+        return c > 0 ? focusCell(b, r, c - 1, 'end') : focusCell(b, r - 1, lastCol, 'end');
+      }
+      const p = prevOf(b);
+      if (p) (e.preventDefault(), focusBlock(p, 'end'));
+    } else if (e.key === 'ArrowRight' && !e.shiftKey && !mod && collapsed && o.start === text.length) {
+      if (c < lastCol || r < lastRow) {
+        e.preventDefault();
+        return c < lastCol ? focusCell(b, r, c + 1, 0) : focusCell(b, r + 1, 0, 0);
+      }
+      const n = nextOf(b);
+      if (n) (e.preventDefault(), focusBlock(n, 0));
+    }
   }
 
   function render() {
@@ -714,6 +1064,11 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
   function focusBlock(b, offset = 'end') {
     const el = textOf(b);
     if (!el) return;
+    if (isGrid(b)) {
+      // Una tabla: su primera celda o la última.
+      const end = offset === 'end';
+      return focusCell(b, end ? b.grid.rows.length - 1 : 0, end ? colCount(b.grid) - 1 : 0, end ? 'end' : 0);
+    }
     if (b.type !== 'hr') showRaw(b, el);
     el.focus({ preventScroll: true });
     if (b.type !== 'hr') setCaret(el, offset === 'end' ? b.text.length : Math.max(0, Math.min(offset, b.text.length)));
@@ -725,8 +1080,18 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
     const el = textOf(b);
     if (!el) return;
     if (b.type === 'hr') return el.focus();
+    if (isGrid(b)) {
+      const r = fromBelow ? b.grid.rows.length - 1 : 0;
+      return focusCellAtX(b, r, columnAtX(b, r, x), x, fromBelow);
+    }
     showRaw(b, el);
     el.focus({ preventScroll: true });
+    caretAtX(el, x, fromBelow, b.text.length);
+    rows.get(b.id)?.scrollIntoView({ block: 'nearest' });
+  }
+
+  // El cursor en la primera línea de `el` (o en la última, `fromBelow`) a la altura `x`.
+  function caretAtX(el, x, fromBelow, length) {
     const rect = el.getBoundingClientRect();
     const line = parseFloat(getComputedStyle(el).lineHeight) || 20;
     const y = fromBelow ? rect.bottom - line / 2 : rect.top + line / 2;
@@ -735,8 +1100,7 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
       const sel = getSelection();
       sel.removeAllRanges();
       sel.addRange(pos);
-    } else setCaret(el, fromBelow ? b.text.length : 0);
-    rows.get(b.id)?.scrollIntoView({ block: 'nearest' });
+    } else setCaret(el, fromBelow ? length : 0);
   }
 
   function caretRect() {
@@ -763,6 +1127,8 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
   function current() {
     const el = document.activeElement?.closest?.('.ne-text');
     const b = el && root.contains(el) ? blockOf(el) : null;
+    const cell = document.activeElement?.closest?.('.ne-cell');
+    if (b && cell && el.contains(cell)) return { index: indexOf(b), offset: 0, cell: { ...posOf(cell), offset: offsets(cell)?.start ?? 0 } };
     return { index: b ? indexOf(b) : -1, offset: b && el ? offsets(el)?.start ?? 0 : 0 };
   }
   const state = () => ({ md: serializeBlocks(blocks), focus: current() });
@@ -783,7 +1149,10 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
     ensureGhost();
     render();
     const b = blocks[Math.max(0, Math.min(s.focus.index, blocks.length - 1))];
-    if (s.focus.index >= 0 && b) focusBlock(b, s.focus.offset);
+    if (s.focus.index >= 0 && b) {
+      if (s.focus.cell && isGrid(b)) focusCell(b, s.focus.cell.r, s.focus.cell.c, s.focus.cell.offset);
+      else focusBlock(b, s.focus.offset);
+    }
     changed();
   }
   function undo() {
@@ -1038,8 +1407,10 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
       return changed();
     }
     if (opt.type === 'table') {
+      // Las cabeceras van vacías (enseñan «Columna» de indicación): con un nombre de muestra,
+      // Tab dejaba el cursor detrás de él y se acababa escribiendo «ColumnaPrecio».
       setType(b, 'table');
-      b.text = '| Columna | Columna |\n| --- | --- |\n|  |  |';
+      b.text = '|  |  |\n| --- | --- |\n|  |  |';
     } else setType(b, opt.type, opt.level);
     refresh(b);
     if (opt.type === 'hr') {
@@ -1052,7 +1423,9 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
       focusBlock(next, 0);
     } else {
       syncGhost();
-      focusBlock(b, opt.type === 'table' ? 2 : 'end');
+      // Una tabla nueva empieza por el nombre de su primera columna.
+      if (opt.type === 'table' && isGrid(b)) focusCell(b, 0, 0, 0);
+      else focusBlock(b, 'end');
     }
     refreshNumbers();
     changed();
@@ -1135,6 +1508,8 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
       e.preventDefault();
       return redo();
     }
+    const cell = e.target.closest?.('.ne-cell');
+    if (cell && el.contains(cell)) return onCellKey(e, b, cell);
     if (mod && k === 'a') {
       // Toda la nota. En un bloque de código o una tabla, primero su texto y, si ya está
       // seleccionado entero (o vacío), la nota.
@@ -1372,6 +1747,8 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
   });
 
   root.addEventListener('input', (e) => {
+    const cell = e.target.closest?.('.ne-cell');
+    if (cell) return onCellInput(cell);
     const el = e.target.closest?.('.ne-text');
     if (!el) return;
     const b = blockOf(el);
@@ -1418,6 +1795,8 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
     const text = e.clipboardData?.getData('text/plain') ?? '';
     e.preventDefault();
     if (!b || !text) return;
+    const cell = e.target.closest?.('.ne-cell');
+    if (cell && b.grid) return pasteInCell(b, cell, text);
     if (MULTILINE.has(b.type)) {
       const o = offsets(el) ?? { start: b.text.length, end: b.text.length };
       const current = readText(el);
@@ -1444,6 +1823,17 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
     }
     const el = e.target.closest?.('.ne-text');
     const link = e.target.closest?.('a');
+    const cell = e.target.closest?.('.ne-cell');
+    if (cell && root.contains(cell) && cell.dataset.mode === 'view') {
+      if (link) return e.preventDefault(); // el clic abre el enlace
+      if (!cell.dataset.rich) return;
+      // Celda con formato: se cambia a su Markdown con el cursor donde se hizo clic.
+      const pos = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+      const at = pos && cell.contains(pos.startContainer) ? rawOffsetAt(cell, pos.startContainer, pos.startOffset) : null;
+      e.preventDefault();
+      const { r, c } = posOf(cell);
+      return focusCell(blockOf(cell), r, c, at ?? 'end');
+    }
     if (el && link && el.dataset.mode === 'view') return e.preventDefault(); // el clic abre el enlace
     if (el && el.dataset.rich && el.dataset.mode === 'view') {
       // Línea con formato: se cambia a su Markdown con el cursor donde se hizo clic.
@@ -1473,6 +1863,16 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
       showRaw(b, el);
       setCaret(el, b.text.length);
     }
+    const cell = e.target.closest?.('.ne-cell');
+    if (b?.grid && cell && el.contains(cell)) {
+      const at = posOf(cell);
+      if (cell.dataset.mode === 'view') {
+        const rich = cell.dataset.rich;
+        cellRaw(cell, cellOf(b.grid, at.r, at.c));
+        if (rich) setCaret(cell, cellOf(b.grid, at.r, at.c).length);
+      }
+      syncBar(b, at);
+    }
     rows.get(b?.id)?.classList.add('focused');
   });
 
@@ -1482,6 +1882,11 @@ export function createNoteEditor(host, { onChange, onLink, onEscape, renderTable
     if (!b) return;
     rows.get(b.id)?.classList.remove('focused');
     if (menu.block === b && !root.contains(e.relatedTarget)) menu.close();
+    const cell = e.target.closest?.('.ne-cell');
+    if (b.grid && cell && cell.dataset.mode === 'raw') {
+      const at = posOf(cell);
+      cellView(cell, cellOf(b.grid, at.r, at.c));
+    }
     if (el.dataset.mode === 'raw') showView(b, el);
   });
 

@@ -123,17 +123,18 @@ export function createCanvas(deps) {
       if (prev?.tipo === 'flecha') indexArrow(prev, false);
       // Lo que tengo en las manos no se mueve: al soltar, gana lo mío.
       const next = gesture?.ids.has(el.id) && prev ? { ...el, x: prev.x, y: prev.y, w: prev.w, h: prev.h } : el;
+      if (prev && nodes.has(el.id) && el.tipo !== 'flecha' && (prev.x !== next.x || prev.y !== next.y || prev.w !== next.w || prev.h !== next.h || prev.z !== next.z)) flush(prev);
       els.set(el.id, next);
       if (el.tipo === 'flecha') indexArrow(el, true);
       for (const a of arrowsOf.get(el.id) ?? []) repaintArrows.add(a);
       const node = nodes.get(el.id);
       if (node) {
-        if (prev && prev.capa !== el.capa) layerOf(el.capa).append(node);
         paint(el);
       } else if (fromAgent) entering.add(el.id);
     }
     for (const id of c.quitar ?? []) {
       const prev = els.get(id);
+      if (prev && nodes.has(id)) flush(prev.tipo === 'flecha' ? rectOf(prev, get) : prev);
       if (prev?.tipo === 'flecha') indexArrow(prev, false);
       for (const a of arrowsOf.get(id) ?? []) repaintArrows.add(a);
       els.delete(id);
@@ -144,8 +145,10 @@ export function createCanvas(deps) {
     }
     for (const id of c.capas_quitadas ?? []) {
       capas.delete(id);
-      layerNodes.get(id)?.remove();
-      layerNodes.delete(id);
+      for (const key of [id, `${id}:fondo`]) {
+        layerNodes.get(key)?.remove();
+        layerNodes.delete(key);
+      }
     }
     for (const id of repaintArrows) {
       const a = els.get(id);
@@ -171,6 +174,31 @@ export function createCanvas(deps) {
 
   const entering = new Set();
 
+  // Fuerza a repintar un trozo del lienzo: se pone y se quita un velo casi transparente encima.
+  // El usuario vio en la app, pintando por GPU, que los tiradores de algo borrado o que cambió de
+  // tamaño se quedaban a la vista hasta la siguiente acción (en el banco, sin GPU, no se reproduce).
+  const FLUSH_PAD = 30;
+  let flushRects = [];
+  let flushFrame = 0;
+  function flush(rect) {
+    if (!rect || viewport.hidden) return;
+    flushRects.push(rect);
+    if (flushFrame) return;
+    flushFrame = requestAnimationFrame(() => {
+      flushFrame = 0;
+      const rects = flushRects.length > 8 ? [boundsOfRects(flushRects)] : flushRects;
+      flushRects = [];
+      const veils = rects.map((r) => {
+        const v = document.createElement('div');
+        v.className = 'cv-flush';
+        Object.assign(v.style, { left: `${r.x + origin.x - FLUSH_PAD}px`, top: `${r.y + origin.y - FLUSH_PAD}px`, width: `${r.w + FLUSH_PAD * 2}px`, height: `${r.h + FLUSH_PAD * 2}px` });
+        surface.append(v);
+        return v;
+      });
+      requestAnimationFrame(() => veils.forEach((v) => v.remove()));
+    });
+  }
+
   const paintCtx = {
     renderMarkdown,
     highlight: deps.highlight,
@@ -184,26 +212,36 @@ export function createCanvas(deps) {
     paintOwn: (body, el) => grid.paintOwn(body, el),
   };
 
-  function layerOf(id) {
-    let n = layerNodes.get(id);
+  // Cada capa tiene dos contextos de apilamiento: uno por encima de las cartas de notas (una
+  // flecha o un cuadro pueden señalar una nota) y otro por debajo, para lo que tiene `z` 0 o menos
+  // (lo enviado al fondo y los marcos, que así abrazan las notas sin taparlas).
+  const behind = (el) => el.z <= 0;
+  function layerOf(id, back = false) {
+    const key = back ? `${id}:fondo` : id;
+    let n = layerNodes.get(key);
     if (!n) {
       n = document.createElement('div');
-      n.className = 'cv-layer';
+      n.className = back ? 'cv-layer is-back' : 'cv-layer';
       n.dataset.layer = id;
-      surface.append(n);
-      layerNodes.set(id, n);
+      // Los de detrás, antes que las cartas en el DOM: con z-index 0 quedan por debajo de ellas.
+      if (back) surface.prepend(n);
+      else surface.append(n);
+      layerNodes.set(key, n);
     }
     return n;
   }
+  const containerOf = (el) => layerOf(el.capa, behind(el));
 
-  // Cada capa es un contexto de apilamiento, por encima de las cartas de notas: una flecha o un
-  // cuadro pueden señalar una nota. Oculta, no se pinta ni se le puede dar.
+  // Oculta, una capa no se pinta ni se le puede dar.
   function syncLayers() {
     let i = 0;
     for (const capa of [...capas.values()].sort((a, b) => (a.id === USER_LAYER ? -1 : b.id === USER_LAYER ? 1 : 0))) {
       const n = layerOf(capa.id);
       n.style.zIndex = String(LAYER_BASE + i++);
       n.hidden = capa.visible === false;
+      const back = layerOf(capa.id, true);
+      back.style.zIndex = '0';
+      back.hidden = capa.visible === false;
       paintTag(capa, n);
     }
   }
@@ -236,6 +274,8 @@ export function createCanvas(deps) {
   function paint(el) {
     const node = nodes.get(el.id);
     if (!node) return;
+    const home = containerOf(el);
+    if (node.parentNode !== home) home.append(node);
     node.className = `cv-el cv-t-${el.tipo}${el.datos?.color ? ` cv-c-${el.datos.color}` : ''}${selection.has(el.id) ? ' is-selected' : ''}${el.tipo === 'figura' ? ` cv-f-${el.datos.forma}` : ''}${el.tipo === 'texto' ? ` cv-size-${el.datos.tamano} cv-align-${el.datos.alineado}` : ''}${['tabla', 'tablero', 'entidad', 'secuencia', 'linea-tiempo', 'codigo'].includes(el.tipo) ? ' cv-card' : ''}`;
     node.setAttribute('aria-label', labelOf(el, get));
     if (el.tipo === 'flecha') {
@@ -312,7 +352,7 @@ export function createCanvas(deps) {
       body.className = 'cv-body';
       node.append(body);
     }
-    layerOf(el.capa).append(node);
+    containerOf(el).append(node);
     paint(el);
     if (entering.delete(el.id) && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       node.classList.add('cv-enter');
@@ -353,6 +393,7 @@ export function createCanvas(deps) {
 
   function select(ids, { focus = true } = {}) {
     const before = [...selection];
+    for (const id of before) if (!ids.includes(id) && els.get(id)) flush(rectOf(els.get(id), get));
     selection.clear();
     for (const id of ids) selection.add(id);
     for (const id of new Set([...before, ...ids])) {
@@ -746,7 +787,7 @@ export function createCanvas(deps) {
 
   // ------------------------------------------------------------ escribir
 
-  const TEXT_FIELD = { texto: 'texto', figura: 'texto', adhesiva: 'texto', marco: 'titulo', flecha: 'texto' };
+  const TEXT_FIELD = { texto: 'texto', figura: 'texto', adhesiva: 'texto', marco: 'titulo', flecha: 'texto', tabla: 'titulo', tablero: 'titulo' };
 
   // Un campo simple en su sitio: al salir se guarda; con Escape, no.
   function editInline(host, value, commit, { multiline = false, onEnd = () => {} } = {}) {
@@ -817,12 +858,19 @@ export function createCanvas(deps) {
     } else if (el.tipo === 'marco') {
       host = node.querySelector('.cv-frame-title');
       host.classList.remove('is-empty');
+    } else if (el.tipo === 'tabla' || el.tipo === 'tablero') {
+      // Una tabla sin título no tiene cabecera: el título se le pone desde la barra.
+      host = node.querySelector('.cv-card-title');
+      if (!host) {
+        use(el.id, false);
+        return undefined;
+      }
     } else if (el.tipo === 'figura') {
       host = node.querySelector('.cv-label') ?? node.querySelector('.cv-body');
     } else {
       host = node.querySelector('.cv-body');
     }
-    const multiline = el.tipo !== 'marco' && el.tipo !== 'flecha';
+    const multiline = !['marco', 'flecha', 'tabla', 'tablero'].includes(el.tipo);
     const ed = editInline(
       host,
       el.datos[field] ?? '',
@@ -884,6 +932,8 @@ export function createCanvas(deps) {
     const el = nodeEl && els.get(nodeEl.dataset.id);
     if (!el || event.target.closest('[contenteditable], input, textarea')) return;
     if (['entidad', 'secuencia', 'linea-tiempo', 'referencia', 'imagen'].includes(el.tipo)) return chrome.openEditor(el);
+    // En tablas y tableros, doble clic dentro es de sus celdas y tarjetas; en la cabecera, el título.
+    if ((el.tipo === 'tabla' || el.tipo === 'tablero') && !event.target.closest('.cv-card-head')) return undefined;
     beginText(el);
     return undefined;
   });
@@ -1115,6 +1165,7 @@ export function createCanvas(deps) {
     apply,
     use,
     status,
+    ask,
     repaint: (id) => {
       const el = els.get(id);
       if (!el || !nodes.has(id)) return;
@@ -1123,7 +1174,18 @@ export function createCanvas(deps) {
       paint(el);
     },
     barChanged: () => chrome.selectionChanged(),
-    editInline: (host, value, commit) => editInline(host, value, (text) => commit(text ?? value)),
+    editInline(host, value, commit) {
+      const id = host.closest('.cv-el')?.dataset.id;
+      use(id, true);
+      const ed = editInline(host, value, (text) => {
+        editing = null;
+        use(id, false);
+        if (text != null && text !== value) Promise.resolve(commit(text)).finally(() => api.repaint(id));
+        else api.repaint(id);
+      });
+      editing = { id, finish: ed.finish };
+    },
+    beginText: (id) => beginText(els.get(id)),
   };
   const grid = createGrid(api);
   const chrome = createChrome({

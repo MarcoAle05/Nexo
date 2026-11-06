@@ -452,3 +452,12 @@ Nada de esto toca la wiki, el grafo ni las notas.
 **Sin comprobar, porque necesita abrir nexo:** el caso del RAG de punta a punta desde el chat de verdad, el socket real de `nexo ctl lienzo`, `--allowedTools` con la ruta instalada del ejecutable, los diálogos nativos, y el rendimiento con GPU.
 
 **El paquete principal de la interfaz** pasa de 414 a unos 510 kB, porque el lienzo va dentro. Si pesa al arrancar, se puede cargar al entrar en Notas, como xterm.
+
+## Arreglos tras probarla (05-11-2026)
+
+Lo que el usuario encontró usando la app, y qué se hizo:
+- **Las tarjetas del tablero no se podían confirmar:** al pulsar Intro sin cambiar nada se quedaban en modo edición. Pasaba también con los títulos de las columnas de tablas y tableros, que se quedaban como texto editable. Toda edición repinta ahora al acabar. Además, el tablero gana: «Guardar» y «Borrar» en la tarjeta, varias tareas seguidas con Intro, el menú «⋯» de cada columna (renombrar, límite, mover, borrar) y el título editable. Las tablas también tienen título editable.
+- **«La app se selecciona entera, con un margen gigante»:** era el borde de foco del lienzo, que WebKitGTK enseñaba alrededor de toda la ventana tras un clic en el fondo. Ahora solo sale si se llega con el teclado. También faltaba `-webkit-user-select`: WebKitGTK no entiende `user-select` sin prefijo.
+- **«Enviar al fondo» no funcionaba bien:** entre elementos sí funcionaba, pero los elementos iban siempre por encima de las notas. Ahora lo enviado al fondo y los marcos van detrás de las notas.
+- **Los puntos que se quedan al borrar o agrandar algo:** no se reproduce sin GPU. Se fuerza el repintado de esa zona, pero falta verlo en la app.
+- **Minimizar una nota desde la carta izquierda:** con un botón en su fila (o en su cabecera), la carta se queda plegada en su sitio.

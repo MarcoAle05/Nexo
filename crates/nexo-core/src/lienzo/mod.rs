@@ -513,22 +513,27 @@ impl Lienzo {
         }
     }
 
-    fn mayor_z(&self, capa: &str) -> i64 {
-        self.elementos
+    /// El orden de apilado también dice si algo va por encima de las cartas de notas (`z` de 1 en
+    /// adelante) o por debajo (0 o menos): lo enviado al fondo y los marcos quedan detrás de las
+    /// notas, y lo que se trae al frente o se crea, delante.
+    fn al_frente(&self, capa: &str) -> i64 {
+        let mayor = self
+            .elementos
             .iter()
             .filter(|e| e.capa == capa)
             .map(|e| e.z)
-            .max()
-            .unwrap_or(0)
+            .max();
+        mayor.map_or(1, |z| z + 1).max(1)
     }
 
-    fn menor_z(&self, capa: &str) -> i64 {
-        self.elementos
+    fn al_fondo(&self, capa: &str) -> i64 {
+        let menor = self
+            .elementos
             .iter()
             .filter(|e| e.capa == capa)
             .map(|e| e.z)
-            .min()
-            .unwrap_or(0)
+            .min();
+        menor.map_or(0, |z| z - 1).min(0)
     }
 
     /// Lo que el usuario cambió de una capa del agente queda apuntado para decírselo.
@@ -835,8 +840,8 @@ impl Lienzo {
                     (e.capa.clone(), e.z)
                 };
                 let z = match a.as_str() {
-                    "frente" => self.mayor_z(&capa) + 1,
-                    "fondo" => self.menor_z(&capa) - 1,
+                    "frente" => self.al_frente(&capa),
+                    "fondo" => self.al_fondo(&capa),
                     _ => return omitida("«a» vale frente o fondo."),
                 };
                 if let Some(e) = self.elemento_mut(&id) {
@@ -1031,9 +1036,9 @@ impl Lienzo {
         // Un marco va detrás de lo que tenga encima.
         let z = z.unwrap_or_else(|| {
             if tipo == "marco" {
-                self.menor_z(&capa) - 1
+                self.al_fondo(&capa)
             } else {
-                self.mayor_z(&capa) + 1
+                self.al_frente(&capa)
             }
         });
         self.proximo += 1;
@@ -1246,11 +1251,22 @@ impl Lienzo {
             .filter(|e| e.capa == capa)
             .cloned()
             .collect();
-        let base = self.mayor_z(CAPA_USUARIO);
+        // Lo que estaba delante de las notas sigue delante, por encima de lo del usuario; lo de
+        // detrás, detrás.
+        let base = self
+            .elementos
+            .iter()
+            .filter(|e| e.capa == CAPA_USUARIO)
+            .map(|e| e.z)
+            .max()
+            .unwrap_or(0)
+            .max(0);
         for e in &mut self.elementos {
             if e.capa == capa {
                 e.capa = CAPA_USUARIO.into();
-                e.z += base + 1;
+                if e.z > 0 {
+                    e.z += base;
+                }
                 e.tocado = false;
                 e.tocadas.clear();
                 lote.puestos.insert(e.id.clone());
