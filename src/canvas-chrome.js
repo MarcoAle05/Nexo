@@ -406,10 +406,18 @@ export function createChrome(api) {
           parts.push(name);
         }
         const t = (paths, label, action) => button(paths, label, () => api.grid.tableAction(api.get(el.id), action));
+        parts.push(button(ICON.edit, el.datos.titulo ? 'Cambiar el título' : 'Poner un título', () => api.grid.tableAction(api.get(el.id), 'titulo')));
         parts.push(t(ICON.addRow, 'Añadir fila', 'fila-nueva'), t(ICON.addCol, 'Añadir columna', 'columna-nueva'), t(ICON.delRow, 'Quitar fila', 'fila-borrar'), t(ICON.delCol, 'Quitar columna', 'columna-borrar'), t(ICON.sortUp, 'Ordenar de menor a mayor', 'orden-asc'), t(ICON.sortDown, 'Ordenar de mayor a menor', 'orden-desc'));
         parts.push(button(ICON.header, el.datos.cabecera === false ? 'Poner cabecera' : 'Quitar cabecera', () => api.grid.tableAction(api.get(el.id), 'cabecera'), { on: el.datos.cabecera !== false }));
       }
-      if (el.tipo === 'tablero') parts.push(button(ICON.addCol, 'Añadir columna', () => api.grid.addColumn(api.get(el.id))));
+      if (el.tipo === 'tablero') {
+        const first = el.datos.columnas[0]?.id;
+        parts.push(
+          button(ICON.edit, 'Cambiar el título', () => api.beginText(el.id)),
+          button(ICON.addRow, 'Añadir tarjeta', () => api.grid.addCard(api.get(el.id), first)),
+          button(ICON.addCol, 'Añadir columna', () => api.grid.addColumn(api.get(el.id))),
+        );
+      }
       if (['entidad', 'secuencia', 'linea-tiempo', 'referencia', 'imagen'].includes(el.tipo)) parts.push(button(ICON.edit, 'Editar', () => openEditor(el)));
     } else {
       const solid = sel.filter((e) => e.tipo !== 'flecha');

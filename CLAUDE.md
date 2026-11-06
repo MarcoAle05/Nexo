@@ -53,7 +53,7 @@ Si `cargo` no está en el PATH de la sesión: `source ~/.cargo/env`.
 | `workspace.md` | Workspaces de la vista Agentes: carpetas de proyecto, sus terminales (y el `claude` de nexo con sus hooks), lo que hace cada Claude, la orden de control `nexo ctl` y la skill `nexo-orquestacion`, los worktrees de git, los avisos de escritorio, las pestañas y las ventanas | `workspace.rs`, `terminales.rs`, `sesiones.rs`, `control.rs`, `orquestacion.rs`, `worktree.rs`, `avisos.rs`, `workspace.js`, `ws-*.js` y sus pruebas, `docs/spec-avisos-workspaces.md`, `docs/spec-terminales-workspaces.md` |
 | `galaxia.md` | La galaxia inicial (WebGL, dos lienzos, `frameFor`) | `galaxy.js` y sus pruebas |
 | `grafo-vista.md` | El grafo en canvas y la vista de notas en Markdown | `graph.js`, `note-view.js` |
-| `notas.md` | Apartado Notas: datos, editor, lienzo, zoom, escritorios, y los elementos del lienzo con sus capas y su motor | `notes.js`, `note-editor.js`, `desk-layout.js`, `desks.js`, `canvas*.js`, `notas.rs`, `lienzos.rs`, `nexo-core/src/lienzo/`, `docs/spec-lienzo-elementos.md` |
+| `notas.md` | Apartado Notas: datos, editor, lienzo, zoom, escritorios, y los elementos del lienzo con sus capas y su motor | `notes.js`, `note-editor.js`, `note-table.js`, `desk-layout.js`, `desks.js`, `canvas*.js`, `notas.rs`, `lienzos.rs`, `nexo-core/src/lienzo/`, `docs/spec-lienzo-elementos.md` |
 | `interfaz.md` | `main.js`, barra superior, Configuración, vistas y escenas, cartas minimizadas y expandibles | `main.js`, `dom.js`, `settings.js`, `modal.js`, `card-resize.js`, `index.html`, `styles.css` |
 | `estilos.md` | Temas y sus tokens, tipografía, paleta, radios, contraste, anchos y alturas | `styles.css`, `index.html`, `themes.js`, `public/tema.js`, `tests/themes.test.mjs` |
 

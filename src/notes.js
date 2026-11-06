@@ -32,10 +32,14 @@ const ICON = {
   undo: '<path d="M7.5 4 4 7.5 7.5 11"/><path d="M4 7.5h7.5a4.5 4.5 0 0 1 0 9H8"/>',
   check: '<path d="m4.5 10.5 3.5 3.5 7.5-8"/>',
   archive: '<rect x="3" y="4" width="14" height="4" rx="1"/><path d="M4.5 8v7.5h11V8M8 11.5h4"/>',
+  minimize: '<path d="M5 10h10"/>',
+  restore: '<rect x="4.5" y="4.5" width="11" height="11" rx="2"/>',
 };
 
 const MIN_W = 220;
 const MIN_H = 150;
+// Lo que mide una carta minimizada: su cabecera.
+const HEAD_H = 56;
 const GAP = 16; // entre una carta y la que se abre a su derecha
 const CARD_W = 380;
 const CARD_H = 440;
@@ -172,7 +176,9 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
 
   function noteRow(note) {
     const { li, row } = rowShell('note-row');
-    row.classList.toggle('is-open', cards.has(note.path));
+    const open = cards.get(note.path);
+    row.classList.toggle('is-open', Boolean(open));
+    row.classList.toggle('is-min', Boolean(open?.min));
     const date = parseDate(note.date);
     if (date && date < startOfToday() && note.done < note.total) row.classList.add('overdue');
     const main = document.createElement('button');
@@ -183,10 +189,15 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
       <span class="row-open-dot" aria-hidden="true"></span>`;
     main.querySelector('.row-title').textContent = note.title;
     main.querySelector('.row-meta-text').textContent = noteMeta(note);
-    main.title = cards.has(note.path) ? 'Abierta en el escritorio' : 'Abrir en el escritorio';
+    main.title = open?.min ? 'Minimizada en el escritorio: pulsa para abrirla' : open ? 'Abierta en el escritorio' : 'Abrir en el escritorio';
     main.addEventListener('click', () => openNote(note.path, { focus: true }));
     const actions = document.createElement('div');
     actions.className = 'row-actions';
+    if (open) {
+      const min = actionButton(open.min ? ICON.restore : ICON.minimize, open.min ? `Restaurar ${note.title} en el escritorio` : `Minimizar ${note.title} en el escritorio`, () => setMinimized(open, !open.min));
+      min.setAttribute('aria-pressed', String(Boolean(open.min)));
+      actions.append(min);
+    }
     actions.append(
       actionButton(ICON.pencil, `Renombrar ${note.title}`, () => renameNote(row, note)),
       actionButton(ICON.trash, `Borrar ${note.title}`, () => remove(note.path, note.title, false)),
@@ -243,7 +254,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
     });
     reconcile($('notes-notes'), topic.notes, {
       key: (n) => n.path,
-      sig: (n) => JSON.stringify([n, cards.has(n.path), isoToday()]),
+      sig: (n) => JSON.stringify([n, cards.has(n.path), cards.get(n.path)?.min ?? false, isoToday()]),
       build: noteRow,
     });
     $('notes-topics-label').hidden = !topic.topics.length;
@@ -495,13 +506,47 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
       left: `${card.x + ORIGIN.x}px`,
       top: `${card.y + ORIGIN.y}px`,
       width: `${card.w}px`,
-      height: `${card.h}px`,
+      height: `${card.min ? HEAD_H : card.h}px`,
       zIndex: String(card.z),
     });
+    card.el.classList.toggle('is-min', Boolean(card.min));
+  }
+
+  // Lo que deja a la vista una carta que se pliega: WebKitGTK, pintando por GPU, a veces no lo repinta.
+  function flush(card) {
+    const veil = document.createElement('div');
+    veil.className = 'cv-flush';
+    Object.assign(veil.style, { left: `${card.x + ORIGIN.x - 30}px`, top: `${card.y + ORIGIN.y - 30}px`, width: `${card.w + 60}px`, height: `${card.h + 60}px` });
+    surface.append(veil);
+    requestAnimationFrame(() => requestAnimationFrame(() => veil.remove()));
+  }
+
+  // Lo que ocupa una carta tal como se ve (minimizada, solo su cabecera).
+  const shownRect = ({ path, x, y, w, h, min }) => ({ path, x, y, w, h: min ? HEAD_H : h });
+
+  // Minimizar una nota la deja en su sitio, plegada a su cabecera. Se restaura con el mismo botón,
+  // el de su carta o pulsando su fila en la carta de la izquierda.
+  function setMinimized(card, on) {
+    if (Boolean(card.min) === on) return;
+    if (on) flush(card);
+    card.min = on;
+    place(card);
+    syncMinButton(card);
+    saveDesk();
+    renderPanel();
+    if (!on) reveal(card);
+  }
+  function syncMinButton(card) {
+    const b = card.minButton;
+    if (!b) return;
+    b.innerHTML = icon(card.min ? ICON.restore : ICON.minimize, 14);
+    b.title = card.min ? 'Restaurar' : 'Minimizar';
+    b.setAttribute('aria-label', b.title);
+    b.setAttribute('aria-pressed', String(Boolean(card.min)));
   }
 
   // Lo que hay en pantalla, tal como se guarda: las cartas y la cámara.
-  const snapshotCards = () => [...cards.values()].map(({ path, x, y, w, h, z }) => ({ path, x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h), z }));
+  const snapshotCards = () => [...cards.values()].map(({ path, x, y, w, h, z, min }) => ({ path, x: Math.round(x), y: Math.round(y), w: Math.round(w), h: Math.round(h), z, ...(min ? { min: true } : {}) }));
   const snapshotView = () => (cam ? { x: Math.round(cam.x), y: Math.round(cam.y), ...(zoom ? { zoom } : {}) } : null);
   const writeDesk = () => invoke('desk_save', { state: { cards: snapshotCards(), view: snapshotView() } });
 
@@ -570,7 +615,10 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
     card.sourceButton = cardButton(ICON.markdown, 'Ver el Markdown', () => setSource(card, !card.source), 'card-source');
     card.undoButton = cardButton(ICON.undo, 'Deshacer el último cambio', () => undoCard(card), 'card-undo');
     card.undoButton.disabled = true;
+    card.minButton = cardButton(ICON.minimize, 'Minimizar', () => setMinimized(card, !card.min), 'card-min');
+    syncMinButton(card);
     tools.append(
+      card.minButton,
       card.undoButton,
       cardButton(ICON.pencil, 'Renombrar', () => renameCard(card)),
       card.sourceButton,
@@ -825,7 +873,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
     const at = camReady ? readCamera() : (cam ?? homeCamera());
     const free = freeArea();
     return nextSpot(
-      [...cards.values()].map(({ path, x, y, w, h }) => ({ path, x, y, w, h })),
+      [...cards.values()].map(shownRect),
       { anchor: lastOpened, home: { x: Math.round(at.x + (free.x + HOME_PAD) / scale), y: Math.round(at.y + (free.y + HOME_PAD) / scale) }, size: { w: CARD_W, h: CARD_H }, gap: GAP, obstacles: canvas.rects() },
     );
   }
@@ -833,6 +881,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
   async function openNote(path, { focus = false, geometry = null } = {}) {
     const existing = cards.get(path);
     if (existing) {
+      if (existing.min) setMinimized(existing, false);
       bringToFront(existing);
       existing.el.classList.remove('pulse');
       void existing.el.offsetWidth;
@@ -845,6 +894,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
     const card = {
       path,
       ...(geometry ?? newGeometry()),
+      min: Boolean(geometry?.min),
       z: geometry?.z ?? Math.max(0, ...zValues()) + 1,
       doc: null,
       draft: null,
@@ -895,6 +945,9 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
   // La rueda y el trackpad lo desplazan solos (es un desplazamiento nativo). Aquí, lo que
   // falta: arrastrar el fondo, seguir la cámara y traer una carta al tabular hasta ella.
   function startPan(event) {
+    // Sin esto, en WebKitGTK arrastrar va seleccionando el texto de lo que se cruza.
+    event.preventDefault();
+    if (event.button === 0) window.getSelection()?.removeAllRanges();
     const start = { px: event.clientX, py: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
     viewport.setPointerCapture(event.pointerId);
     viewport.classList.add('panning');
@@ -966,6 +1019,11 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
   let byKeyboard = false;
   document.addEventListener('keydown', (event) => event.key === 'Tab' && (byKeyboard = true), true);
   document.addEventListener('pointerdown', () => (byKeyboard = false), true);
+  // El lienzo marca su foco solo si se llegó con el teclado. Con el ratón, WebKitGTK lo marcaba a
+  // veces como :focus-visible (tras una tarjeta del tablero con el foco) y salía un borde alrededor de
+  // toda la app, como si se hubiera seleccionado entera.
+  viewport.addEventListener('focus', () => viewport.classList.toggle('kbd-focus', byKeyboard));
+  viewport.addEventListener('blur', () => viewport.classList.remove('kbd-focus'));
   surface.addEventListener('focusin', (event) => {
     const card = byKeyboard && cards.get(event.target.closest?.('.desk-card')?.dataset.path);
     if (card) reveal(card, { smooth: false });
@@ -990,7 +1048,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
     mapQueued = 0;
     const size = { w: map.clientWidth, h: map.clientHeight };
     if (viewport.hidden || !size.w) return;
-    const rects = [...cards.values()].map(({ path, x, y, w, h }) => ({ path, x, y, w, h }));
+    const rects = [...cards.values()].map(shownRect);
     const view = viewRect();
     const items = canvas.mapItems();
     mapNow = mapHeld ?? mapFrame([...rects, ...items], view, size);
@@ -1083,7 +1141,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
 
   // Vuelve a las cartas: deja la esquina de todas ellas en la esquina del hueco libre.
   function goToCards({ smooth = true } = {}) {
-    const all = boundsOf([...cards.values(), ...canvas.rects()]);
+    const all = boundsOf([...[...cards.values()].map(shownRect), ...canvas.rects()]);
     const home = homeCamera();
     moveCamera(all ? { x: all.x + home.x, y: all.y + home.y } : home, { smooth });
   }
@@ -1130,11 +1188,13 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
         w: Math.max(MIN_W, Number(c.w) || CARD_W),
         h: Math.max(MIN_H, Number(c.h) || CARD_H),
         z: Number(c.z) || 1,
+        min: c.min === true,
       };
       const card = cards.get(c.path);
       if (card) {
         Object.assign(card, geometry);
         place(card);
+        syncMinButton(card);
       } else {
         const opened = await openNote(c.path, { geometry });
         if (opened) fresh.push(opened);
@@ -1160,7 +1220,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
     for (const path of [...cards.keys()]) closeCard(path, { persist: false });
     lastOpened = null;
     const desk = activeDesk(deskState);
-    for (const c of desk.cards) await openNote(c.path, { geometry: { x: c.x, y: c.y, w: Math.max(MIN_W, c.w || CARD_W), h: Math.max(MIN_H, c.h || CARD_H), z: c.z || 1 } });
+    for (const c of desk.cards) await openNote(c.path, { geometry: { x: c.x, y: c.y, w: Math.max(MIN_W, c.w || CARD_W), h: Math.max(MIN_H, c.h || CARD_H), z: c.z || 1, min: c.min === true } });
     normalizeLayers();
     useView(desk.view);
     applyCamera();
@@ -1447,7 +1507,7 @@ export function createNotes({ invoke, ask, renderMarkdown, fail, onLink, onRef =
       const { dx, dy } = revealShift({ x: (rect.x - at.x) * scale, y: (rect.y - at.y) * scale, w: rect.w * scale, h: rect.h * scale }, freeArea());
       if (dx || dy) moveCamera({ x: at.x + dx / scale, y: at.y + dy / scale }, { smooth });
     },
-    cards: () => [...cards.values()].map(({ path, x, y, w, h }) => ({ id: path, x, y, w, h })),
+    cards: () => [...cards.values()].map((c) => ({ ...shownRect(c), id: c.path })),
     moveCards,
     dragCards,
     commitCards,

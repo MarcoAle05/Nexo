@@ -253,6 +253,7 @@ export function createGrid(api) {
       const row = Number(td.dataset.r);
       const col = Number(td.dataset.c);
       if (editing && editing.id === id && td.contains(editing.input)) return;
+      event.preventDefault();
       setActive(id, row, col, event.shiftKey);
       const move = (e) => {
         const over = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.cv-table td');
@@ -404,6 +405,9 @@ export function createGrid(api) {
         ops.push({ op: 'filas-orden', id: el.id, orden: sortedRows(d, c.id, action === 'orden-asc') });
         break;
       }
+      case 'titulo':
+        if (d.titulo) return api.beginText(el.id);
+        return api.apply([{ op: 'cambiar', id: el.id, datos: { titulo: 'Tabla' } }, after((c) => (c.titulo = 'Tabla'), el.id)]).then(() => api.beginText(el.id));
       case 'cabecera':
         ops.push({ op: 'cambiar', id: el.id, datos: { cabecera: d.cabecera === false } }, after((c) => (c.cabecera = d.cabecera === false), el.id));
         break;
@@ -458,7 +462,14 @@ export function createGrid(api) {
       add.textContent = '+';
       add.setAttribute('aria-label', `Añadir tarjeta a ${c.titulo}`);
       add.title = 'Añadir tarjeta';
-      colHead.append(name, meta, add);
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'cv-col-more';
+      more.textContent = '⋯';
+      more.setAttribute('aria-haspopup', 'menu');
+      more.setAttribute('aria-label', `Opciones de la columna ${c.titulo}`);
+      more.title = 'Opciones de la columna';
+      colHead.append(name, meta, add, more);
       const list = document.createElement('div');
       list.className = 'cv-col-cards';
       for (const t of cardsIn(d, c.id)) {
@@ -497,7 +508,15 @@ export function createGrid(api) {
     card = { id, tarjeta };
   }
 
-  function editCard(el, tarjeta) {
+  const svgIcon = (paths) => `<svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+  const CHECK = svgIcon('<path d="m4.5 10.5 3.5 3.5 7.5-8"/>');
+  const TRASH = svgIcon('<path d="M4 6h12M8 6V4h4v2M6 6l1 10h6l1-10"/>');
+
+  // Editar una tarjeta: Intro o «Guardar» la confirman, Escape la deja como estaba y salir de ella
+  // también guarda. Al acabar se vuelve a pintar siempre, haya cambios o no: antes, si no se
+  // cambiaba nada, se quedaba en modo edición. Una tarjeta nueva que se deja vacía desaparece, e
+  // Intro en una nueva abre la siguiente debajo, para apuntar varias seguidas.
+  function editCard(el, tarjeta, { isNew = false } = {}) {
     const t = el.datos.tarjetas.find((x) => x.id === tarjeta);
     const node = api.nodeOf(el.id)?.querySelector(`[data-card="${tarjeta}"]`);
     if (!t || !node) return;
@@ -520,45 +539,192 @@ export function createGrid(api) {
     field('puntos', 'Puntos', t.puntos ?? '', { inputMode: 'decimal' });
     field('responsable', 'Responsable', t.responsable);
     field('etiqueta', 'Etiqueta', t.etiqueta);
+    const bar = document.createElement('div');
+    bar.className = 'cv-tcard-actions';
+    const save = document.createElement('button');
+    save.type = 'submit';
+    save.className = 'cv-tcard-save';
+    save.innerHTML = `${CHECK}<span>Guardar</span>`;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'cv-tcard-remove';
+    remove.innerHTML = TRASH;
+    remove.title = 'Borrar la tarjeta';
+    remove.setAttribute('aria-label', 'Borrar la tarjeta');
+    bar.append(save, remove);
+    form.append(bar);
+
+    const read = () => {
+      const v = new FormData(form);
+      const n = Number(String(v.get('puntos')).replace(',', '.'));
+      const puntos = String(v.get('puntos')).trim() === '' || Number.isNaN(n) ? null : n;
+      return { titulo: String(v.get('titulo')).trim(), puntos, responsable: String(v.get('responsable')).trim(), etiqueta: String(v.get('etiqueta')).trim() };
+    };
     let done = false;
-    const finish = (save) => {
+    // `mode`: save (Intro o Guardar), blur (salir de la tarjeta), cancel (Escape) o remove.
+    const finish = (mode, { next = false } = {}) => {
       if (done) return;
       done = true;
       holding.delete(el.id);
       api.use(usekey, false);
-      if (save) {
-        const v = new FormData(form);
-        const n = Number(String(v.get('puntos')).replace(',', '.'));
-        const puntos = String(v.get('puntos')).trim() === '' || Number.isNaN(n) ? null : n;
-        api.apply([{ op: 'tarjeta-cambiar', id: el.id, tarjeta, titulo: String(v.get('titulo')), puntos, responsable: String(v.get('responsable')), etiqueta: String(v.get('etiqueta')) }]);
-      } else api.repaint(el.id);
-      focusCard(el.id, tarjeta);
+      const v = read();
+      const empty = !v.titulo && v.puntos == null && !v.responsable && !v.etiqueta;
+      const changed = v.titulo !== (t.titulo ?? '') || v.puntos !== (t.puntos ?? null) || v.responsable !== (t.responsable ?? '') || v.etiqueta !== (t.etiqueta ?? '');
+      if (mode === 'remove' || (isNew && (mode === 'cancel' || empty))) {
+        if (card?.tarjeta === tarjeta) card = null;
+        api.apply([{ op: 'tarjeta-borrar', id: el.id, tarjeta }], { record: !isNew }).finally(() => api.repaint(el.id));
+        if (mode === 'remove') api.status('Tarjeta borrada. Ctrl+Z la devuelve.');
+        api.focusEl(el.id);
+        return;
+      }
+      if (mode !== 'cancel' && changed) {
+        api.apply([{ op: 'tarjeta-cambiar', id: el.id, tarjeta, ...v }]).finally(() => {
+          api.repaint(el.id);
+          if (next) addCard(api.get(el.id), t.col);
+          else if (mode === 'save') focusCard(el.id, tarjeta);
+        });
+        return;
+      }
+      api.repaint(el.id);
+      if (mode !== 'blur') focusCard(el.id, tarjeta);
     };
     form.addEventListener('submit', (event) => {
       event.preventDefault();
-      finish(true);
+      finish('save');
     });
+    remove.addEventListener('click', () => finish('remove'));
     form.addEventListener('keydown', (event) => {
       event.stopPropagation();
       if (event.key === 'Enter') {
         event.preventDefault();
-        finish(true);
+        finish('save', { next: isNew && Boolean(read().titulo) && !event.shiftKey });
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        finish('cancel');
       }
-      if (event.key === 'Escape') finish(false);
     });
     form.addEventListener('focusout', (event) => {
-      if (!form.contains(event.relatedTarget)) finish(true);
+      if (!form.contains(event.relatedTarget)) finish('blur');
     });
     node.replaceChildren(form);
+    node.classList.add('is-editing');
     titulo.focus();
     titulo.select();
   }
 
   async function addCard(el, col) {
+    if (!el) return;
+    if (el.datos.tarjetas.length >= 500) return api.status('El tablero ya tiene 500 tarjetas, el tope.');
     const tarjeta = newPart('t');
     await api.apply([{ op: 'tarjeta-nueva', id: el.id, tarjeta, col, titulo: '' }]);
-    editCard(api.get(el.id), tarjeta);
+    editCard(api.get(el.id), tarjeta, { isNew: true });
+    return undefined;
   }
+
+  // ------------------------------------------------------------ tablero: columnas
+
+  let colMenu = null;
+  function closeColumnMenu(refocus = false) {
+    if (!colMenu) return;
+    const { menu, button, id } = colMenu;
+    colMenu = null;
+    menu.remove();
+    holding.delete(id);
+    if (refocus && button.isConnected) button.focus();
+  }
+
+  function openColumnMenu(el, colId, button) {
+    closeColumnMenu();
+    const cols = el.datos.columnas;
+    const at = cols.findIndex((c) => c.id === colId);
+    const col = cols[at];
+    if (!col) return;
+    const menu = document.createElement('div');
+    menu.className = 'cv-col-menu';
+    menu.setAttribute('role', 'menu');
+    menu.setAttribute('aria-label', `Columna ${col.titulo}`);
+    holding.add(el.id);
+    colMenu = { menu, button, id: el.id };
+    const item = (label, handler, disabled = false) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'cv-col-menu-item';
+      b.setAttribute('role', 'menuitem');
+      b.textContent = label;
+      b.disabled = disabled;
+      b.addEventListener('click', (event) => {
+        event.stopPropagation();
+        handler();
+      });
+      menu.append(b);
+    };
+    const order = (to) => {
+      const ids = cols.map((c) => c.id);
+      ids.splice(to, 0, ids.splice(at, 1)[0]);
+      closeColumnMenu();
+      api.apply([{ op: 'columnas-orden', id: el.id, orden: ids }]);
+    };
+    item('Renombrar', () => {
+      const name = button.closest('.cv-col').querySelector('.cv-col-title');
+      closeColumnMenu();
+      api.editInline(name, col.titulo, (value) => api.apply([{ op: 'columna-cambiar', id: el.id, col: colId, titulo: value }]));
+    });
+    item(col.limite ? `Límite de tarjetas: ${col.limite}` : 'Poner un límite de tarjetas', () => {
+      menu.replaceChildren();
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.min = '0';
+      input.className = 'cv-col-limit';
+      input.value = col.limite ?? '';
+      input.placeholder = 'Sin límite';
+      input.setAttribute('aria-label', `Límite de tarjetas de ${col.titulo} (vacío: sin límite)`);
+      menu.append(input);
+      input.focus();
+      const set = () => {
+        const n = Number.parseInt(input.value, 10);
+        const limite = Number.isFinite(n) && n > 0 ? n : null;
+        closeColumnMenu(true);
+        if (limite !== (col.limite ?? null)) api.apply([{ op: 'columna-cambiar', id: el.id, col: colId, limite }]);
+      };
+      input.addEventListener('keydown', (event) => {
+        event.stopPropagation();
+        // Sin preventDefault, la misma pulsación activaría el botón «⋯», que recibe el foco, y
+        // volvería a abrir el menú.
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          set();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          closeColumnMenu(true);
+        }
+      });
+      input.addEventListener('blur', () => colMenu?.menu === menu && set());
+    });
+    item('Mover a la izquierda', () => order(at - 1), at === 0);
+    item('Mover a la derecha', () => order(at + 1), at === cols.length - 1);
+    item('Borrar la columna', async () => {
+      closeColumnMenu();
+      if (cols.length <= 1) return api.status('Tiene que quedar al menos una columna.');
+      const n = cardsIn(el.datos, colId).length;
+      if (n && !(await api.ask(`¿Borrar la columna «${col.titulo}» con sus ${n === 1 ? 'tarjeta' : `${n} tarjetas`}? Ctrl+Z la devuelve.`, { title: 'Borrar columna', kind: 'warning', okLabel: 'Borrar', cancelLabel: 'Cancelar' }))) return undefined;
+      return api.apply([{ op: 'columna-borrar', id: el.id, col: colId }, { op: 'cambiar', id: el.id, w: Math.max(264, el.w - 234) }]);
+    });
+    menu.addEventListener('keydown', (event) => {
+      event.stopPropagation();
+      const list = [...menu.querySelectorAll('.cv-col-menu-item:not(:disabled)')];
+      const i = list.indexOf(document.activeElement);
+      if (event.key === 'ArrowDown') list[(i + 1) % list.length]?.focus();
+      else if (event.key === 'ArrowUp') list[(i - 1 + list.length) % list.length]?.focus();
+      else if (event.key === 'Escape') closeColumnMenu(true);
+      else return;
+      event.preventDefault();
+    });
+    button.closest('.cv-col-head').append(menu);
+    menu.querySelector('.cv-col-menu-item:not(:disabled)')?.focus();
+  }
+  document.addEventListener('pointerdown', (event) => {
+    if (colMenu && !colMenu.menu.contains(event.target)) closeColumnMenu();
+  }, true);
 
   function dragCard(event, el, node) {
     const tarjeta = node.dataset.card;
@@ -608,7 +774,7 @@ export function createGrid(api) {
 
   api.surface.addEventListener('pointerdown', (event) => {
     if (event.button !== 0) return;
-    const add = event.target.closest?.('.cv-col-add');
+    const add = event.target.closest?.('.cv-col-add, .cv-col-more, .cv-col-menu');
     if (add) {
       event.stopPropagation();
       return;
@@ -617,12 +783,19 @@ export function createGrid(api) {
     if (!node || event.target.closest('input, form')) return;
     const id = node.closest('.cv-el').dataset.id;
     event.stopPropagation();
+    event.preventDefault();
     if (!api.isSelected(id)) api.select([id], { focus: false });
     focusCard(id, node.dataset.card);
     dragCard(event, api.get(id), node);
   }, true);
 
   api.surface.addEventListener('click', (event) => {
+    const more = event.target.closest?.('.cv-col-more');
+    if (more) {
+      event.stopPropagation();
+      if (colMenu?.button === more) return closeColumnMenu(true);
+      return openColumnMenu(api.get(more.closest('.cv-el').dataset.id), more.closest('.cv-col').dataset.col, more);
+    }
     const add = event.target.closest?.('.cv-col-add');
     if (add) {
       event.stopPropagation();
@@ -632,7 +805,7 @@ export function createGrid(api) {
 
   api.surface.addEventListener('dblclick', (event) => {
     const node = event.target.closest?.('.cv-tcard');
-    if (node && !event.target.closest('form')) {
+    if (node && !event.target.closest('form') && !node.classList.contains('is-editing')) {
       event.stopPropagation();
       editCard(api.get(node.closest('.cv-el').dataset.id), node.dataset.card);
       return;
@@ -732,6 +905,7 @@ export function createGrid(api) {
     },
     // ¿Se está trabajando dentro de este elemento? Entonces no se repinta hasta que se acabe.
     holds: (id) => holding.has(id),
+    addCard: (el, col) => addCard(el, col),
     // Tras repintarlo, el foco vuelve a donde estaba: la celda o la tarjeta.
     refocus(el) {
       if (table?.id === el.id) {
